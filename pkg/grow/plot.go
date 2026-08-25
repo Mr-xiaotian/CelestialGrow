@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
 // ==== Interface ====
@@ -23,7 +24,7 @@ type PlotNode interface {
 
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
-	BindInlet(logChan chan<- LogRecord, lifecycleChan chan<- LifecycleRecord)
+	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
 	SetEventClient(eventClient EventClient)
 
 	StartAsync()
@@ -50,10 +51,10 @@ type Plot[S any, F any] struct {
 
 	eventClient EventClient
 
-	logSpout       *funnel.Spout[LogRecord]
-	lifecycleSpout *funnel.Spout[LifecycleRecord]
-	logInlet       *LogInlet
-	lifecycleInlet *LifecycleInlet
+	logSpout       *funnel.Spout[persist.LogRecord]
+	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
+	logInlet       *persist.LogInlet
+	lifecycleInlet *persist.LifecycleInlet
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -103,9 +104,9 @@ func (p *Plot[S, F]) AddObserver(observer Observer) {
 // BindInlet 绑定日志和生命周期记录的写入通道。
 // standalone 模式由 Run 创建本地 spout 后调用；
 // Farm 模式由 Farm.Run 统一调用。
-func (p *Plot[S, F]) BindInlet(logChan chan<- LogRecord, lifecycleChan chan<- LifecycleRecord) {
-	p.logInlet = NewLogInlet(logChan, time.Second, p.logLevel)
-	p.lifecycleInlet = NewLifecycleInlet(lifecycleChan, time.Second)
+func (p *Plot[S, F]) BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord) {
+	p.logInlet = persist.NewLogInlet(logChan, time.Second, p.logLevel)
+	p.lifecycleInlet = persist.NewLifecycleInlet(lifecycleChan, time.Second)
 }
 
 // StartSpouts 启动本地日志/生命周期 spout。仅 standalone 模式使用。
@@ -402,8 +403,8 @@ func (p *Plot[S, F]) WaitAsync() {
 // Run 在 standalone 模式下启动 Plot 并处理所有种子。
 // 它会创建本地日志/生命周期 spout，绑定 inlet，并在所有输入完成后阻塞等待退出。
 func (p *Plot[S, F]) Run(seeds []S) {
-	p.logSpout = funnel.NewSpout(&LogRecordHandler{}, 100, time.Second)
-	p.lifecycleSpout = funnel.NewSpout(&LifecycleRecordHandler{}, 100, time.Second)
+	p.logSpout = funnel.NewSpout(&persist.LogRecordHandler{}, 100, time.Second)
+	p.lifecycleSpout = funnel.NewSpout(&persist.LifecycleRecordHandler{}, 100, time.Second)
 	p.BindInlet(p.logSpout.GetQueue(), p.lifecycleSpout.GetQueue())
 
 	p.StartSpouts()
@@ -418,13 +419,13 @@ func (p *Plot[S, F]) Run(seeds []S) {
 }
 
 // Harvest 读取当前 plot 已持久化的全部任务状态快照。
-func (p *Plot[S, F]) Harvest() ([]LifecycleStatusRecord, error) {
+func (p *Plot[S, F]) Harvest() ([]persist.LifecycleStatusRecord, error) {
 	if p.lifecycleSpout == nil {
 		return nil, fmt.Errorf("plot %q lifecycle spout is nil", p.name)
 	}
 
 	queryHandler, ok := p.lifecycleSpout.Handler().(interface {
-		LoadStatuses(plotName string) ([]LifecycleStatusRecord, error)
+		LoadStatuses(plotName string) ([]persist.LifecycleStatusRecord, error)
 	})
 	if !ok {
 		return nil, fmt.Errorf("plot %q lifecycle handler does not support status queries", p.name)

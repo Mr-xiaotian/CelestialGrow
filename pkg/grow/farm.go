@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
 // ==== Struct ====
@@ -21,10 +22,10 @@ type Farm struct {
 
 	eventClient EventClient
 
-	logSpout       *funnel.Spout[LogRecord]
-	lifecycleSpout *funnel.Spout[LifecycleRecord]
-	logInlet       *LogInlet
-	lifecycleInlet *LifecycleInlet
+	logSpout       *funnel.Spout[persist.LogRecord]
+	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
+	logInlet       *persist.LogInlet
+	lifecycleInlet *persist.LifecycleInlet
 }
 
 // ==== Construction ====
@@ -32,10 +33,10 @@ type Farm struct {
 // NewFarm 创建一个 Farm 实例。
 // name 为 farm 名称（用于日志标识），logLevel 为全局日志级别。
 func NewFarm(name string, logLevel string) *Farm {
-	logSpout := funnel.NewSpout(&LogRecordHandler{}, 100, time.Second)
-	lifecycleSpout := funnel.NewSpout(&LifecycleRecordHandler{}, 100, time.Second)
-	logInlet := NewLogInlet(logSpout.GetQueue(), time.Second, logLevel)
-	lifecycleInlet := NewLifecycleInlet(lifecycleSpout.GetQueue(), time.Second)
+	logSpout := funnel.NewSpout(&persist.LogRecordHandler{}, 100, time.Second)
+	lifecycleSpout := funnel.NewSpout(&persist.LifecycleRecordHandler{}, 100, time.Second)
+	logInlet := persist.NewLogInlet(logSpout.GetQueue(), time.Second, logLevel)
+	lifecycleInlet := persist.NewLifecycleInlet(lifecycleSpout.GetQueue(), time.Second)
 	orderGraph := NewOrderGraph()
 
 	return &Farm{

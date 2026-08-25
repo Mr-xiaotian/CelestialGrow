@@ -6,10 +6,11 @@ import (
 	"testing"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
 // mustHarvest 运行后读取指定 plot 的生命周期状态快照。
-func mustHarvest[S any, F any](t *testing.T, plot *grow.Plot[S, F]) []grow.LifecycleStatusRecord {
+func mustHarvest[S any, F any](t *testing.T, plot *grow.Plot[S, F]) []persist.LifecycleStatusRecord {
 	t.Helper()
 
 	records, err := plot.Harvest()
@@ -20,8 +21,8 @@ func mustHarvest[S any, F any](t *testing.T, plot *grow.Plot[S, F]) []grow.Lifec
 }
 
 // indexStatusesByTask 使用 task_json 作为键建立索引，便于逐任务断言。
-func indexStatusesByTask(records []grow.LifecycleStatusRecord) map[string]grow.LifecycleStatusRecord {
-	index := make(map[string]grow.LifecycleStatusRecord, len(records))
+func indexStatusesByTask(records []persist.LifecycleStatusRecord) map[string]persist.LifecycleStatusRecord {
+	index := make(map[string]persist.LifecycleStatusRecord, len(records))
 	for _, record := range records {
 		index[record.TaskJSON] = record
 	}

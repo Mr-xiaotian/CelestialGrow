@@ -1,6 +1,10 @@
 package grow
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
+)
 
 // TestFarmEventTraceLinear 验证可基于 events 和 event_parents 从下游最终事件追溯到上游输入事件。
 func TestFarmEventTraceLinear(t *testing.T) {
@@ -25,7 +29,7 @@ func TestFarmEventTraceLinear(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	handler, ok := farm.lifecycleSpout.Handler().(*LifecycleRecordHandler)
+	handler, ok := farm.lifecycleSpout.Handler().(*persist.LifecycleRecordHandler)
 	if !ok {
 		t.Fatalf("lifecycle handler type assertion failed")
 	}
@@ -33,13 +37,13 @@ func TestFarmEventTraceLinear(t *testing.T) {
 		t.Fatal("lifecycle sqlite path is empty")
 	}
 
-	db, err := OpenLifecycleSQLite(handler.SQLitePath)
+	db, err := persist.OpenLifecycleSQLite(handler.SQLitePath)
 	if err != nil {
 		t.Fatalf("OpenLifecycleSQLite() error = %v", err)
 	}
 	defer db.Close()
 
-	rootStatuses, err := LoadLifecycleStatuses(db, "root")
+	rootStatuses, err := persist.LoadLifecycleStatuses(db, "root")
 	if err != nil {
 		t.Fatalf("LoadLifecycleStatuses(root) error = %v", err)
 	}
@@ -47,7 +51,7 @@ func TestFarmEventTraceLinear(t *testing.T) {
 		t.Fatalf("len(rootStatuses) = %d, want 1", len(rootStatuses))
 	}
 
-	headStatuses, err := LoadLifecycleStatuses(db, "head")
+	headStatuses, err := persist.LoadLifecycleStatuses(db, "head")
 	if err != nil {
 		t.Fatalf("LoadLifecycleStatuses(head) error = %v", err)
 	}
@@ -75,7 +79,7 @@ func TestFarmEventTraceLinear(t *testing.T) {
 	}
 
 	for i, eventID := range traceIDs {
-		record, err := LoadLifecycleEvent(db, eventID)
+		record, err := persist.LoadLifecycleEvent(db, eventID)
 		if err != nil {
 			t.Fatalf("LoadLifecycleEvent(%d) error = %v", eventID, err)
 		}
@@ -86,7 +90,7 @@ func TestFarmEventTraceLinear(t *testing.T) {
 			t.Fatalf("event %d plot = %q, want %q", eventID, record.Plot, traceWants[i].plot)
 		}
 
-		parentIDs, err := LoadLifecycleEventParents(db, eventID)
+		parentIDs, err := persist.LoadLifecycleEventParents(db, eventID)
 		if err != nil {
 			t.Fatalf("LoadLifecycleEventParents(%d) error = %v", eventID, err)
 		}

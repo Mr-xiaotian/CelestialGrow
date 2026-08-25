@@ -1,4 +1,4 @@
-package grow
+package plot
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
 
 // ==== Interface ====
@@ -25,7 +26,7 @@ type PlotNode interface {
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
 	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
-	SetEventClient(eventClient EventClient)
+	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
 	WaitAsync()
@@ -42,14 +43,14 @@ type PlotNode interface {
 type Plot[S any, F any] struct {
 	name       string
 	cultivator func(S) (F, error)
-	observers  []Observer
+	observers  []runtime.Observer
 	plotOptions
 
-	seedChan   chan Payload[S]
-	fruitChans map[string]chan Payload[F]
+	seedChan   chan runtime.Payload[S]
+	fruitChans map[string]chan runtime.Payload[F]
 	upstreams  map[string]struct{}
 
-	eventClient EventClient
+	eventClient runtime.EventClient
 
 	logSpout       *funnel.Spout[persist.LogRecord]
 	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
@@ -81,11 +82,11 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 		cultivator:  cultivator,
 		plotOptions: o,
 
-		seedChan:   make(chan Payload[S], o.chanSize),
-		fruitChans: make(map[string]chan Payload[F]),
+		seedChan:   make(chan runtime.Payload[S], o.chanSize),
+		fruitChans: make(map[string]chan runtime.Payload[F]),
 		upstreams:  make(map[string]struct{}),
 
-		eventClient: NewLocalEventClient(),
+		eventClient: runtime.NewLocalEventClient(),
 
 		ctx:    ctx,
 		cancel: cancel,
@@ -95,7 +96,7 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 // ==== Observer Registration ====
 
 // AddObserver 添加一个进度观察者。
-func (p *Plot[S, F]) AddObserver(observer Observer) {
+func (p *Plot[S, F]) AddObserver(observer runtime.Observer) {
 	p.observers = append(p.observers, observer)
 }
 
@@ -122,7 +123,7 @@ func (p *Plot[S, F]) StopSpouts() {
 }
 
 // SetEventClient 设置 plot 的事件客户端。
-func (p *Plot[S, F]) SetEventClient(eventClient EventClient) {
+func (p *Plot[S, F]) SetEventClient(eventClient runtime.EventClient) {
 	p.eventClient = eventClient
 }
 
@@ -141,7 +142,7 @@ func (p *Plot[S, F]) AddUpstream(name string) {
 // ConnectTo 将当前 plot 的果实输出连接到下游 plot 的种子输入。
 // 通过类型断言校验上游 F 与下游 S 是否匹配。
 func (p *Plot[S, F]) ConnectTo(next PlotNode) error {
-	seedChan, ok := next.GetSeedChanAny().(chan Payload[F])
+	seedChan, ok := next.GetSeedChanAny().(chan runtime.Payload[F])
 	if !ok {
 		return fmt.Errorf("plot %q fruit type is incompatible with plot %q seed type", p.name, next.GetName())
 	}
@@ -200,7 +201,7 @@ func (p *Plot[S, F]) notifyFinish() {
 // ==== Result Handling ====
 
 // bearFruit 处理培育成功的种子：更新计数、记录日志、推进生命周期并发送果实。
-func (p *Plot[S, F]) bearFruit(seedPayload Payload[S], fruit F, startTime time.Time) {
+func (p *Plot[S, F]) bearFruit(seedPayload runtime.Payload[S], fruit F, startTime time.Time) {
 	p.AddFruitNum(1)
 	p.reportProgress()
 
@@ -217,13 +218,13 @@ func (p *Plot[S, F]) bearFruit(seedPayload Payload[S], fruit F, startTime time.T
 	for nextPlot, ch := range p.fruitChans {
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		p.lifecycleInlet.SeedIn(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
-		fruitPayload := Payload[F]{Value: fruit, EventID: downstreamSeedID}
+		fruitPayload := runtime.Payload[F]{Value: fruit, EventID: downstreamSeedID}
 		ch <- fruitPayload
 	}
 }
 
 // bearWeed 处理培育失败的种子：更新计数、记录日志并推进生命周期。
-func (p *Plot[S, F]) bearWeed(seedPayload Payload[S], err error, startTime time.Time) {
+func (p *Plot[S, F]) bearWeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
 	p.AddWeedNum(1)
 	p.reportProgress()
 
@@ -263,7 +264,7 @@ func (p *Plot[S, F]) sprout() {
 				patents = append(patents, sealID)
 			}
 			sealID := p.eventClient.Emit("seal", patents)
-			sealPayload := Payload[F]{Signal: SignalSeal, Source: p.name, EventID: sealID}
+			sealPayload := runtime.Payload[F]{Signal: runtime.SignalSeal, Source: p.name, EventID: sealID}
 			for _, ch := range p.fruitChans {
 				ch <- sealPayload
 			}
@@ -272,7 +273,7 @@ func (p *Plot[S, F]) sprout() {
 
 		select {
 		case seed := <-p.seedChan:
-			if seed.Signal == SignalSeal {
+			if seed.Signal == runtime.SignalSeal {
 				inputClosed = p.markSealed(seed.Source, seed.EventID, sealedFrom)
 				continue
 			}
@@ -309,7 +310,7 @@ func (p *Plot[S, F]) markSealed(source string, sealID int, sealedFrom map[string
 
 // tend 照料单颗种子：执行 cultivator 并在失败时按策略重试。
 // 完成后通过 bearFruit 或 bearWeed 路由结果。
-func (p *Plot[S, F]) tend(seedPayload Payload[S], sem chan struct{}, done chan struct{}) {
+func (p *Plot[S, F]) tend(seedPayload runtime.Payload[S], sem chan struct{}, done chan struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			p.bearWeed(seedPayload, fmt.Errorf("cultivator panic: %v", r), time.Now())
@@ -365,7 +366,7 @@ func (p *Plot[S, F]) SeedAny(seed any) error {
 func (p *Plot[S, F]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
 	p.lifecycleInlet.SeedIn(p.name, seedID, nil, seed)
-	p.seedChan <- Payload[S]{Value: seed, EventID: seedID}
+	p.seedChan <- runtime.Payload[S]{Value: seed, EventID: seedID}
 }
 
 // Seal 向 seedChan 发送来自外部 input 的 SignalSeal。
@@ -373,7 +374,7 @@ func (p *Plot[S, F]) Seed(seed S) {
 // plot，这同样会触发强终止，而不是继续等待剩余上游 seal。
 func (p *Plot[S, F]) Seal() {
 	sealID := p.eventClient.Emit("seal", []int{})
-	p.seedChan <- Payload[S]{Signal: SignalSeal, Source: sourceInput, EventID: sealID}
+	p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
 }
 
 // StartAsync 异步启动 sprout 调度器。

@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
 func TestFarmAddPlot(t *testing.T) {
 	farm := farm.NewFarm("add_plot", "INFO")
-	plotA := grow.NewPlot("A", func(seed int) (int, error) { return seed, nil })
-	plotB := grow.NewPlot("B", func(seed int) (int, error) { return seed, nil })
+	plotA := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
+	plotB := plot.NewPlot("B", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(plotA, plotB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
@@ -38,8 +38,8 @@ func TestFarmAddPlot(t *testing.T) {
 
 func TestFarmAddPlotDuplicateName(t *testing.T) {
 	farm := farm.NewFarm("add_plot_duplicate_name", "INFO")
-	plotA1 := grow.NewPlot("A", func(seed int) (int, error) { return seed, nil })
-	plotA2 := grow.NewPlot("A", func(seed int) (int, error) { return seed, nil })
+	plotA1 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
+	plotA2 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(plotA1); err != nil {
 		t.Fatalf("AddPlot(first) error = %v", err)
@@ -51,15 +51,15 @@ func TestFarmAddPlotDuplicateName(t *testing.T) {
 
 func TestFarmConnectHyperEdge(t *testing.T) {
 	farm := farm.NewFarm("connect_hyper_edge", "INFO")
-	source := grow.NewPlot("source", func(seed int) (int, error) { return seed * 2, nil })
-	targetA := grow.NewPlot("targetA", func(seed int) (int, error) { return seed, nil })
-	targetB := grow.NewPlot("targetB", func(seed int) (int, error) { return seed, nil })
+	source := plot.NewPlot("source", func(seed int) (int, error) { return seed * 2, nil })
+	targetA := plot.NewPlot("targetA", func(seed int) (int, error) { return seed, nil })
+	targetB := plot.NewPlot("targetB", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(source, targetA, targetB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
 
-	if err := farm.Connect([]grow.PlotNode{source}, []grow.PlotNode{targetA, targetB, targetA}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{source}, []plot.PlotNode{targetA, targetB, targetA}); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 
@@ -76,14 +76,14 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 
 func TestFarmConnectTypeMismatch(t *testing.T) {
 	farm := farm.NewFarm("connect_type_mismatch", "INFO")
-	source := grow.NewPlot("source", func(seed int) (int, error) { return seed, nil })
-	target := grow.NewPlot("target", func(seed string) (string, error) { return seed, nil })
+	source := plot.NewPlot("source", func(seed int) (int, error) { return seed, nil })
+	target := plot.NewPlot("target", func(seed string) (string, error) { return seed, nil })
 
 	if err := farm.AddPlot(source, target); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
 
-	if err := farm.Connect([]grow.PlotNode{source}, []grow.PlotNode{target}); err == nil {
+	if err := farm.Connect([]plot.PlotNode{source}, []plot.PlotNode{target}); err == nil {
 		t.Fatal("Connect() expected type mismatch error, got nil")
 	}
 }

@@ -7,45 +7,45 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
 func TestFarmStructure121(t *testing.T) {
 	const seedCount = 50
 
-	root := grow.NewPlot("root", func(seed int) (int, error) {
+	root := plot.NewPlot("root", func(seed int) (int, error) {
 		return seed, nil
-	}, grow.WithTends(8))
+	}, plot.WithTends(8))
 
-	midA := grow.NewPlot("midA", func(seed int) (int, error) {
+	midA := plot.NewPlot("midA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
-	}, grow.WithTends(8))
+	}, plot.WithTends(8))
 
-	midB := grow.NewPlot("midB", func(seed int) (int, error) {
+	midB := plot.NewPlot("midB", func(seed int) (int, error) {
 		return seed*10 + 2, nil
-	}, grow.WithTends(8))
+	}, plot.WithTends(8))
 
 	var (
 		mu     sync.Mutex
 		counts = make(map[int]int, seedCount*2)
 	)
 
-	head := grow.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewPlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		counts[seed]++
 		mu.Unlock()
 		return seed, nil
-	}, grow.WithTends(8))
+	}, plot.WithTends(8))
 
 	farm := farm.NewFarm("structure_121", "INFO")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
 
-	if err := farm.Connect([]grow.PlotNode{root}, []grow.PlotNode{midA, midB}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{root}, []plot.PlotNode{midA, midB}); err != nil {
 		t.Fatalf("Connect(root -> mids) error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{midA, midB}, []grow.PlotNode{head}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{midA, midB}, []plot.PlotNode{head}); err != nil {
 		t.Fatalf("Connect(mids -> head) error = %v", err)
 	}
 
@@ -94,40 +94,40 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 	const seedCount = 20
 
 	// root: 偶数失败，10 个成功
-	root := grow.NewPlot("root", func(seed int) (int, error) {
+	root := plot.NewPlot("root", func(seed int) (int, error) {
 		if seed%2 == 0 {
 			return 0, fmt.Errorf("even seed %d", seed)
 		}
 		return seed, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	// midA: 全部成功
-	midA := grow.NewPlot("midA", func(seed int) (int, error) {
+	midA := plot.NewPlot("midA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	// midB: 能被 3 整除的失败，10 个输入中失败 seed=3,9 共 5 个（seed=1,3,5,7,9,11,13,15,17,19 中 3,9,15 能被3整除）
 	// 修正：输入是 1,3,5,7,9,11,13,15,17,19（10个奇数），其中能被3整除的是 3,9,15 共 3 个，成功 7 个
 	// 为了让 midB 恰好失败 5 个，改用 seed > 10 失败：失败 11,13,15,17,19 共 5 个，成功 1,3,5,7,9 共 5 个
-	midB := grow.NewPlot("midB", func(seed int) (int, error) {
+	midB := plot.NewPlot("midB", func(seed int) (int, error) {
 		if seed > 10 {
 			return 0, fmt.Errorf("seed %d too large", seed)
 		}
 		return seed*10 + 2, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
-	head := grow.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewPlot("head", func(seed int) (int, error) {
 		return seed, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	farm := farm.NewFarm("structure_121_partial_failure", "INFO")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{root}, []grow.PlotNode{midA, midB}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{root}, []plot.PlotNode{midA, midB}); err != nil {
 		t.Fatalf("Connect(root -> mids) error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{midA, midB}, []grow.PlotNode{head}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{midA, midB}, []plot.PlotNode{head}); err != nil {
 		t.Fatalf("Connect(mids -> head) error = %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		t.Fatalf("head fruitNum = %d, want 15", head.GetFruitNum())
 	}
 
-	for _, p := range []grow.PlotNode{root, midA, midB, head} {
+	for _, p := range []plot.PlotNode{root, midA, midB, head} {
 		if int(p.GetState()) != 2 {
 			t.Fatalf("%s state = %d, want 2", p.GetName(), p.GetState())
 		}
@@ -176,55 +176,55 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 	const seedCount = 50
 
 	// 第一组: 1→2 (rootA → midA1, midA2)
-	rootA := grow.NewPlot("rootA", func(seed int) (int, error) {
+	rootA := plot.NewPlot("rootA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	var (
 		muA      sync.Mutex
 		resultsA = make(map[int]int, seedCount*2)
 	)
-	midA1 := grow.NewPlot("midA1", func(seed int) (int, error) {
+	midA1 := plot.NewPlot("midA1", func(seed int) (int, error) {
 		muA.Lock()
 		resultsA[seed]++
 		muA.Unlock()
 		return seed, nil
-	}, grow.WithTends(4))
-	midA2 := grow.NewPlot("midA2", func(seed int) (int, error) {
+	}, plot.WithTends(4))
+	midA2 := plot.NewPlot("midA2", func(seed int) (int, error) {
 		muA.Lock()
 		resultsA[seed]++
 		muA.Unlock()
 		return seed, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	// 第二组: 2→1 (rootB1, rootB2 → headB)
-	rootB1 := grow.NewPlot("rootB1", func(seed int) (int, error) {
+	rootB1 := plot.NewPlot("rootB1", func(seed int) (int, error) {
 		return seed*10 + 3, nil
-	}, grow.WithTends(4))
-	rootB2 := grow.NewPlot("rootB2", func(seed int) (int, error) {
+	}, plot.WithTends(4))
+	rootB2 := plot.NewPlot("rootB2", func(seed int) (int, error) {
 		return seed*10 + 4, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	var (
 		muB      sync.Mutex
 		resultsB = make(map[int]int, seedCount*2)
 	)
-	headB := grow.NewPlot("headB", func(seed int) (int, error) {
+	headB := plot.NewPlot("headB", func(seed int) (int, error) {
 		muB.Lock()
 		resultsB[seed]++
 		muB.Unlock()
 		return seed, nil
-	}, grow.WithTends(4))
+	}, plot.WithTends(4))
 
 	farm := farm.NewFarm("disconnected_components", "INFO")
 	if err := farm.AddPlot(rootA, midA1, midA2, rootB1, rootB2, headB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
 
-	if err := farm.Connect([]grow.PlotNode{rootA}, []grow.PlotNode{midA1, midA2}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{rootA}, []plot.PlotNode{midA1, midA2}); err != nil {
 		t.Fatalf("Connect(rootA -> mids) error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{rootB1, rootB2}, []grow.PlotNode{headB}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{rootB1, rootB2}, []plot.PlotNode{headB}); err != nil {
 		t.Fatalf("Connect(roots -> headB) error = %v", err)
 	}
 
@@ -272,7 +272,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 	}
 
 	// 验证所有 plot 状态
-	for _, p := range []grow.PlotNode{rootA, midA1, midA2, rootB1, rootB2, headB} {
+	for _, p := range []plot.PlotNode{rootA, midA1, midA2, rootB1, rootB2, headB} {
 		if int(p.GetState()) != 2 {
 			t.Fatalf("%s state = %d, want 2", p.GetName(), p.GetState())
 		}
@@ -282,14 +282,14 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 	const seedCount = 50
 
-	rootFast := grow.NewPlot("rootFast", func(seed int) (int, error) {
+	rootFast := plot.NewPlot("rootFast", func(seed int) (int, error) {
 		return seed*10 + 1, nil
-	}, grow.WithTends(4), grow.WithChanSize(50), grow.WithLogLevel("SUCCESS"))
+	}, plot.WithTends(4), plot.WithChanSize(50), plot.WithLogLevel("SUCCESS"))
 
-	rootSlow := grow.NewPlot("rootSlow", func(seed int) (int, error) {
+	rootSlow := plot.NewPlot("rootSlow", func(seed int) (int, error) {
 		time.Sleep(10 * time.Millisecond)
 		return seed*10 + 2, nil
-	}, grow.WithTends(4), grow.WithChanSize(50), grow.WithLogLevel("SUCCESS"))
+	}, plot.WithTends(4), plot.WithChanSize(50), plot.WithLogLevel("SUCCESS"))
 
 	var (
 		mu      sync.Mutex
@@ -297,19 +297,19 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 		visited int
 	)
 
-	head := grow.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewPlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		counts[seed]++
 		visited++
 		mu.Unlock()
 		return seed, nil
-	}, grow.WithTends(8), grow.WithChanSize(100), grow.WithLogLevel("SUCCESS"))
+	}, plot.WithTends(8), plot.WithChanSize(100), plot.WithLogLevel("SUCCESS"))
 
 	farm := farm.NewFarm("structure_21_fanin_different_speed", "INFO")
 	if err := farm.AddPlot(rootFast, rootSlow, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{rootFast, rootSlow}, []grow.PlotNode{head}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{rootFast, rootSlow}, []plot.PlotNode{head}); err != nil {
 		t.Fatalf("Connect(roots -> head) error = %v", err)
 	}
 

@@ -1,4 +1,4 @@
-package grow_test
+package plot_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
 // 重试后成功。
@@ -20,9 +20,9 @@ func TestPlot_RetrySuccess(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := grow.NewPlot("test_retry_success", cultivator,
-		grow.WithTends(1),
-		grow.WithMaxRetries(3),
+	plot := plot.NewPlot("test_retry_success", cultivator,
+		plot.WithTends(1),
+		plot.WithMaxRetries(3),
 	)
 	plot.Run([]int{1})
 	records := mustHarvest(t, plot)
@@ -46,9 +46,9 @@ func TestPlot_RetryExhausted(t *testing.T) {
 		return 0, errors.New("permanent error")
 	}
 
-	plot := grow.NewPlot("test_retry_exhausted", cultivator,
-		grow.WithTends(1),
-		grow.WithMaxRetries(2),
+	plot := plot.NewPlot("test_retry_exhausted", cultivator,
+		plot.WithTends(1),
+		plot.WithMaxRetries(2),
 	)
 	plot.Run([]int{1})
 	records := mustHarvest(t, plot)
@@ -73,10 +73,10 @@ func TestPlot_RetryIf(t *testing.T) {
 		return 0, permanent
 	}
 
-	plot := grow.NewPlot("test_retry_if", cultivator,
-		grow.WithTends(1),
-		grow.WithMaxRetries(3),
-		grow.WithRetryIf(func(err error) bool {
+	plot := plot.NewPlot("test_retry_if", cultivator,
+		plot.WithTends(1),
+		plot.WithMaxRetries(3),
+		plot.WithRetryIf(func(err error) bool {
 			return !errors.Is(err, permanent)
 		}),
 	)
@@ -106,10 +106,10 @@ func TestPlot_RetryDelay(t *testing.T) {
 	}
 
 	start := time.Now()
-	plot := grow.NewPlot("test_retry_delay", cultivator,
-		grow.WithTends(1),
-		grow.WithMaxRetries(2),
-		grow.WithRetryDelay(func(attempt int) time.Duration {
+	plot := plot.NewPlot("test_retry_delay", cultivator,
+		plot.WithTends(1),
+		plot.WithMaxRetries(2),
+		plot.WithRetryDelay(func(attempt int) time.Duration {
 			return 100 * time.Millisecond
 		}),
 	)

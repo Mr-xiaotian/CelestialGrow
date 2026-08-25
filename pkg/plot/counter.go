@@ -1,4 +1,4 @@
-package grow
+package plot
 
 import "sync/atomic"
 

@@ -6,28 +6,28 @@ import (
 	"testing"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
 func TestFarmRunLinear(t *testing.T) {
-	root := grow.NewPlot("root", func(seed int) (int, error) { return seed * 2, nil }, grow.WithTends(2))
+	root := plot.NewPlot("root", func(seed int) (int, error) { return seed * 2, nil }, plot.WithTends(2))
 
 	var (
 		mu      sync.Mutex
 		results []int
 	)
-	head := grow.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewPlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		results = append(results, seed)
 		mu.Unlock()
 		return seed, nil
-	}, grow.WithTends(2))
+	}, plot.WithTends(2))
 
 	farm := farm.NewFarm("start_linear", "INFO")
 	if err := farm.AddPlot(root, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
-	if err := farm.Connect([]grow.PlotNode{root}, []grow.PlotNode{head}); err != nil {
+	if err := farm.Connect([]plot.PlotNode{root}, []plot.PlotNode{head}); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 

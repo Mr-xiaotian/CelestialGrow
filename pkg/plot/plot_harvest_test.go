@@ -1,16 +1,16 @@
-package grow_test
+package plot_test
 
 import (
 	"errors"
 	"strconv"
 	"testing"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
 // mustHarvest 运行后读取指定 plot 的生命周期状态快照。
-func mustHarvest[S any, F any](t *testing.T, plot *grow.Plot[S, F]) []persist.LifecycleStatusRecord {
+func mustHarvest[S any, F any](t *testing.T, plot *plot.Plot[S, F]) []persist.LifecycleStatusRecord {
 	t.Helper()
 
 	records, err := plot.Harvest()
@@ -35,7 +35,7 @@ func TestPlot_AllError(t *testing.T) {
 		return "", errors.New("always fail")
 	}
 
-	plot := grow.NewPlot("test_all_error", cultivator, grow.WithTends(2))
+	plot := plot.NewPlot("test_all_error", cultivator, plot.WithTends(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)
@@ -70,7 +70,7 @@ func TestPlot_PartialError(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := grow.NewPlot("test_partial_error", cultivator, grow.WithTends(2))
+	plot := plot.NewPlot("test_partial_error", cultivator, plot.WithTends(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)
@@ -120,7 +120,7 @@ func TestPlot_AllSuccess(t *testing.T) {
 		return seed * 2, nil
 	}
 
-	plot := grow.NewPlot("test_all_success", cultivator, grow.WithTends(3))
+	plot := plot.NewPlot("test_all_success", cultivator, plot.WithTends(3))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)

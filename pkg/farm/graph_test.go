@@ -1,4 +1,4 @@
-package grow_test
+package farm_test
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
 )
 
 func canonicalizeSCCs(sccs [][]string) [][]string {
@@ -23,7 +23,7 @@ func canonicalizeSCCs(sccs [][]string) [][]string {
 }
 
 func TestOrderGraph_BasicOperations(t *testing.T) {
-	graph := grow.NewOrderGraph()
+	graph := farm.NewOrderGraph()
 	graph.AddNode("isolated")
 	graph.AddEdge("a", "b")
 	graph.AddEdge("a", "c")
@@ -50,27 +50,27 @@ func TestOrderGraph_BasicOperations(t *testing.T) {
 }
 
 func TestGraphAlgorithms_TopoSortAndLevels(t *testing.T) {
-	graph := grow.NewOrderGraphFromEdges(map[string][]string{
+	graph := farm.NewOrderGraphFromEdges(map[string][]string{
 		"a": {"b", "c"},
 		"b": {"d"},
 		"c": {"d"},
 	}, nil)
 
-	if !grow.IsDAG(graph) {
+	if !farm.IsDAG(graph) {
 		t.Fatalf("expected graph to be a DAG")
 	}
 
 	wantTopo := []string{"a", "b", "c", "d"}
-	if !reflect.DeepEqual(grow.TopoSort(graph), wantTopo) {
-		t.Fatalf("unexpected topo order: got %v want %v", grow.TopoSort(graph), wantTopo)
+	if !reflect.DeepEqual(farm.TopoSort(graph), wantTopo) {
+		t.Fatalf("unexpected topo order: got %v want %v", farm.TopoSort(graph), wantTopo)
 	}
 
 	wantSources := []string{"a"}
-	if !reflect.DeepEqual(grow.SourceNodes(graph), wantSources) {
-		t.Fatalf("unexpected source nodes: got %v want %v", grow.SourceNodes(graph), wantSources)
+	if !reflect.DeepEqual(farm.SourceNodes(graph), wantSources) {
+		t.Fatalf("unexpected source nodes: got %v want %v", farm.SourceNodes(graph), wantSources)
 	}
 
-	levels, err := grow.ComputeNodeLevels(graph)
+	levels, err := farm.ComputeNodeLevels(graph)
 	if err != nil {
 		t.Fatalf("compute node levels failed: %v", err)
 	}
@@ -87,18 +87,18 @@ func TestGraphAlgorithms_TopoSortAndLevels(t *testing.T) {
 }
 
 func TestGraphAlgorithms_SCCAndCondensation(t *testing.T) {
-	graph := grow.NewOrderGraphFromEdges(map[string][]string{
+	graph := farm.NewOrderGraphFromEdges(map[string][]string{
 		"a": {"b"},
 		"b": {"a", "c"},
 		"c": {"d"},
 		"d": {"c"},
 	}, nil)
 
-	if grow.IsDAG(graph) {
+	if farm.IsDAG(graph) {
 		t.Fatalf("expected graph to contain cycles")
 	}
 
-	sccs := grow.TarjanSCC(graph)
+	sccs := farm.TarjanSCC(graph)
 	if len(sccs) != 2 {
 		t.Fatalf("unexpected SCC count: got %d want 2", len(sccs))
 	}
@@ -108,18 +108,18 @@ func TestGraphAlgorithms_SCCAndCondensation(t *testing.T) {
 		t.Fatalf("unexpected SCCs: got %v want %v", sccs, wantSCCs)
 	}
 
-	sourceSCCs := grow.SourceSCCs(graph)
+	sourceSCCs := farm.SourceSCCs(graph)
 	wantSourceSCCs := [][]string{{"a", "b"}}
 	if !reflect.DeepEqual(canonicalizeSCCs(sourceSCCs), canonicalizeSCCs(wantSourceSCCs)) {
 		t.Fatalf("unexpected source SCCs: got %v want %v", sourceSCCs, wantSourceSCCs)
 	}
 
-	condensation, condensationSCCs := grow.GetCondensation(graph)
+	condensation, condensationSCCs := farm.GetCondensation(graph)
 	if len(condensationSCCs) != 2 {
 		t.Fatalf("unexpected condensation SCC count: got %d want 2", len(condensationSCCs))
 	}
 
-	mapping := grow.NodeToSCCIndex(condensationSCCs)
+	mapping := farm.NodeToSCCIndex(condensationSCCs)
 	if mapping["a"] != mapping["b"] || mapping["c"] != mapping["d"] || mapping["a"] == mapping["c"] {
 		t.Fatalf("unexpected condensation SCC mapping: %v", mapping)
 	}

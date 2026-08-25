@@ -1,4 +1,4 @@
-package grow_test
+package farm_test
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
 )
 
@@ -36,7 +37,7 @@ func TestFarmStructure121(t *testing.T) {
 		return seed, nil
 	}, grow.WithTends(8))
 
-	farm := grow.NewFarm("structure_121", "INFO")
+	farm := farm.NewFarm("structure_121", "INFO")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -119,7 +120,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		return seed, nil
 	}, grow.WithTends(4))
 
-	farm := grow.NewFarm("structure_121_partial_failure", "INFO")
+	farm := farm.NewFarm("structure_121_partial_failure", "INFO")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -215,7 +216,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		return seed, nil
 	}, grow.WithTends(4))
 
-	farm := grow.NewFarm("disconnected_components", "INFO")
+	farm := farm.NewFarm("disconnected_components", "INFO")
 	if err := farm.AddPlot(rootA, midA1, midA2, rootB1, rootB2, headB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -304,7 +305,7 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 		return seed, nil
 	}, grow.WithTends(8), grow.WithChanSize(100), grow.WithLogLevel("SUCCESS"))
 
-	farm := grow.NewFarm("structure_21_fanin_different_speed", "INFO")
+	farm := farm.NewFarm("structure_21_fanin_different_speed", "INFO")
 	if err := farm.AddPlot(rootFast, rootSlow, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}

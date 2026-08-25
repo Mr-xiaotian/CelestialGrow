@@ -1,10 +1,12 @@
-package grow
+package farm
 
 import (
 	"fmt"
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/grow"
+
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
@@ -15,12 +17,12 @@ import (
 // 以及统一的 spout 管理和生命周期调度。
 type Farm struct {
 	name        string
-	plots       map[string]PlotNode
+	plots       map[string]grow.PlotNode
 	edges       map[string]map[string]struct{}
 	sourceNodes []string
 	orderGraph  *OrderGraph
 
-	eventClient EventClient
+	eventClient grow.EventClient
 
 	logSpout       *funnel.Spout[persist.LogRecord]
 	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
@@ -41,11 +43,11 @@ func NewFarm(name string, logLevel string) *Farm {
 
 	return &Farm{
 		name:       name,
-		plots:      make(map[string]PlotNode),
+		plots:      make(map[string]grow.PlotNode),
 		edges:      make(map[string]map[string]struct{}),
 		orderGraph: orderGraph,
 
-		eventClient: NewLocalEventClient(),
+		eventClient: grow.NewLocalEventClient(),
 
 		logSpout:       logSpout,
 		lifecycleSpout: lifecycleSpout,
@@ -68,7 +70,7 @@ func (f *Farm) HasPlot(name string) bool {
 }
 
 // GetPlot 按名称返回已注册的 plot，未找到时 ok 为 false。
-func (f *Farm) GetPlot(name string) (PlotNode, bool) {
+func (f *Farm) GetPlot(name string) (grow.PlotNode, bool) {
 	plot, ok := f.plots[name]
 	return plot, ok
 }
@@ -87,7 +89,7 @@ func (f *Farm) Connected(from, to string) bool {
 
 // AddPlot 将一个或多个 plot 注册到 farm。
 // plot 名称不能为空且必须唯一；注册时会加入拓扑图并共享 Farm 的事件客户端。
-func (f *Farm) AddPlot(plots ...PlotNode) error {
+func (f *Farm) AddPlot(plots ...grow.PlotNode) error {
 	for _, plot := range plots {
 		if plot == nil {
 			return fmt.Errorf("plot is nil")
@@ -110,7 +112,7 @@ func (f *Farm) AddPlot(plots ...PlotNode) error {
 }
 
 // requireRegistered 确保 plot 已注册到 farm 中，用于连接前校验。
-func (f *Farm) requireRegistered(plot PlotNode) error {
+func (f *Farm) requireRegistered(plot grow.PlotNode) error {
 	if plot == nil {
 		return fmt.Errorf("plot is nil")
 	}
@@ -123,9 +125,9 @@ func (f *Farm) requireRegistered(plot PlotNode) error {
 // ==== Connection ====
 
 // uniquePlots 对 plot 列表按名称去重，过滤 nil。
-func uniquePlots(plots []PlotNode) []PlotNode {
+func uniquePlots(plots []grow.PlotNode) []grow.PlotNode {
 	seen := make(map[string]struct{}, len(plots))
-	unique := make([]PlotNode, 0, len(plots))
+	unique := make([]grow.PlotNode, 0, len(plots))
 	for _, plot := range plots {
 		if plot == nil {
 			continue
@@ -152,7 +154,7 @@ func (f *Farm) addEdge(from, to string) {
 // Connect 在源组和目标组之间建立全连接（笛卡尔积）。
 // 每条连接调用 from.ConnectTo(to) 将上游 fruitChan 接入下游 seedChan，
 // 并在下游登记上游名称用于 seal 聚合。
-func (f *Farm) Connect(fromPlots []PlotNode, toPlots []PlotNode) error {
+func (f *Farm) Connect(fromPlots []grow.PlotNode, toPlots []grow.PlotNode) error {
 	fromUnique := uniquePlots(fromPlots)
 	toUnique := uniquePlots(toPlots)
 

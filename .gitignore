@@ -1,0 +1,10 @@
+.DS_Store
+
+logs/
+lifecycles/
+
+pkg/grow/logs/
+pkg/grow/lifecycles/
+
+*.log
+*.sqlite3

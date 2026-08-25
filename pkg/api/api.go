@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
@@ -27,6 +28,11 @@ func NewFarm(name string, logLevel string) *Farm {
 // NewPlot 创建一个 Plot。
 func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *Plot[S, F] {
 	return plot.NewPlot(name, cultivator, opts...)
+}
+
+// NewProgressBar 创建一个进度条。
+func NewProgressBar(description string) *observer.ProgressBar {
+	return observer.NewProgressBar(description)
 }
 
 var (

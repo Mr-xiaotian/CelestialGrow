@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
@@ -43,7 +44,7 @@ type PlotNode interface {
 type Plot[S any, F any] struct {
 	name       string
 	cultivator func(S) (F, error)
-	observers  []runtime.Observer
+	observers  []observer.Observer
 	plotOptions
 
 	seedChan   chan runtime.Payload[S]
@@ -96,7 +97,7 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 // ==== Observer Registration ====
 
 // AddObserver 添加一个进度观察者。
-func (p *Plot[S, F]) AddObserver(observer runtime.Observer) {
+func (p *Plot[S, F]) AddObserver(observer observer.Observer) {
 	p.observers = append(p.observers, observer)
 }
 

@@ -109,6 +109,19 @@ func (g *OrderGraph) Predecessors(name string) []string {
 	return append([]string{}, g.in[name]...)
 }
 
+// Connected 返回 from → to 是否已建立连接。
+func (g *OrderGraph) Connected(from, to string) bool {
+	if !g.HasNode(from) || !g.HasNode(to) {
+		return false
+	}
+	for _, succ := range g.out[from] {
+		if succ == to {
+			return true
+		}
+	}
+	return false
+}
+
 // String 返回图的简要描述。
 func (g *OrderGraph) String() string {
 	edgeCount := 0

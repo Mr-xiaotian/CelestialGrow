@@ -18,9 +18,8 @@ import (
 type Farm struct {
 	name        string
 	plots       map[string]plot.PlotNode
-	edges       map[string]map[string]struct{}
 	sourceNodes []string
-	orderGraph  *OrderGraph
+	*OrderGraph
 
 	eventClient runtime.EventClient
 
@@ -39,13 +38,11 @@ func NewFarm(name string, logLevel string) *Farm {
 	lifecycleSpout := funnel.NewSpout(&persist.LifecycleRecordHandler{}, 100, time.Second)
 	logInlet := persist.NewLogInlet(logSpout.GetQueue(), time.Second, logLevel)
 	lifecycleInlet := persist.NewLifecycleInlet(lifecycleSpout.GetQueue(), time.Second)
-	orderGraph := NewOrderGraph()
 
 	return &Farm{
 		name:       name,
 		plots:      make(map[string]plot.PlotNode),
-		edges:      make(map[string]map[string]struct{}),
-		orderGraph: orderGraph,
+		OrderGraph: NewOrderGraph(),
 
 		eventClient: runtime.NewLocalEventClient(),
 
@@ -75,16 +72,6 @@ func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
 	return plot, ok
 }
 
-// Connected 返回 from → to 是否已建立连接。
-func (f *Farm) Connected(from, to string) bool {
-	targets, ok := f.edges[from]
-	if !ok {
-		return false
-	}
-	_, ok = targets[to]
-	return ok
-}
-
 // ==== Registration ====
 
 // AddPlot 将一个或多个 plot 注册到 farm。
@@ -104,7 +91,7 @@ func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
 		}
 
 		f.plots[name] = plot
-		f.orderGraph.AddNode(name)
+		f.AddNode(name)
 		plot.SetEventClient(f.eventClient)
 	}
 
@@ -142,15 +129,6 @@ func uniquePlots(plots []plot.PlotNode) []plot.PlotNode {
 	return unique
 }
 
-// addEdge 记录一条 from → to 的有向边，并同步更新顺序图。
-func (f *Farm) addEdge(from, to string) {
-	if f.edges[from] == nil {
-		f.edges[from] = make(map[string]struct{})
-	}
-	f.edges[from][to] = struct{}{}
-	f.orderGraph.AddEdge(from, to)
-}
-
 // Connect 在源组和目标组之间建立全连接（笛卡尔积）。
 // 每条连接调用 from.ConnectTo(to) 将上游产出通道接入下游 seedChan，
 // 并在下游登记上游名称与产出计数器用于 seal 聚合和种子统计。
@@ -182,7 +160,7 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 				return err
 			}
 			to.AddUpstream(from.GetName(), from.GetYieldCounter())
-			f.addEdge(from.GetName(), to.GetName())
+			f.AddEdge(from.GetName(), to.GetName())
 		}
 	}
 
@@ -211,7 +189,7 @@ func (f *Farm) Run(inputs map[string][]any) error {
 		return err
 	}
 
-	f.sourceNodes = SourceNodes(f.orderGraph)
+	f.sourceNodes = SourceNodes(f.OrderGraph)
 
 	f.logSpout.Start()
 	f.lifecycleSpout.Start()

@@ -62,7 +62,7 @@ type Plot[S any, F any] struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	state  atomic.Int32 // 0=idle, 1=running, 2=done
-	Counter
+	*Counter
 }
 
 // ==== Construction ====
@@ -90,7 +90,7 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 
 		ctx:     ctx,
 		cancel:  cancel,
-		Counter: *NewCounter(),
+		Counter: NewCounter(),
 	}
 }
 

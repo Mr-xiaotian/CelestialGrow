@@ -7,10 +7,9 @@ import "fmt"
 // OrderGraph 是用于图分析辅助函数的最小有序有向图。
 // 它通过显式保存节点插入顺序，保证遍历和拓扑结果稳定。
 type OrderGraph struct {
-	nodes   []string
-	nodeSet map[string]struct{}
-	in      map[string][]string
-	out     map[string][]string
+	nodes []string
+	in    map[string][]string
+	out   map[string][]string
 }
 
 // ==== Construction ====
@@ -18,10 +17,9 @@ type OrderGraph struct {
 // NewOrderGraph 创建一个空的有序有向图。
 func NewOrderGraph() *OrderGraph {
 	return &OrderGraph{
-		nodes:   []string{},
-		nodeSet: make(map[string]struct{}),
-		in:      make(map[string][]string),
-		out:     make(map[string][]string),
+		nodes: []string{},
+		in:    make(map[string][]string),
+		out:   make(map[string][]string),
 	}
 }
 
@@ -50,11 +48,10 @@ func NewOrderGraphFromEdges(outEdges map[string][]string, stageNames []string) *
 
 // AddNode 在节点不存在时添加节点。
 func (g *OrderGraph) AddNode(name string) {
-	if _, ok := g.nodeSet[name]; ok {
+	if _, ok := g.out[name]; ok {
 		return
 	}
 
-	g.nodeSet[name] = struct{}{}
 	g.nodes = append(g.nodes, name)
 	g.out[name] = make([]string, 0)
 	g.in[name] = make([]string, 0)
@@ -103,7 +100,7 @@ func (g *OrderGraph) InEdges() map[string][]string {
 
 // HasNode 判断节点是否存在。
 func (g *OrderGraph) HasNode(name string) bool {
-	_, ok := g.nodeSet[name]
+	_, ok := g.out[name]
 	return ok
 }
 

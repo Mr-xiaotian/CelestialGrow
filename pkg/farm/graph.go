@@ -2,6 +2,8 @@ package farm
 
 import "fmt"
 
+// ==== Struct ====
+
 // OrderGraph 是用于图分析辅助函数的最小有序有向图。
 // 它通过显式保存节点插入顺序，保证遍历和拓扑结果稳定。
 type OrderGraph struct {
@@ -10,6 +12,8 @@ type OrderGraph struct {
 	in      map[string][]string
 	out     map[string][]string
 }
+
+// ==== Construction ====
 
 // NewOrderGraph 创建一个空的有序有向图。
 func NewOrderGraph() *OrderGraph {
@@ -42,6 +46,8 @@ func NewOrderGraphFromEdges(outEdges map[string][]string, stageNames []string) *
 	return graph
 }
 
+// ==== Mutation ====
+
 // AddNode 在节点不存在时添加节点。
 func (g *OrderGraph) AddNode(name string) {
 	if _, ok := g.nodeSet[name]; ok {
@@ -69,6 +75,8 @@ func (g *OrderGraph) AddEdge(from, to string) {
 	g.out[from] = append(g.out[from], to)
 	g.in[to] = append(g.in[to], from)
 }
+
+// ==== Queries ====
 
 // Nodes 按插入顺序返回全部节点名称。
 func (g *OrderGraph) Nodes() []string {
@@ -131,6 +139,8 @@ func (g *OrderGraph) String() string {
 	return fmt.Sprintf("OrderGraph(nodes=%d, edges=%d)", len(g.nodes), edgeCount)
 }
 
+// ==== Topological Algorithms ====
+
 // InDegree 计算每个节点的入度。
 func InDegree(graph *OrderGraph) map[string]int {
 	degree := make(map[string]int, len(graph.nodes))
@@ -166,6 +176,39 @@ func IsDAG(graph *OrderGraph) bool {
 
 	return visited == len(graph.nodes)
 }
+
+// TopoSort 在图是 DAG 时返回一个稳定的拓扑序；若存在环则返回 nil。
+func TopoSort(graph *OrderGraph) []string {
+	if !IsDAG(graph) {
+		return nil
+	}
+
+	degree := InDegree(graph)
+	queue := make([]string, 0, len(graph.nodes))
+	for _, name := range graph.nodes {
+		if degree[name] == 0 {
+			queue = append(queue, name)
+		}
+	}
+
+	order := make([]string, 0, len(graph.nodes))
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		order = append(order, node)
+
+		for _, succ := range graph.out[node] {
+			degree[succ]--
+			if degree[succ] == 0 {
+				queue = append(queue, succ)
+			}
+		}
+	}
+
+	return order
+}
+
+// ==== Strongly Connected Components ====
 
 // TarjanSCC 使用 Tarjan 算法计算强连通分量。
 // 返回的 SCC 顺序为凝聚图的逆拓扑序。
@@ -312,36 +355,7 @@ func SourceNodes(graph *OrderGraph) []string {
 	return nodes
 }
 
-// TopoSort 在图是 DAG 时返回一个稳定的拓扑序；若存在环则返回 nil。
-func TopoSort(graph *OrderGraph) []string {
-	if !IsDAG(graph) {
-		return nil
-	}
-
-	degree := InDegree(graph)
-	queue := make([]string, 0, len(graph.nodes))
-	for _, name := range graph.nodes {
-		if degree[name] == 0 {
-			queue = append(queue, name)
-		}
-	}
-
-	order := make([]string, 0, len(graph.nodes))
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
-		order = append(order, node)
-
-		for _, succ := range graph.out[node] {
-			degree[succ]--
-			if degree[succ] == 0 {
-				queue = append(queue, succ)
-			}
-		}
-	}
-
-	return order
-}
+// ==== Node Levels ====
 
 // ComputeNodeLevels 计算每个节点的最早执行层级。
 // 它会先构建 SCC 凝聚图，再在该 DAG 上逐层传播 level。

@@ -11,20 +11,15 @@ type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64
 	weedNum  atomic.Int64
+
+	upstreamYields map[string]*atomic.Int64
 }
 
 // ==== Constructor ====
 
 // NewCounter 创建并返回一个新的 Counter，所有计数初始为零。
 func NewCounter() *Counter {
-	return &Counter{}
-}
-
-// ==== Setters ====
-
-// SetSeedNum 原子地设置种子总数。
-func (c *Counter) SetSeedNum(seedNum int) {
-	c.seedNum.Store(int64(seedNum))
+	return &Counter{upstreamYields: make(map[string]*atomic.Int64)}
 }
 
 // ==== Adders ====
@@ -46,9 +41,14 @@ func (c *Counter) AddWeedNum(addNNum int) {
 
 // ==== Getters ====
 
-// GetSeedNum 返回种子总数。
+// GetSeedNum 返回当前 plot 的种子总数，
+// 包括本地播入的种子和上游产出转入的种子。
 func (c *Counter) GetSeedNum() int {
-	return int(c.seedNum.Load())
+	totalSeedNum := int(c.seedNum.Load())
+	for _, yieldCounter := range c.upstreamYields {
+		totalSeedNum += int(yieldCounter.Load())
+	}
+	return totalSeedNum
 }
 
 // GetFruitNum 返回成功数（果实）。

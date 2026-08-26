@@ -152,8 +152,8 @@ func (f *Farm) addEdge(from, to string) {
 }
 
 // Connect 在源组和目标组之间建立全连接（笛卡尔积）。
-// 每条连接调用 from.ConnectTo(to) 将上游 fruitChan 接入下游 seedChan，
-// 并在下游登记上游名称用于 seal 聚合。
+// 每条连接调用 from.ConnectTo(to) 将上游产出通道接入下游 seedChan，
+// 并在下游登记上游名称与产出计数器用于 seal 聚合和种子统计。
 func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error {
 	fromUnique := uniquePlots(fromPlots)
 	toUnique := uniquePlots(toPlots)
@@ -181,7 +181,7 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 			if err := from.ConnectTo(to); err != nil {
 				return err
 			}
-			to.AddUpstream(from.GetName())
+			to.AddUpstream(from.GetName(), from.GetYieldCounter())
 			f.addEdge(from.GetName(), to.GetName())
 		}
 	}

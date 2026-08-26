@@ -25,7 +25,8 @@ type PlotNode interface {
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
-	AddUpstream(name string)
+	AddUpstream(name string, yieldCounter *atomic.Int64)
+	GetYieldCounter() *atomic.Int64
 	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
 	SetEventClient(eventClient runtime.EventClient)
 
@@ -49,7 +50,6 @@ type Plot[S any, F any] struct {
 
 	seedChan   chan runtime.Payload[S]
 	fruitChans map[string]chan runtime.Payload[F]
-	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
 
@@ -85,12 +85,12 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 
 		seedChan:   make(chan runtime.Payload[S], o.chanSize),
 		fruitChans: make(map[string]chan runtime.Payload[F]),
-		upstreams:  make(map[string]struct{}),
 
 		eventClient: runtime.NewLocalEventClient(),
 
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:     ctx,
+		cancel:  cancel,
+		Counter: *NewCounter(),
 	}
 }
 
@@ -130,14 +130,19 @@ func (p *Plot[S, F]) SetEventClient(eventClient runtime.EventClient) {
 
 // ==== Connection ====
 
-// AddUpstream 登记一个上游 plot 名称。
+// GetYieldCounter 返回当前 plot 提供给下游的产出计数器。
+func (p *Plot[S, F]) GetYieldCounter() *atomic.Int64 {
+	return &p.fruitNum
+}
+
+// AddUpstream 登记一个上游 plot 及其产出计数器。
 // 当未收到外部 input seal 时，sprout 需要等所有已登记上游都发送过
 // seal 信号后，才会将输入视为关闭。
-func (p *Plot[S, F]) AddUpstream(name string) {
+func (p *Plot[S, F]) AddUpstream(name string, yieldCounter *atomic.Int64) {
 	if name == "" {
 		return
 	}
-	p.upstreams[name] = struct{}{}
+	p.upstreamYields[name] = yieldCounter
 }
 
 // ConnectTo 将当前 plot 的果实输出连接到下游 plot 的种子输入。
@@ -249,7 +254,7 @@ func (p *Plot[S, F]) bearWeed(seedPayload runtime.Payload[S], err error, startTi
 func (p *Plot[S, F]) sprout() {
 	sem := make(chan struct{}, p.numTends)
 	done := make(chan struct{}, p.numTends)
-	sealedFrom := make(map[string]int, len(p.upstreams))
+	sealedFrom := make(map[string]int, len(p.upstreamYields))
 
 	ctxCancel := false
 	inputClosed := false
@@ -260,7 +265,7 @@ func (p *Plot[S, F]) sprout() {
 
 	for {
 		if shouldFinish() {
-			patents := make([]int, 0, len(p.upstreams))
+			patents := make([]int, 0, len(p.upstreamYields))
 			for _, sealID := range sealedFrom {
 				patents = append(patents, sealID)
 			}
@@ -278,7 +283,6 @@ func (p *Plot[S, F]) sprout() {
 				inputClosed = p.markSealed(seed.Source, seed.EventID, sealedFrom)
 				continue
 			}
-			p.AddSeedNum(1)
 
 			sem <- struct{}{}
 			inFlight++
@@ -302,11 +306,11 @@ func (p *Plot[S, F]) markSealed(source string, sealID int, sealedFrom map[string
 	if source == "" {
 		return false
 	}
-	if _, ok := p.upstreams[source]; !ok {
+	if _, ok := p.upstreamYields[source]; !ok {
 		return false
 	}
 	sealedFrom[source] = sealID
-	return len(sealedFrom) == len(p.upstreams)
+	return len(sealedFrom) == len(p.upstreamYields)
 }
 
 // tend 照料单颗种子：执行 cultivator 并在失败时按策略重试。
@@ -368,6 +372,8 @@ func (p *Plot[S, F]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
 	p.lifecycleInlet.SeedIn(p.name, seedID, nil, seed)
 	p.seedChan <- runtime.Payload[S]{Value: seed, EventID: seedID}
+
+	p.AddSeedNum(1)
 }
 
 // Seal 向 seedChan 发送来自外部 input 的 SignalSeal。

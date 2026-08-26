@@ -2,6 +2,7 @@
 
 logs/
 lifecycles/
+temp/
 
 pkg/grow/logs/
 pkg/grow/lifecycles/

@@ -70,25 +70,25 @@ package main
 import (
 	"fmt"
 
-	api "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+	grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
 )
 
 func main() {
-	double := api.NewPlot("double", func(seed int) (int, error) {
+	double := grow.NewPlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
-	}, api.WithTends(2))
+	}, grow.WithTends(2))
 
-	format := api.NewPlot("format", func(seed int) (string, error) {
+	format := grow.NewPlot("format", func(seed int) (string, error) {
 		return fmt.Sprintf("result=%d", seed), nil
 	})
 
-	format.AddObserver(api.NewProgressBar("format"))
+	format.AddObserver(grow.NewProgressBar("format"))
 
-	farm := api.NewFarm("demo_farm", "INFO")
+	farm := grow.NewFarm("demo_farm", "INFO")
 	if err := farm.AddPlot(double, format); err != nil {
 		panic(err)
 	}
-	if err := farm.Connect([]api.PlotNode{double}, []api.PlotNode{format}); err != nil {
+	if err := farm.Connect([]grow.PlotNode{double}, []grow.PlotNode{format}); err != nil {
 		panic(err)
 	}
 
@@ -113,15 +113,15 @@ package main
 import (
 	"fmt"
 
-	api "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+	grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
 )
 
 func main() {
-	plot := api.NewPlot("double", func(seed int) (int, error) {
+	plot := grow.NewPlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
-	}, api.WithTends(4))
+	}, grow.WithTends(4))
 
-	plot.AddObserver(api.NewProgressBar("double"))
+	plot.AddObserver(grow.NewProgressBar("double"))
 	plot.Run([]int{1, 2, 3, 4, 5})
 
 	records, err := plot.Harvest()

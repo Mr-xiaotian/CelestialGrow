@@ -10,3 +10,4 @@ pkg/grow/lifecycles/
 
 *.log
 *.sqlite3
+*.exe

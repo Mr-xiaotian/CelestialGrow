@@ -1,3 +1,8 @@
+---
+name: "docs-zh-sync"
+description: "CelestialGrow 项目专属配置。Defines project-specific path mapping and subtask division for syncing code to docs/zh-CN, building on the generic docs-zh-sync framework. Invoke when code changes require Chinese docs sync."
+---
+
 # Docs Zh Sync（CelestialGrow 项目特化）
 
 > 本项目 `docs-zh-sync` 在 `~/.agents/skills/docs-zh-sync/SKILL.md`（通用框架）的基础上，定义本项目专属的代码↔文档映射规则与子任务划分方案。

@@ -1,6 +1,9 @@
 package farm
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // ==== Struct ====
 
@@ -63,10 +66,8 @@ func (g *OrderGraph) AddEdge(from, to string) {
 	g.AddNode(from)
 	g.AddNode(to)
 
-	for _, existing := range g.out[from] {
-		if existing == to {
-			return
-		}
+	if slices.Contains(g.out[from], to) {
+		return
 	}
 
 	g.out[from] = append(g.out[from], to)
@@ -119,12 +120,7 @@ func (g *OrderGraph) Connected(from, to string) bool {
 	if !g.HasNode(from) || !g.HasNode(to) {
 		return false
 	}
-	for _, succ := range g.out[from] {
-		if succ == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(g.out[from], to)
 }
 
 // String 返回图的简要描述。

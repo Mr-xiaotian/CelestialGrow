@@ -68,8 +68,13 @@ func (f *Farm) HasPlot(name string) bool {
 
 // GetPlot 按名称返回已注册的 plot，未找到时 ok 为 false。
 func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
-	plot, ok := f.plots[name]
-	return plot, ok
+	p, ok := f.plots[name]
+	return p, ok
+}
+
+// getStructureList 返回渲染成文本行列表的 Farm 结构。
+func (f *Farm) getStructureList() []string {
+	return RenderStructureList(f.Nodes(), f.OutEdges(), f.sourceNodes)
 }
 
 // ==== Registration ====
@@ -77,12 +82,12 @@ func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
 // AddPlot 将一个或多个 plot 注册到 farm。
 // plot 名称不能为空且必须唯一；注册时会加入拓扑图并共享 Farm 的事件客户端。
 func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
-	for _, plot := range plots {
-		if plot == nil {
+	for _, p := range plots {
+		if p == nil {
 			return fmt.Errorf("plot is nil")
 		}
 
-		name := plot.GetName()
+		name := p.GetName()
 		if name == "" {
 			return fmt.Errorf("plot name cannot be empty")
 		}
@@ -90,21 +95,21 @@ func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
 			return fmt.Errorf("plot %q already exists", name)
 		}
 
-		f.plots[name] = plot
+		f.plots[name] = p
 		f.AddNode(name)
-		plot.SetEventClient(f.eventClient)
+		p.SetEventClient(f.eventClient)
 	}
 
 	return nil
 }
 
 // requireRegistered 确保 plot 已注册到 farm 中，用于连接前校验。
-func (f *Farm) requireRegistered(plot plot.PlotNode) error {
-	if plot == nil {
+func (f *Farm) requireRegistered(p plot.PlotNode) error {
+	if p == nil {
 		return fmt.Errorf("plot is nil")
 	}
-	if registered, ok := f.plots[plot.GetName()]; !ok || registered != plot {
-		return fmt.Errorf("plot %q is not registered in farm", plot.GetName())
+	if registered, ok := f.plots[p.GetName()]; !ok || registered != p {
+		return fmt.Errorf("plot %q is not registered in farm", p.GetName())
 	}
 	return nil
 }
@@ -115,16 +120,16 @@ func (f *Farm) requireRegistered(plot plot.PlotNode) error {
 func uniquePlots(plots []plot.PlotNode) []plot.PlotNode {
 	seen := make(map[string]struct{}, len(plots))
 	unique := make([]plot.PlotNode, 0, len(plots))
-	for _, plot := range plots {
-		if plot == nil {
+	for _, p := range plots {
+		if p == nil {
 			continue
 		}
-		name := plot.GetName()
+		name := p.GetName()
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		unique = append(unique, plot)
+		unique = append(unique, p)
 	}
 	return unique
 }
@@ -197,7 +202,7 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	defer f.logSpout.Stop()
 
 	startTime := time.Now()
-	f.logInlet.StartFarm(f.name)
+	f.logInlet.StartFarm(f.name, f.getStructureList())
 
 	for _, plot := range f.plots {
 		plot.BindInlet(f.logSpout.GetQueue(), f.lifecycleSpout.GetQueue())

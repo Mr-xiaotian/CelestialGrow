@@ -45,35 +45,35 @@ func NewSpout[T any](handler RecordHandler[T], bufferSize int, timeout time.Dura
 }
 
 // GetQueue 返回写入通道，供 Inlet 绑定使用。
-func (b *Spout[T]) GetQueue() chan<- T {
-	return b.ch
+func (s *Spout[T]) GetQueue() chan<- T {
+	return s.ch
 }
 
 // Start 启动消费循环。调用 handler.BeforeStart 初始化后，在后台 goroutine 中持续消费记录。
-func (b *Spout[T]) Start() error {
-	if err := b.handler.BeforeStart(); err != nil {
+func (s *Spout[T]) Start() error {
+	if err := s.handler.BeforeStart(); err != nil {
 		return err
 	}
 
-	b.wg.Add(1)
-	go b.spout()
+	s.wg.Add(1)
+	go s.spout()
 	return nil
 }
 
 // spout 持续消费通道中的记录
-func (b *Spout[T]) spout() {
-	defer b.wg.Done()
+func (s *Spout[T]) spout() {
+	defer s.wg.Done()
 
 	for {
 		select {
-		case record, ok := <-b.ch:
+		case record, ok := <-s.ch:
 			if !ok {
 				// 通道关闭，优雅退出
 				return
 			}
-			b.handler.HandleRecord(record)
+			s.handler.HandleRecord(record)
 
-		case <-b.ctx.Done():
+		case <-s.ctx.Done():
 			// 收到取消信号
 			return
 		}
@@ -82,27 +82,27 @@ func (b *Spout[T]) spout() {
 
 // Stop 停止消费循环。先关闭通道触发优雅退出，超时后强制取消。
 // 无论是否超时，都会调用 handler.AfterStop 清理资源。
-func (b *Spout[T]) Stop() error {
-	close(b.ch) // 先尝试优雅关闭
+func (s *Spout[T]) Stop() error {
+	close(s.ch) // 先尝试优雅关闭
 
 	// 等待 Handler 处理完，但最多等 timeout 秒
 	done := make(chan struct{})
-	go func() { b.wg.Wait(); close(done) }()
+	go func() { s.wg.Wait(); close(done) }()
 
 	var err error
 	select {
 	case <-done:
-	case <-time.After(b.timeout):
-		b.cancel()
+	case <-time.After(s.timeout):
+		s.cancel()
 		err = errors.New("shutdown timeout")
 	}
 
 	// 无论如何都执行清理
-	b.handler.AfterStop()
+	s.handler.AfterStop()
 	return err
 }
 
 // Handler 返回当前 Spout 持有的 record handler。
-func (b *Spout[T]) Handler() RecordHandler[T] {
-	return b.handler
+func (s *Spout[T]) Handler() RecordHandler[T] {
+	return s.handler
 }

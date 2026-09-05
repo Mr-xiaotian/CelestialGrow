@@ -39,7 +39,7 @@ type PlotNode interface {
 // ==== Struct ====
 
 // Plot 是可连接的并发种子培育节点。
-// 它将输入种子分发给 tend 池并行培育，通过 funnel 系统异步记录日志与
+// 它将输入种子分发给多个 tender 并行培育，通过 funnel 系统异步记录日志与
 // 生命周期状态，并在成功时向下游 plot 转发 fruit。
 // S 为种子类型，F 为果实类型。
 type Plot[S any, F any] struct {
@@ -247,13 +247,13 @@ func (p *Plot[S, F]) bearWeed(seedPayload runtime.Payload[S], err error, startTi
 
 // ==== Internal Pipeline ====
 
-// sprout 调度器：从 seedChan 读取种子，分发给 tend 协程并行处理。
+// sprout 调度器：从 seedChan 读取种子，分发给 tender 协程并行处理。
 // 通过信号量控制最大并发数，并根据 seal 信号判断输入是否结束。
 // 外部 input seal 具有强终止语义：一旦收到，即不再等待剩余上游 seal。
 // 所有已接收种子处理完毕后，向所有 fruitChans 发送 SignalSeal 通知下游。
 func (p *Plot[S, F]) sprout() {
-	sem := make(chan struct{}, p.numTends)
-	done := make(chan struct{}, p.numTends)
+	sem := make(chan struct{}, p.numTenders)
+	done := make(chan struct{}, p.numTenders)
 	sealedFrom := make(map[string]int, len(p.upstreamYields))
 
 	ctxCancel := false
@@ -390,7 +390,7 @@ func (p *Plot[S, F]) Seal() {
 // Farm 模式下则由 Farm 注入初始种子并接收上游转发的 fruit。完成后需调用 WaitAsync 等待退出。
 func (p *Plot[S, F]) StartAsync() {
 	p.wg.Go(func() {
-		p.logInlet.StartPlot(p.name, p.numTends)
+		p.logInlet.StartPlot(p.name, p.numTenders)
 		startTime := time.Now()
 
 		p.notifyStart()

@@ -115,9 +115,12 @@ func (l *LogInlet) log(level string, message string) {
 	})
 }
 
-// StartFarm 记录 Farm 启动。
-func (l *LogInlet) StartFarm(farmName string) {
-	l.log("INFO", fmt.Sprintf("Farm '%s' start.", farmName))
+// StartFarm 记录 Farm 启动，并逐行输出图结构。
+func (l *LogInlet) StartFarm(farmName string, structureList []string) {
+	l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", farmName))
+	for _, s := range structureList {
+		l.log("INFO", s)
+	}
 }
 
 // EndFarm 记录 Farm 结束，包含总耗时。
@@ -125,14 +128,14 @@ func (l *LogInlet) EndFarm(farmName string, useTime float64) {
 	l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", farmName, useTime))
 }
 
-// StartPlot 记录 Plot 启动，包含 tend 数量。
-func (l *LogInlet) StartPlot(plotName string, numTends int) {
-	l.log("INFO", fmt.Sprintf("'%s' start by %d tends.", plotName, numTends))
+// StartPlot 记录 Plot 启动，包含 tender 数量。
+func (l *LogInlet) StartPlot(plotName string, numTenders int) {
+	l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", plotName, numTenders))
 }
 
 // EndPlot 记录 Plot 结束，包含耗时、成功数和失败数。
 func (l *LogInlet) EndPlot(plotName string, useTime float64, fruitNum, weedNum int) {
-	l.log("INFO", fmt.Sprintf("'%s' end. Use %.2fs. %d ripened, %d withered.", plotName, useTime, fruitNum, weedNum))
+	l.log("INFO", fmt.Sprintf("Plot '%s' end. Use %.2fs. %d ripened, %d withered.", plotName, useTime, fruitNum, weedNum))
 }
 
 // SeedRipen 记录种子成熟（培育成功），包含种子和果实的字符串表示及耗时。

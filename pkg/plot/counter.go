@@ -6,7 +6,7 @@ import "sync/atomic"
 
 // Counter 并发安全的种子计数器。
 // 使用 atomic 操作跟踪种子总数、成功数（果实）和失败数（杂草），
-// 供多个 tend 协程同时更新而无需加锁。
+// 供多个 tender 协程同时更新而无需加锁。
 type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64
@@ -25,18 +25,18 @@ func NewCounter() *Counter {
 // ==== Adders ====
 
 // AddSeedNum 原子地增加种子总数。
-func (c *Counter) AddSeedNum(addNNum int) {
-	c.seedNum.Add(int64(addNNum))
+func (c *Counter) AddSeedNum(addNum int) {
+	c.seedNum.Add(int64(addNum))
 }
 
 // AddFruitNum 原子地增加成功数（果实）。
-func (c *Counter) AddFruitNum(addNNum int) {
-	c.fruitNum.Add(int64(addNNum))
+func (c *Counter) AddFruitNum(addNum int) {
+	c.fruitNum.Add(int64(addNum))
 }
 
 // AddWeedNum 原子地增加失败数（杂草）。
-func (c *Counter) AddWeedNum(addNNum int) {
-	c.weedNum.Add(int64(addNNum))
+func (c *Counter) AddWeedNum(addNum int) {
+	c.weedNum.Add(int64(addNum))
 }
 
 // ==== Getters ====

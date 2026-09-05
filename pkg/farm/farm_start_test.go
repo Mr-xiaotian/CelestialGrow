@@ -10,7 +10,7 @@ import (
 )
 
 func TestFarmRunLinear(t *testing.T) {
-	root := plot.NewPlot("root", func(seed int) (int, error) { return seed * 2, nil }, plot.WithTends(2))
+	root := plot.NewPlot("root", func(seed int) (int, error) { return seed * 2, nil }, plot.WithTenders(2))
 
 	var (
 		mu      sync.Mutex
@@ -21,7 +21,7 @@ func TestFarmRunLinear(t *testing.T) {
 		results = append(results, seed)
 		mu.Unlock()
 		return seed, nil
-	}, plot.WithTends(2))
+	}, plot.WithTenders(2))
 
 	farm := farm.NewFarm("start_linear", "INFO")
 	if err := farm.AddPlot(root, head); err != nil {

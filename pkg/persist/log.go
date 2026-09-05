@@ -128,9 +128,9 @@ func (l *LogInlet) EndFarm(farmName string, useTime float64) {
 	l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", farmName, useTime))
 }
 
-// StartPlot 记录 Plot 启动，包含 tend 数量。
-func (l *LogInlet) StartPlot(plotName string, numTends int) {
-	l.log("INFO", fmt.Sprintf("Plot '%s' start by %d tends.", plotName, numTends))
+// StartPlot 记录 Plot 启动，包含 tender 数量。
+func (l *LogInlet) StartPlot(plotName string, numTenders int) {
+	l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", plotName, numTenders))
 }
 
 // EndPlot 记录 Plot 结束，包含耗时、成功数和失败数。

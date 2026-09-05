@@ -76,7 +76,7 @@ import (
 func main() {
 	double := grow.NewPlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
-	}, grow.WithTends(2))
+	}, grow.WithTenders(2))
 
 	format := grow.NewPlot("format", func(seed int) (string, error) {
 		return fmt.Sprintf("result=%d", seed), nil
@@ -119,7 +119,7 @@ import (
 func main() {
 	plot := grow.NewPlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
-	}, grow.WithTends(4))
+	}, grow.WithTenders(4))
 
 	plot.AddObserver(grow.NewProgressBar("double"))
 	plot.Run([]int{1, 2, 3, 4, 5})
@@ -139,7 +139,7 @@ func main() {
 
 - **泛型 Plot 节点**：`Plot[S, F]` 明确表达输入 seed 类型与输出 fruit 类型
 - **类型安全连接**：上游 `F` 与下游 `S` 不匹配时，`Connect` 会直接报错
-- **并发培育模型**：通过 `WithTends` 控制并发工作协程数
+- **并发培育模型**：通过 `WithTenders` 控制并发照料协程（tender）数
 - **失败重试机制**：支持 `WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`
 - **图级调度**：`Farm` 统一管理节点注册、连边、源节点 seal 与整体运行
 - **生命周期持久化**：默认将事件图和状态快照写入 SQLite

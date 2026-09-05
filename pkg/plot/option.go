@@ -12,7 +12,7 @@ type Option func(*plotOptions)
 
 // plotOptions 存储所有可选参数的内部结构体。
 type plotOptions struct {
-	numTends   int
+	numTenders int
 	chanSize   int
 	maxRetries int
 	retryDelay func(attempt int) time.Duration
@@ -25,7 +25,7 @@ type plotOptions struct {
 // defaultOptions 返回默认配置。
 func defaultOptions() plotOptions {
 	return plotOptions{
-		numTends:   runtime.NumCPU(),
+		numTenders: runtime.NumCPU(),
 		chanSize:   runtime.NumCPU(),
 		maxRetries: 1,
 		retryDelay: func(attempt int) time.Duration { return 0 },
@@ -36,10 +36,10 @@ func defaultOptions() plotOptions {
 
 // ==== Option Functions ====
 
-// WithTends 设置并发 tend 协程数。默认为 runtime.NumCPU()。
-func WithTends(n int) Option {
+// WithTenders 设置并发 tender（照料协程）数。默认为 runtime.NumCPU()。
+func WithTenders(n int) Option {
 	return func(o *plotOptions) {
-		o.numTends = n
+		o.numTenders = n
 	}
 }
 

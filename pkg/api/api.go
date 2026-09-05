@@ -36,7 +36,7 @@ func NewProgressBar(description string) *observer.ProgressBar {
 }
 
 var (
-	WithTends      = plot.WithTends
+	WithTenders    = plot.WithTenders
 	WithChanSize   = plot.WithChanSize
 	WithMaxRetries = plot.WithMaxRetries
 	WithRetryDelay = func(fn func(int) time.Duration) Option {

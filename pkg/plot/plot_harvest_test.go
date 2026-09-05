@@ -35,7 +35,7 @@ func TestPlot_AllError(t *testing.T) {
 		return "", errors.New("always fail")
 	}
 
-	plot := plot.NewPlot("test_all_error", cultivator, plot.WithTends(2))
+	plot := plot.NewPlot("test_all_error", cultivator, plot.WithTenders(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)
@@ -70,7 +70,7 @@ func TestPlot_PartialError(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := plot.NewPlot("test_partial_error", cultivator, plot.WithTends(2))
+	plot := plot.NewPlot("test_partial_error", cultivator, plot.WithTenders(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)
@@ -120,7 +120,7 @@ func TestPlot_AllSuccess(t *testing.T) {
 		return seed * 2, nil
 	}
 
-	plot := plot.NewPlot("test_all_success", cultivator, plot.WithTends(3))
+	plot := plot.NewPlot("test_all_success", cultivator, plot.WithTenders(3))
 	seeds := []int{1, 2, 3, 4, 5}
 
 	plot.Run(seeds)

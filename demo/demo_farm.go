@@ -14,8 +14,8 @@ func addOne(num int) (int, error) {
 
 // main 演示一条 Farm 流水线：root 将种子翻倍后传给 head 加一。
 func main() {
-	root := grow.NewPlot("root", double, grow.WithTends(2))
-	head := grow.NewPlot("head", addOne, grow.WithTends(2))
+	root := grow.NewPlot("root", double, grow.WithTenders(2))
+	head := grow.NewPlot("head", addOne, grow.WithTenders(2))
 
 	farm := grow.NewFarm("demo_farm", "INFO")
 	if err := farm.AddPlot(root, head); err != nil {

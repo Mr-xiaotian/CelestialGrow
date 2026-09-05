@@ -6,7 +6,7 @@ import "sync/atomic"
 
 // Counter 并发安全的种子计数器。
 // 使用 atomic 操作跟踪种子总数、成功数（果实）和失败数（杂草），
-// 供多个 tend 协程同时更新而无需加锁。
+// 供多个 tender 协程同时更新而无需加锁。
 type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64

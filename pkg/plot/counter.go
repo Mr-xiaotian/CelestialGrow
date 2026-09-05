@@ -25,18 +25,18 @@ func NewCounter() *Counter {
 // ==== Adders ====
 
 // AddSeedNum 原子地增加种子总数。
-func (c *Counter) AddSeedNum(addNNum int) {
-	c.seedNum.Add(int64(addNNum))
+func (c *Counter) AddSeedNum(addNum int) {
+	c.seedNum.Add(int64(addNum))
 }
 
 // AddFruitNum 原子地增加成功数（果实）。
-func (c *Counter) AddFruitNum(addNNum int) {
-	c.fruitNum.Add(int64(addNNum))
+func (c *Counter) AddFruitNum(addNum int) {
+	c.fruitNum.Add(int64(addNum))
 }
 
 // AddWeedNum 原子地增加失败数（杂草）。
-func (c *Counter) AddWeedNum(addNNum int) {
-	c.weedNum.Add(int64(addNNum))
+func (c *Counter) AddWeedNum(addNum int) {
+	c.weedNum.Add(int64(addNum))
 }
 
 // ==== Getters ====

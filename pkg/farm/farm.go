@@ -68,8 +68,8 @@ func (f *Farm) HasPlot(name string) bool {
 
 // GetPlot 按名称返回已注册的 plot，未找到时 ok 为 false。
 func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
-	plot, ok := f.plots[name]
-	return plot, ok
+	p, ok := f.plots[name]
+	return p, ok
 }
 
 // getStructureList 返回渲染成文本行列表的 Farm 结构。
@@ -104,12 +104,12 @@ func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
 }
 
 // requireRegistered 确保 plot 已注册到 farm 中，用于连接前校验。
-func (f *Farm) requireRegistered(plot plot.PlotNode) error {
-	if plot == nil {
+func (f *Farm) requireRegistered(p plot.PlotNode) error {
+	if p == nil {
 		return fmt.Errorf("plot is nil")
 	}
-	if registered, ok := f.plots[plot.GetName()]; !ok || registered != plot {
-		return fmt.Errorf("plot %q is not registered in farm", plot.GetName())
+	if registered, ok := f.plots[p.GetName()]; !ok || registered != p {
+		return fmt.Errorf("plot %q is not registered in farm", p.GetName())
 	}
 	return nil
 }

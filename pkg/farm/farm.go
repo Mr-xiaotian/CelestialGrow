@@ -72,6 +72,11 @@ func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
 	return plot, ok
 }
 
+// getStructureList 返回渲染成文本行列表的 Farm 结构。
+func (f *Farm) getStructureList() []string {
+	return RenderStructureList(f.Nodes(), f.OutEdges(), f.sourceNodes)
+}
+
 // ==== Registration ====
 
 // AddPlot 将一个或多个 plot 注册到 farm。
@@ -197,7 +202,7 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	defer f.logSpout.Stop()
 
 	startTime := time.Now()
-	f.logInlet.StartFarm(f.name)
+	f.logInlet.StartFarm(f.name, f.getStructureList())
 
 	for _, plot := range f.plots {
 		plot.BindInlet(f.logSpout.GetQueue(), f.lifecycleSpout.GetQueue())

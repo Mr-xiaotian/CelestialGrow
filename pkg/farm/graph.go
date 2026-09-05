@@ -25,27 +25,6 @@ func NewOrderGraph() *OrderGraph {
 	}
 }
 
-// NewOrderGraphFromEdges 从邻接数据构建图。
-// stageNames 用于保留未出现在出边邻接表中的孤立节点。
-func NewOrderGraphFromEdges(outEdges map[string][]string, stageNames []string) *OrderGraph {
-	graph := NewOrderGraph()
-
-	for _, name := range stageNames {
-		graph.AddNode(name)
-	}
-	for from, targets := range outEdges {
-		if len(targets) == 0 {
-			graph.AddNode(from)
-			continue
-		}
-		for _, to := range targets {
-			graph.AddEdge(from, to)
-		}
-	}
-
-	return graph
-}
-
 // ==== Mutation ====
 
 // AddNode 在节点不存在时添加节点。

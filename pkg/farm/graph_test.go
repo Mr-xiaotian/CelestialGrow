@@ -52,11 +52,11 @@ func TestOrderGraph_BasicOperations(t *testing.T) {
 }
 
 func TestGraphAlgorithms_TopoSortAndLevels(t *testing.T) {
-	graph := farm.NewOrderGraphFromEdges(map[string][]string{
-		"a": {"b", "c"},
-		"b": {"d"},
-		"c": {"d"},
-	}, nil)
+	graph := farm.NewOrderGraph()
+	graph.AddEdge("a", "b")
+	graph.AddEdge("a", "c")
+	graph.AddEdge("b", "d")
+	graph.AddEdge("c", "d")
 
 	if !farm.IsDAG(graph) {
 		t.Fatalf("expected graph to be a DAG")
@@ -89,12 +89,12 @@ func TestGraphAlgorithms_TopoSortAndLevels(t *testing.T) {
 }
 
 func TestGraphAlgorithms_SCCAndCondensation(t *testing.T) {
-	graph := farm.NewOrderGraphFromEdges(map[string][]string{
-		"a": {"b"},
-		"b": {"a", "c"},
-		"c": {"d"},
-		"d": {"c"},
-	}, nil)
+	graph := farm.NewOrderGraph()
+	graph.AddEdge("a", "b")
+	graph.AddEdge("b", "a")
+	graph.AddEdge("b", "c")
+	graph.AddEdge("c", "d")
+	graph.AddEdge("d", "c")
 
 	if farm.IsDAG(graph) {
 		t.Fatalf("expected graph to contain cycles")

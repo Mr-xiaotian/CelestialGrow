@@ -33,9 +33,11 @@ func TestOrderGraph_BasicOperations(t *testing.T) {
 		t.Fatalf("expected isolated node to exist")
 	}
 
-	wantNodes := []string{"isolated", "a", "b", "c"}
-	if !reflect.DeepEqual(graph.Nodes(), wantNodes) {
-		t.Fatalf("unexpected node order: got %v want %v", graph.Nodes(), wantNodes)
+	gotNodes := graph.Nodes()
+	sort.Strings(gotNodes)
+	wantNodes := []string{"a", "b", "c", "isolated"}
+	if !reflect.DeepEqual(gotNodes, wantNodes) {
+		t.Fatalf("unexpected nodes: got %v want %v", gotNodes, wantNodes)
 	}
 
 	wantSuccessors := []string{"b", "c"}

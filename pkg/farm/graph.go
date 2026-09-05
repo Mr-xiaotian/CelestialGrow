@@ -7,22 +7,21 @@ import (
 
 // ==== Struct ====
 
-// OrderGraph 是用于图分析辅助函数的最小有序有向图。
-// 它通过显式保存节点插入顺序，保证遍历和拓扑结果稳定。
+// OrderGraph 是供图分析辅助函数使用的最小有向图。
+// 其名称取自图的可排序性：拓扑层级、可达性与 SCC 等依赖结构均确定；
+// 节点本身的遍历顺序不保证，每个节点的后继/前驱列表按添加顺序保存。
 type OrderGraph struct {
-	nodes []string
-	in    map[string][]string
-	out   map[string][]string
+	in  map[string][]string
+	out map[string][]string
 }
 
 // ==== Construction ====
 
-// NewOrderGraph 创建一个空的有序有向图。
+// NewOrderGraph 创建一个空的有向图。
 func NewOrderGraph() *OrderGraph {
 	return &OrderGraph{
-		nodes: []string{},
-		in:    make(map[string][]string),
-		out:   make(map[string][]string),
+		in:  make(map[string][]string),
+		out: make(map[string][]string),
 	}
 }
 
@@ -55,7 +54,6 @@ func (g *OrderGraph) AddNode(name string) {
 		return
 	}
 
-	g.nodes = append(g.nodes, name)
 	g.out[name] = make([]string, 0)
 	g.in[name] = make([]string, 0)
 }
@@ -76,9 +74,13 @@ func (g *OrderGraph) AddEdge(from, to string) {
 
 // ==== Queries ====
 
-// Nodes 按插入顺序返回全部节点名称。
+// Nodes 返回全部节点名称，顺序不保证。
 func (g *OrderGraph) Nodes() []string {
-	return append([]string(nil), g.nodes...)
+	nodes := make([]string, 0, len(g.out))
+	for node := range g.out {
+		nodes = append(nodes, node)
+	}
+	return nodes
 }
 
 // OutEdges 返回出边邻接表的深拷贝视图。
@@ -129,25 +131,25 @@ func (g *OrderGraph) String() string {
 	for _, targets := range g.out {
 		edgeCount += len(targets)
 	}
-	return fmt.Sprintf("OrderGraph(nodes=%d, edges=%d)", len(g.nodes), edgeCount)
+	return fmt.Sprintf("OrderGraph(nodes=%d, edges=%d)", len(g.out), edgeCount)
 }
 
 // ==== Topological Algorithms ====
 
 // InDegree 计算每个节点的入度。
-func InDegree(graph *OrderGraph) map[string]int {
-	degree := make(map[string]int, len(graph.nodes))
-	for _, name := range graph.nodes {
-		degree[name] = len(graph.in[name])
+func InDegree(g *OrderGraph) map[string]int {
+	degree := make(map[string]int, len(g.out))
+	for name := range g.out {
+		degree[name] = len(g.in[name])
 	}
 	return degree
 }
 
 // IsDAG 使用 Kahn 算法判断图是否为 DAG。
-func IsDAG(graph *OrderGraph) bool {
-	degree := InDegree(graph)
-	queue := make([]string, 0, len(graph.nodes))
-	for _, name := range graph.nodes {
+func IsDAG(g *OrderGraph) bool {
+	degree := InDegree(g)
+	queue := make([]string, 0, len(g.out))
+	for name := range g.out {
 		if degree[name] == 0 {
 			queue = append(queue, name)
 		}
@@ -159,7 +161,7 @@ func IsDAG(graph *OrderGraph) bool {
 		queue = queue[1:]
 		visited++
 
-		for _, succ := range graph.out[node] {
+		for _, succ := range g.out[node] {
 			degree[succ]--
 			if degree[succ] == 0 {
 				queue = append(queue, succ)
@@ -167,30 +169,30 @@ func IsDAG(graph *OrderGraph) bool {
 		}
 	}
 
-	return visited == len(graph.nodes)
+	return visited == len(g.out)
 }
 
-// TopoSort 在图是 DAG 时返回一个稳定的拓扑序；若存在环则返回 nil。
-func TopoSort(graph *OrderGraph) []string {
-	if !IsDAG(graph) {
+// TopoSort 在图是 DAG 时返回一个拓扑序；若存在环则返回 nil。
+func TopoSort(g *OrderGraph) []string {
+	if !IsDAG(g) {
 		return nil
 	}
 
-	degree := InDegree(graph)
-	queue := make([]string, 0, len(graph.nodes))
-	for _, name := range graph.nodes {
+	degree := InDegree(g)
+	queue := make([]string, 0, len(g.out))
+	for name := range g.out {
 		if degree[name] == 0 {
 			queue = append(queue, name)
 		}
 	}
 
-	order := make([]string, 0, len(graph.nodes))
+	order := make([]string, 0, len(g.out))
 	for len(queue) > 0 {
 		node := queue[0]
 		queue = queue[1:]
 		order = append(order, node)
 
-		for _, succ := range graph.out[node] {
+		for _, succ := range g.out[node] {
 			degree[succ]--
 			if degree[succ] == 0 {
 				queue = append(queue, succ)
@@ -205,12 +207,12 @@ func TopoSort(graph *OrderGraph) []string {
 
 // TarjanSCC 使用 Tarjan 算法计算强连通分量。
 // 返回的 SCC 顺序为凝聚图的逆拓扑序。
-func TarjanSCC(graph *OrderGraph) [][]string {
+func TarjanSCC(g *OrderGraph) [][]string {
 	index := 0
-	stack := make([]string, 0, len(graph.nodes))
-	onStack := make(map[string]struct{}, len(graph.nodes))
-	indices := make(map[string]int, len(graph.nodes))
-	lowlink := make(map[string]int, len(graph.nodes))
+	stack := make([]string, 0, len(g.out))
+	onStack := make(map[string]struct{}, len(g.out))
+	indices := make(map[string]int, len(g.out))
+	lowlink := make(map[string]int, len(g.out))
 	sccs := make([][]string, 0)
 
 	var strongConnect func(node string)
@@ -222,7 +224,7 @@ func TarjanSCC(graph *OrderGraph) [][]string {
 		stack = append(stack, node)
 		onStack[node] = struct{}{}
 
-		for _, succ := range graph.out[node] {
+		for _, succ := range g.out[node] {
 			if _, visited := indices[succ]; !visited {
 				strongConnect(succ)
 				if lowlink[succ] < lowlink[node] {
@@ -253,7 +255,7 @@ func TarjanSCC(graph *OrderGraph) [][]string {
 		sccs = append(sccs, scc)
 	}
 
-	for _, node := range graph.nodes {
+	for node := range g.out {
 		if _, visited := indices[node]; !visited {
 			strongConnect(node)
 		}
@@ -359,8 +361,8 @@ func ComputeNodeLevels(graph *OrderGraph) (map[string]int, error) {
 		return nil, fmt.Errorf("condensation graph must be a DAG")
 	}
 
-	sccLevels := make(map[string]int, len(condensation.nodes))
-	for _, node := range condensation.nodes {
+	sccLevels := make(map[string]int, len(condensation.out))
+	for node := range condensation.out {
 		sccLevels[node] = 0
 	}
 
@@ -373,7 +375,7 @@ func ComputeNodeLevels(graph *OrderGraph) (map[string]int, error) {
 		}
 	}
 
-	levels := make(map[string]int, len(graph.nodes))
+	levels := make(map[string]int, len(graph.out))
 	for idx, scc := range sccs {
 		level := sccLevels[fmt.Sprintf("scc_%d", idx)]
 		for _, node := range scc {

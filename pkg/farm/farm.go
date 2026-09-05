@@ -82,12 +82,12 @@ func (f *Farm) getStructureList() []string {
 // AddPlot 将一个或多个 plot 注册到 farm。
 // plot 名称不能为空且必须唯一；注册时会加入拓扑图并共享 Farm 的事件客户端。
 func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
-	for _, plot := range plots {
-		if plot == nil {
+	for _, p := range plots {
+		if p == nil {
 			return fmt.Errorf("plot is nil")
 		}
 
-		name := plot.GetName()
+		name := p.GetName()
 		if name == "" {
 			return fmt.Errorf("plot name cannot be empty")
 		}
@@ -95,9 +95,9 @@ func (f *Farm) AddPlot(plots ...plot.PlotNode) error {
 			return fmt.Errorf("plot %q already exists", name)
 		}
 
-		f.plots[name] = plot
+		f.plots[name] = p
 		f.AddNode(name)
-		plot.SetEventClient(f.eventClient)
+		p.SetEventClient(f.eventClient)
 	}
 
 	return nil
@@ -120,16 +120,16 @@ func (f *Farm) requireRegistered(p plot.PlotNode) error {
 func uniquePlots(plots []plot.PlotNode) []plot.PlotNode {
 	seen := make(map[string]struct{}, len(plots))
 	unique := make([]plot.PlotNode, 0, len(plots))
-	for _, plot := range plots {
-		if plot == nil {
+	for _, p := range plots {
+		if p == nil {
 			continue
 		}
-		name := plot.GetName()
+		name := p.GetName()
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		unique = append(unique, plot)
+		unique = append(unique, p)
 	}
 	return unique
 }

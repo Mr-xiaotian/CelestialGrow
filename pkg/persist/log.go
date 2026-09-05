@@ -115,7 +115,7 @@ func (l *LogInlet) log(level string, message string) {
 	})
 }
 
-// StartFarm 记录 Farm 启动。
+// StartFarm 记录 Farm 启动，并逐行输出图结构。
 func (l *LogInlet) StartFarm(farmName string, structureList []string) {
 	l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", farmName))
 	for _, s := range structureList {

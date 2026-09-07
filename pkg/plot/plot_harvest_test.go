@@ -45,8 +45,8 @@ func TestPlot_AllError(t *testing.T) {
 		t.Fatalf("expected %d statuses, got %d", len(seeds), len(records))
 	}
 	for _, record := range records {
-		if record.Status != "failed" {
-			t.Fatalf("expected failed status, got %#v", record)
+		if record.Status != "weed" {
+			t.Fatalf("expected weed status, got %#v", record)
 		}
 		if record.ErrorMessage != "always fail" {
 			t.Fatalf("expected error message %q, got %#v", "always fail", record)
@@ -91,15 +91,15 @@ func TestPlot_PartialError(t *testing.T) {
 
 		if seed%2 == 0 {
 			failedCount++
-			if record.Status != "failed" || record.ErrorMessage != "even number error" {
-				t.Fatalf("seed %d expected failed/even number error, got %#v", seed, record)
+			if record.Status != "weed" || record.ErrorMessage != "even number error" {
+				t.Fatalf("seed %d expected weed/even number error, got %#v", seed, record)
 			}
 			continue
 		}
 
 		successCount++
-		if record.Status != "success" || record.ResultJSON != strconv.Itoa(seed*10) {
-			t.Fatalf("seed %d expected success/result %d, got %#v", seed, seed*10, record)
+		if record.Status != "fruit" || record.ResultJSON != strconv.Itoa(seed*10) {
+			t.Fatalf("seed %d expected fruit/result %d, got %#v", seed, seed*10, record)
 		}
 	}
 
@@ -135,8 +135,8 @@ func TestPlot_AllSuccess(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing lifecycle status for seed %d", seed)
 		}
-		if record.Status != "success" || record.ResultJSON != strconv.Itoa(seed*2) {
-			t.Fatalf("seed %d expected success/result %d, got %#v", seed, seed*2, record)
+		if record.Status != "fruit" || record.ResultJSON != strconv.Itoa(seed*2) {
+			t.Fatalf("seed %d expected fruit/result %d, got %#v", seed, seed*2, record)
 		}
 	}
 	if int(plot.GetState()) != 2 {

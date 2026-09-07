@@ -30,8 +30,8 @@ func TestPlot_RetrySuccess(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "success" || records[0].ResultJSON != "10" {
-		t.Fatalf("expected success/result 10, got %#v", records[0])
+	if records[0].Status != "fruit" || records[0].ResultJSON != "10" {
+		t.Fatalf("expected fruit/result 10, got %#v", records[0])
 	}
 	if attempts.Load() != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts.Load())
@@ -56,8 +56,8 @@ func TestPlot_RetryExhausted(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "failed" || records[0].ErrorMessage != "permanent error" {
-		t.Fatalf("expected failed/permanent error, got %#v", records[0])
+	if records[0].Status != "weed" || records[0].ErrorMessage != "permanent error" {
+		t.Fatalf("expected weed/permanent error, got %#v", records[0])
 	}
 	if attempts.Load() != 3 {
 		t.Errorf("expected 3 attempts (1 + 2 retries), got %d", attempts.Load())
@@ -86,8 +86,8 @@ func TestPlot_RetryIf(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "failed" || records[0].ErrorMessage != "permanent" {
-		t.Fatalf("expected failed/permanent, got %#v", records[0])
+	if records[0].Status != "weed" || records[0].ErrorMessage != "permanent" {
+		t.Fatalf("expected weed/permanent, got %#v", records[0])
 	}
 	if attempts.Load() != 1 {
 		t.Errorf("expected 1 attempt (no retry for permanent error), got %d", attempts.Load())
@@ -120,8 +120,8 @@ func TestPlot_RetryDelay(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "success" || records[0].ResultJSON != "1" {
-		t.Fatalf("expected success/result 1, got %#v", records[0])
+	if records[0].Status != "fruit" || records[0].ResultJSON != "1" {
+		t.Fatalf("expected fruit/result 1, got %#v", records[0])
 	}
 	if elapsed < 100*time.Millisecond {
 		t.Errorf("expected at least 100ms delay, got %v", elapsed)

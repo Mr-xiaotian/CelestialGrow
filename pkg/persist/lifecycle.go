@@ -20,14 +20,15 @@ const (
 // LifecycleRecord 表示一条生命周期持久化操作。
 type LifecycleRecord struct {
 	Kind           string
-	Event          LifecycleEventRecord
-	ParentIDs      []int
 	InputEventID   int
 	CurrentEventID int
+	ParentIDs      []int
+	PlotName       string
 	TaskJSON       string
 	ResultJSON     string
 	ErrorType      string
 	ErrorMessage   string
+	TS             float64
 }
 
 // LifecycleRecordHandler 消费生命周期操作并将其写入 sqlite。
@@ -62,34 +63,31 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
 
 	switch record.Kind {
 	case lifecycleSeed:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return UpsertLifecycleStatus(l.sqliteDB, LifecycleStatusRecord{
-			InputEventID:   record.InputEventID,
-			CurrentEventID: record.CurrentEventID,
-			TaskJSON:       record.TaskJSON,
-			Plot:           record.Event.Plot,
-			Status:         "pending",
-			ResultJSON:     "null",
-			TS:             record.Event.TS,
-		})
+		return UpsertLifecycleStatusSeed(l.sqliteDB,
+			record.InputEventID,
+			record.TaskJSON,
+			record.PlotName,
+			record.TS,
+		)
 	case lifecycleFruit:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusSuccess(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.ResultJSON, record.Event.TS)
+		return PromoteLifecycleStatusFruit(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.ResultJSON, record.TS)
 	case lifecycleWeed:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusFailed(
+		return PromoteLifecycleStatusWeed(
 			l.sqliteDB,
 			record.InputEventID,
 			record.CurrentEventID,
 			record.ErrorType,
 			record.ErrorMessage,
-			record.Event.TS,
+			record.TS,
 		)
 	default:
 		return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
@@ -144,17 +142,13 @@ func NewLifecycleInlet(ch chan<- LifecycleRecord, timeout time.Duration) *Lifecy
 func (l *LifecycleInlet) SeedIn(plot string, eventID int, parentIDs []int, task any) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleSeed,
-		Event: LifecycleEventRecord{
-			EventID:   eventID,
-			EventType: "seed",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      parentIDs,
-		InputEventID:   eventID,
+		Kind:           lifecycleSeed,
 		CurrentEventID: eventID,
+		InputEventID:   eventID,
+		ParentIDs:      parentIDs,
+		PlotName:       plot,
 		TaskJSON:       toLifecycleJSON(task),
+		TS:             float64(now) / 1000,
 	})
 }
 
@@ -162,17 +156,13 @@ func (l *LifecycleInlet) SeedIn(plot string, eventID int, parentIDs []int, task 
 func (l *LifecycleInlet) SeedSuccess(plot string, inputEventID int, parentEventID int, successEventID int, result any) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleFruit,
-		Event: LifecycleEventRecord{
-			EventID:   successEventID,
-			EventType: "fruit",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      []int{parentEventID},
-		InputEventID:   inputEventID,
+		Kind:           lifecycleFruit,
 		CurrentEventID: successEventID,
+		InputEventID:   inputEventID,
+		ParentIDs:      []int{parentEventID},
 		ResultJSON:     toLifecycleJSON(result),
+		PlotName:       plot,
+		TS:             float64(now) / 1000,
 	})
 }
 
@@ -180,18 +170,14 @@ func (l *LifecycleInlet) SeedSuccess(plot string, inputEventID int, parentEventI
 func (l *LifecycleInlet) SeedFailed(plot string, inputEventID int, parentEventID int, failedEventID int, err error) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleWeed,
-		Event: LifecycleEventRecord{
-			EventID:   failedEventID,
-			EventType: "weed",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      []int{parentEventID},
-		InputEventID:   inputEventID,
+		Kind:           lifecycleWeed,
 		CurrentEventID: failedEventID,
+		InputEventID:   inputEventID,
+		PlotName:       plot,
+		ParentIDs:      []int{parentEventID},
 		ErrorType:      fmt.Sprintf("%T", err),
 		ErrorMessage:   fmt.Sprintf("%v", err),
+		TS:             float64(now) / 1000,
 	})
 }
 

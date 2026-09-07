@@ -67,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_status_current_event ON status(current_event_id);
 // ==== events 表操作 ====
 
 // InsertLifecycleEvent 写入一条事件记录及其父事件边。
-func InsertLifecycleEvent(db *sql.DB, record LifecycleEventRecord, parentIDs []int) error {
+func InsertLifecycleEvent(db *sql.DB, eventID int, eventType string, plot string, ts float64, parentIDs []int) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin insert lifecycle event: %w", err)
@@ -76,21 +76,21 @@ func InsertLifecycleEvent(db *sql.DB, record LifecycleEventRecord, parentIDs []i
 
 	if _, err := tx.Exec(
 		`INSERT INTO events (event_id, event_type, plot, ts) VALUES (?, ?, ?, ?)`,
-		record.EventID,
-		record.EventType,
-		record.Plot,
-		record.TS,
+		eventID,
+		eventType,
+		plot,
+		ts,
 	); err != nil {
-		return fmt.Errorf("insert event %d: %w", record.EventID, err)
+		return fmt.Errorf("insert event %d: %w", eventID, err)
 	}
 
 	for _, parentID := range parentIDs {
 		if _, err := tx.Exec(
 			`INSERT INTO event_parents (event_id, parent_id) VALUES (?, ?)`,
-			record.EventID,
+			eventID,
 			parentID,
 		); err != nil {
-			return fmt.Errorf("insert parent edge %d->%d: %w", parentID, record.EventID, err)
+			return fmt.Errorf("insert parent edge %d->%d: %w", parentID, eventID, err)
 		}
 	}
 
@@ -148,46 +148,33 @@ func LoadLifecycleEventParents(db *sql.DB, eventID int) ([]int, error) {
 
 // ==== status 表操作 ====
 
-// UpsertLifecycleStatus 写入或覆盖一条当前状态快照。
-func UpsertLifecycleStatus(db *sql.DB, record LifecycleStatusRecord) error {
+// UpsertLifecycleStatusSeed 写入一条当前状态快照。
+func UpsertLifecycleStatusSeed(db *sql.DB, InputEventID int, TaskJSON, Plot string, TS float64) error {
 	_, err := db.Exec(
 		`
 		INSERT INTO status (
-			input_event_id, current_event_id, task_json, plot, status,
-			error_type, error_message, result_json, ts
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(input_event_id) DO UPDATE SET
-			current_event_id = excluded.current_event_id,
-			task_json = excluded.task_json,
-			plot = excluded.plot,
-			status = excluded.status,
-			error_type = excluded.error_type,
-			error_message = excluded.error_message,
-			result_json = excluded.result_json,
-			ts = excluded.ts
+			input_event_id, current_event_id, plot, status, task_json, ts
+		) VALUES (?, ?, ?, ?, ?, ?)
 		`,
-		record.InputEventID,
-		record.CurrentEventID,
-		record.TaskJSON,
-		record.Plot,
-		record.Status,
-		record.ErrorType,
-		record.ErrorMessage,
-		record.ResultJSON,
-		record.TS,
+		InputEventID,
+		InputEventID,
+		Plot,
+		"seed",
+		TaskJSON,
+		TS,
 	)
 	if err != nil {
-		return fmt.Errorf("upsert lifecycle status for input event %d: %w", record.InputEventID, err)
+		return fmt.Errorf("insert lifecycle status seed for input event %d: %w", InputEventID, err)
 	}
 	return nil
 }
 
-// PromoteLifecycleStatusSuccess 将一条状态快照晋升为成功。
-func PromoteLifecycleStatusSuccess(db *sql.DB, inputEventID int, currentEventID int, resultJSON string, ts float64) error {
+// PromoteLifecycleStatusFruit 将一条状态快照晋升为成功。
+func PromoteLifecycleStatusFruit(db *sql.DB, inputEventID int, currentEventID int, resultJSON string, ts float64) error {
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'success', result_json = ?, ts = ?
+		SET current_event_id = ?, status = 'fruit', result_json = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
@@ -196,13 +183,13 @@ func PromoteLifecycleStatusSuccess(db *sql.DB, inputEventID int, currentEventID 
 		inputEventID,
 	)
 	if err != nil {
-		return fmt.Errorf("promote lifecycle status success for input event %d: %w", inputEventID, err)
+		return fmt.Errorf("promote lifecycle status fruit for input event %d: %w", inputEventID, err)
 	}
 	return nil
 }
 
-// PromoteLifecycleStatusFailed 将一条状态快照晋升为失败。
-func PromoteLifecycleStatusFailed(
+// PromoteLifecycleStatusWeed 将一条状态快照晋升为失败。
+func PromoteLifecycleStatusWeed(
 	db *sql.DB,
 	inputEventID int,
 	currentEventID int,
@@ -213,7 +200,7 @@ func PromoteLifecycleStatusFailed(
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'failed', error_type = ?, error_message = ?, ts = ?
+		SET current_event_id = ?, status = 'weed', error_type = ?, error_message = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
@@ -223,7 +210,7 @@ func PromoteLifecycleStatusFailed(
 		inputEventID,
 	)
 	if err != nil {
-		return fmt.Errorf("promote lifecycle status failed for input event %d: %w", inputEventID, err)
+		return fmt.Errorf("promote lifecycle status weed for input event %d: %w", inputEventID, err)
 	}
 	return nil
 }

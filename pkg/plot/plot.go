@@ -206,8 +206,8 @@ func (p *Plot[S, F]) notifyFinish() {
 
 // ==== Result Handling ====
 
-// bearFruit 处理培育成功的种子：更新计数、记录日志、推进生命周期并发送果实。
-func (p *Plot[S, F]) bearFruit(seedPayload runtime.Payload[S], fruit F, startTime time.Time) {
+// ripenSeed 处理培育成功的种子：更新计数、记录日志、推进生命周期并发送果实。
+func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time) {
 	p.AddFruitNum(1)
 	p.reportProgress()
 
@@ -219,7 +219,7 @@ func (p *Plot[S, F]) bearFruit(seedPayload runtime.Payload[S], fruit F, startTim
 	fruitRepr := trunc(fmt.Sprintf("%+v", fruit), 25)
 	useTime := time.Since(startTime).Seconds()
 	p.logInlet.SeedRipen(p.name, seedRepr, fruitRepr, useTime, seedID, fruitID)
-	p.lifecycleInlet.SeedSuccess(p.name, seedID, seedID, fruitID, fruit)
+	p.lifecycleInlet.SeedRipen(p.name, seedID, seedID, fruitID, fruit)
 
 	for nextPlot, ch := range p.fruitChans {
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
@@ -229,8 +229,8 @@ func (p *Plot[S, F]) bearFruit(seedPayload runtime.Payload[S], fruit F, startTim
 	}
 }
 
-// bearWeed 处理培育失败的种子：更新计数、记录日志并推进生命周期。
-func (p *Plot[S, F]) bearWeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
+// witherSeed 处理培育失败的种子：更新计数、记录日志并推进生命周期。
+func (p *Plot[S, F]) witherSeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
 	p.AddWeedNum(1)
 	p.reportProgress()
 
@@ -242,7 +242,7 @@ func (p *Plot[S, F]) bearWeed(seedPayload runtime.Payload[S], err error, startTi
 	seedRepr := trunc(seedString, 50)
 	useTime := time.Since(startTime).Seconds()
 	p.logInlet.SeedWither(p.name, seedRepr, err, useTime, seedID, weedID)
-	p.lifecycleInlet.SeedFailed(p.name, seedID, seedID, weedID, err)
+	p.lifecycleInlet.SeedWither(p.name, seedID, seedID, weedID, err)
 }
 
 // ==== Internal Pipeline ====
@@ -314,11 +314,11 @@ func (p *Plot[S, F]) markSealed(source string, sealID int, sealedFrom map[string
 }
 
 // tend 照料单颗种子：执行 cultivator 并在失败时按策略重试。
-// 完成后通过 bearFruit 或 bearWeed 路由结果。
+// 完成后通过 ripenSeed 或 witherSeed 路由结果。
 func (p *Plot[S, F]) tend(seedPayload runtime.Payload[S], sem chan struct{}, done chan struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			p.bearWeed(seedPayload, fmt.Errorf("cultivator panic: %v", r), time.Now())
+			p.witherSeed(seedPayload, fmt.Errorf("cultivator panic: %v", r), time.Now())
 		}
 		<-sem              // 释放并发令牌
 		done <- struct{}{} // 发送完成信号
@@ -347,9 +347,9 @@ func (p *Plot[S, F]) tend(seedPayload runtime.Payload[S], sem chan struct{}, don
 	}
 
 	if err != nil {
-		p.bearWeed(seedPayload, err, startTime)
+		p.witherSeed(seedPayload, err, startTime)
 	} else {
-		p.bearFruit(seedPayload, fruit, startTime)
+		p.ripenSeed(seedPayload, fruit, startTime)
 	}
 }
 

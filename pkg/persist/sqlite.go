@@ -48,12 +48,12 @@ CREATE TABLE IF NOT EXISTS event_parents (
 CREATE TABLE IF NOT EXISTS status (
     input_event_id INTEGER PRIMARY KEY,
     current_event_id INTEGER NOT NULL,
-    task_json TEXT NOT NULL,
     plot TEXT NOT NULL,
     status TEXT NOT NULL,
+    task_json TEXT NOT NULL,
+    result_json TEXT NOT NULL DEFAULT 'null',
     error_type TEXT NOT NULL DEFAULT '',
     error_message TEXT NOT NULL DEFAULT '',
-    result_json TEXT NOT NULL DEFAULT 'null',
     ts REAL NOT NULL,
     FOREIGN KEY (input_event_id) REFERENCES events(event_id) ON DELETE CASCADE,
     FOREIGN KEY (current_event_id) REFERENCES events(event_id)
@@ -169,12 +169,12 @@ func UpsertLifecycleStatusSeed(db *sql.DB, InputEventID int, TaskJSON, Plot stri
 	return nil
 }
 
-// PromoteLifecycleStatusFruit 将一条状态快照晋升为成功。
-func PromoteLifecycleStatusFruit(db *sql.DB, inputEventID int, currentEventID int, resultJSON string, ts float64) error {
+// PromoteLifecycleStatusRipen 将一条状态快照晋升为成功。
+func PromoteLifecycleStatusRipen(db *sql.DB, inputEventID int, currentEventID int, resultJSON string, ts float64) error {
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'fruit', result_json = ?, ts = ?
+		SET current_event_id = ?, status = 'ripen', result_json = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
@@ -183,13 +183,13 @@ func PromoteLifecycleStatusFruit(db *sql.DB, inputEventID int, currentEventID in
 		inputEventID,
 	)
 	if err != nil {
-		return fmt.Errorf("promote lifecycle status fruit for input event %d: %w", inputEventID, err)
+		return fmt.Errorf("promote lifecycle status ripen for input event %d: %w", inputEventID, err)
 	}
 	return nil
 }
 
-// PromoteLifecycleStatusWeed 将一条状态快照晋升为失败。
-func PromoteLifecycleStatusWeed(
+// PromoteLifecycleStatusWither 将一条状态快照晋升为失败。
+func PromoteLifecycleStatusWither(
 	db *sql.DB,
 	inputEventID int,
 	currentEventID int,
@@ -200,7 +200,7 @@ func PromoteLifecycleStatusWeed(
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'weed', error_type = ?, error_message = ?, ts = ?
+		SET current_event_id = ?, status = 'wither', error_type = ?, error_message = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
@@ -210,7 +210,7 @@ func PromoteLifecycleStatusWeed(
 		inputEventID,
 	)
 	if err != nil {
-		return fmt.Errorf("promote lifecycle status weed for input event %d: %w", inputEventID, err)
+		return fmt.Errorf("promote lifecycle status wither for input event %d: %w", inputEventID, err)
 	}
 	return nil
 }

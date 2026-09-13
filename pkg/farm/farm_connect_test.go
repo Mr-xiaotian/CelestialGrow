@@ -72,6 +72,20 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 	if farm.Connected("targetA", "source") {
 		t.Fatal("targetA should not connect back to source")
 	}
+
+	yieldA := source.GetDownstreamYieldCounter("targetA")
+	if yieldA == nil {
+		t.Fatal("source downstream yield counter for targetA should exist")
+	}
+
+	yieldB := source.GetDownstreamYieldCounter("targetB")
+	if yieldB == nil {
+		t.Fatal("source downstream yield counter for targetB should exist")
+	}
+
+	if yieldA == yieldB {
+		t.Fatal("source downstream yield counters should be edge-specific")
+	}
 }
 
 func TestFarmConnectTypeMismatch(t *testing.T) {

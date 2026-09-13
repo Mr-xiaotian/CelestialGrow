@@ -165,6 +165,19 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		t.Fatalf("head fruitNum = %d, want 15", head.GetFruitNum())
 	}
 
+	if got := root.GetDownstreamYieldCounter("midA").Load(); got != 10 {
+		t.Fatalf("root->midA downstream yield = %d, want 10", got)
+	}
+	if got := root.GetDownstreamYieldCounter("midB").Load(); got != 10 {
+		t.Fatalf("root->midB downstream yield = %d, want 10", got)
+	}
+	if got := midA.GetDownstreamYieldCounter("head").Load(); got != 10 {
+		t.Fatalf("midA->head downstream yield = %d, want 10", got)
+	}
+	if got := midB.GetDownstreamYieldCounter("head").Load(); got != 5 {
+		t.Fatalf("midB->head downstream yield = %d, want 5", got)
+	}
+
 	for _, p := range []plot.PlotNode{root, midA, midB, head} {
 		if int(p.GetState()) != 2 {
 			t.Fatalf("%s state = %d, want 2", p.GetName(), p.GetState())

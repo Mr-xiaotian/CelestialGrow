@@ -12,14 +12,18 @@ type Counter struct {
 	fruitNum atomic.Int64
 	weedNum  atomic.Int64
 
-	upstreamYields map[string]*atomic.Int64
+	upstreamYields   map[string]*atomic.Int64
+	downstreamYields map[string]*atomic.Int64
 }
 
 // ==== Constructor ====
 
 // NewCounter 创建并返回一个新的 Counter，所有计数初始为零。
 func NewCounter() *Counter {
-	return &Counter{upstreamYields: make(map[string]*atomic.Int64)}
+	return &Counter{
+		upstreamYields:   make(map[string]*atomic.Int64),
+		downstreamYields: make(map[string]*atomic.Int64),
+	}
 }
 
 // ==== Adders ====
@@ -37,6 +41,22 @@ func (c *Counter) AddFruitNum(addNum int) {
 // AddWeedNum 原子地增加失败数（杂草）。
 func (c *Counter) AddWeedNum(addNum int) {
 	c.weedNum.Add(int64(addNum))
+}
+
+// AddDownstreamYieldNum 原子地增加下游 plot 的产出数。
+func (c *Counter) AddDownstreamYieldNum(name string, addNum int) {
+	c.downstreamYields[name].Add(int64(addNum))
+}
+
+// AddUpstreamYieldCounter 登记一个上游 plot 及其产出计数器。
+// 用于 seal 聚合和种子统计。
+func (c *Counter) AddUpstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.upstreamYields[name] = yieldCounter
+}
+
+// AddDownstreamYieldCounter 登记一个下游 plot 及其产出计数器。
+func (c *Counter) AddDownstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.downstreamYields[name] = yieldCounter
 }
 
 // ==== Getters ====
@@ -64,6 +84,12 @@ func (c *Counter) GetWeedNum() int {
 // GetCompleted 返回已完成总数（果实 + 杂草）。
 func (c *Counter) GetCompleted() int {
 	return c.GetFruitNum() + c.GetWeedNum()
+}
+
+// GetDownstreamYieldCounter 返回下游 plot 的产出计数器。
+// 用于 seal 聚合和种子统计。
+func (c *Counter) GetDownstreamYieldCounter(name string) *atomic.Int64 {
+	return c.downstreamYields[name]
 }
 
 // ==== Predicates ====

@@ -25,10 +25,11 @@ type PlotNode interface {
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
-	AddUpstream(name string, yieldCounter *atomic.Int64)
-	GetYieldCounter() *atomic.Int64
 	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
 	SetEventClient(eventClient runtime.EventClient)
+
+	AddUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
+	GetDownstreamYieldCounter(name string) *atomic.Int64
 
 	StartAsync()
 	WaitAsync()
@@ -130,21 +131,6 @@ func (p *Plot[S, F]) SetEventClient(eventClient runtime.EventClient) {
 
 // ==== Connection ====
 
-// GetYieldCounter 返回当前 plot 提供给下游的产出计数器。
-func (p *Plot[S, F]) GetYieldCounter() *atomic.Int64 {
-	return &p.fruitNum
-}
-
-// AddUpstream 登记一个上游 plot 及其产出计数器。
-// 当未收到外部 input seal 时，sprout 需要等所有已登记上游都发送过
-// seal 信号后，才会将输入视为关闭。
-func (p *Plot[S, F]) AddUpstream(name string, yieldCounter *atomic.Int64) {
-	if name == "" {
-		return
-	}
-	p.upstreamYields[name] = yieldCounter
-}
-
 // ConnectTo 将当前 plot 的果实输出连接到下游 plot 的种子输入。
 // 通过类型断言校验上游 F 与下游 S 是否匹配。
 func (p *Plot[S, F]) ConnectTo(next PlotNode) error {
@@ -154,6 +140,7 @@ func (p *Plot[S, F]) ConnectTo(next PlotNode) error {
 	}
 
 	p.fruitChans[next.GetName()] = seedChan
+	p.AddDownstreamYieldCounter(next.GetName(), &atomic.Int64{})
 	return nil
 }
 
@@ -222,6 +209,7 @@ func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTim
 	p.lifecycleInlet.SeedRipen(p.name, seedID, seedID, fruitID, fruit)
 
 	for nextPlot, ch := range p.fruitChans {
+		p.AddDownstreamYieldNum(nextPlot, 1)
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		p.lifecycleInlet.SeedIn(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
 		fruitPayload := runtime.Payload[F]{Value: fruit, EventID: downstreamSeedID}

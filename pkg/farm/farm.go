@@ -164,8 +164,9 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 			if err := from.ConnectTo(to); err != nil {
 				return err
 			}
-			to.AddUpstream(from.GetName(), from.GetYieldCounter())
-			f.AddEdge(from.GetName(), to.GetName())
+			fromName, toName := from.GetName(), to.GetName()
+			to.AddUpstreamYieldCounter(fromName, from.GetDownstreamYieldCounter(toName))
+			f.AddEdge(fromName, toName)
 		}
 	}
 
@@ -200,11 +201,11 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	f.logSpout.Start()
 	f.lifecycleSpout.Start()
 	f.logInlet.StartFarm(f.name, f.getStructureList())
+	defer f.logSpout.Stop()
+	defer f.lifecycleSpout.Stop()
 	defer func() {
 		f.logInlet.EndFarm(f.name, time.Since(startTime).Seconds())
 	}()
-	defer f.lifecycleSpout.Stop()
-	defer f.logSpout.Stop()
 
 	for _, plot := range f.plots {
 		plot.BindInlet(f.logSpout.GetQueue(), f.lifecycleSpout.GetQueue())

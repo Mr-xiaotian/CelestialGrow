@@ -195,14 +195,16 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	}
 
 	f.sourceNodes = SourceNodes(f.OrderGraph)
+	startTime := time.Now()
 
 	f.logSpout.Start()
 	f.lifecycleSpout.Start()
+	f.logInlet.StartFarm(f.name, f.getStructureList())
+	defer func() {
+		f.logInlet.EndFarm(f.name, time.Since(startTime).Seconds())
+	}()
 	defer f.lifecycleSpout.Stop()
 	defer f.logSpout.Stop()
-
-	startTime := time.Now()
-	f.logInlet.StartFarm(f.name, f.getStructureList())
 
 	for _, plot := range f.plots {
 		plot.BindInlet(f.logSpout.GetQueue(), f.lifecycleSpout.GetQueue())
@@ -228,8 +230,6 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	for _, plot := range f.plots {
 		plot.WaitAsync()
 	}
-
-	f.logInlet.EndFarm(f.name, time.Since(startTime).Seconds())
 
 	return nil
 }

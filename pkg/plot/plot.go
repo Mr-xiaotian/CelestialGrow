@@ -2,34 +2,10 @@ package plot
 
 import (
 	"fmt"
-	"sync/atomic"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
-
-// ==== Interface ====
-
-// PlotNode 是 Farm 管理 plot 时使用的统一接口。
-// 它擦除了泛型参数，使 Farm 可以用同一类型持有不同种子/果实类型的 Plot。
-// 接口覆盖图连接、运行装配
-// 以及执行控制（StartAsync、WaitAsync、SeedAny、Seal）所需的最小能力。
-type PlotNode interface {
-	GetName() string
-	GetState() int32
-	GetSeedChanAny() any
-
-	ConnectTo(next PlotNode) error
-	SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
-	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
-	SetEventClient(eventClient runtime.EventClient)
-
-	StartAsync()
-	WaitAsync()
-	SeedAny(seed any) error
-	Seal()
-}
 
 // ==== Struct ====
 

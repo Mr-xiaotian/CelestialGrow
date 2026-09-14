@@ -53,12 +53,4 @@ func TestFarmRunSplitPlot(t *testing.T) {
 	if head.GetFruitNum() != 5 {
 		t.Fatalf("head.GetFruitNum() = %d, want 5", head.GetFruitNum())
 	}
-
-	yield := split.GetDownstreamYieldCounter("head")
-	if yield == nil {
-		t.Fatal("split downstream yield counter for head should exist")
-	}
-	if got := yield.Load(); got != 5 {
-		t.Fatalf("split downstream yield = %d, want 5", got)
-	}
 }

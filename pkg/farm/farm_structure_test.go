@@ -116,7 +116,15 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		return seed*10 + 2, nil
 	}, plot.WithTenders(4))
 
+	var (
+		mu     sync.Mutex
+		counts = make(map[int]int, 15)
+	)
+
 	head := plot.NewPlot("head", func(seed int) (int, error) {
+		mu.Lock()
+		counts[seed]++
+		mu.Unlock()
 		return seed, nil
 	}, plot.WithTenders(4))
 
@@ -164,18 +172,30 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 	if head.GetFruitNum() != 15 {
 		t.Fatalf("head fruitNum = %d, want 15", head.GetFruitNum())
 	}
+	if midA.GetSeedNum() != 10 {
+		t.Fatalf("midA seedNum = %d, want 10", midA.GetSeedNum())
+	}
+	if midB.GetSeedNum() != 10 {
+		t.Fatalf("midB seedNum = %d, want 10", midB.GetSeedNum())
+	}
+	if head.GetSeedNum() != 15 {
+		t.Fatalf("head seedNum = %d, want 15", head.GetSeedNum())
+	}
 
-	if got := root.GetDownstreamYieldCounter("midA").Load(); got != 10 {
-		t.Fatalf("root->midA downstream yield = %d, want 10", got)
+	for _, seed := range []int{11, 31, 51, 71, 91, 111, 131, 151, 171, 191} {
+		if counts[seed] != 1 {
+			t.Fatalf("head midA result %d count = %d, want 1", seed, counts[seed])
+		}
 	}
-	if got := root.GetDownstreamYieldCounter("midB").Load(); got != 10 {
-		t.Fatalf("root->midB downstream yield = %d, want 10", got)
+	for _, seed := range []int{12, 32, 52, 72, 92} {
+		if counts[seed] != 1 {
+			t.Fatalf("head midB result %d count = %d, want 1", seed, counts[seed])
+		}
 	}
-	if got := midA.GetDownstreamYieldCounter("head").Load(); got != 10 {
-		t.Fatalf("midA->head downstream yield = %d, want 10", got)
-	}
-	if got := midB.GetDownstreamYieldCounter("head").Load(); got != 5 {
-		t.Fatalf("midB->head downstream yield = %d, want 5", got)
+	for _, seed := range []int{112, 132, 152, 172, 192} {
+		if counts[seed] != 0 {
+			t.Fatalf("head midB failed result %d count = %d, want 0", seed, counts[seed])
+		}
 	}
 
 	for _, p := range []plot.PlotNode{root, midA, midB, head} {

@@ -88,12 +88,6 @@ func (c *Counter) GetCompleted() int {
 	return c.GetFruitNum() + c.GetWeedNum()
 }
 
-// GetDownstreamYieldCounter 返回下游 plot 的产出计数器。
-// 用于 seal 聚合和种子统计。
-func (c *Counter) GetDownstreamYieldCounter(name string) *atomic.Int64 {
-	return c.downstreamYields[name]
-}
-
 // ==== Predicates ====
 
 // IsFinish 判断所有种子是否已全部完成（已完成数 == 种子总数）。

@@ -73,18 +73,23 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 		t.Fatal("targetA should not connect back to source")
 	}
 
-	yieldA := source.GetDownstreamYieldCounter("targetA")
-	if yieldA == nil {
-		t.Fatal("source downstream yield counter for targetA should exist")
+	if err := farm.Run(map[string][]any{
+		"source": {1},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
 
-	yieldB := source.GetDownstreamYieldCounter("targetB")
-	if yieldB == nil {
-		t.Fatal("source downstream yield counter for targetB should exist")
+	if targetA.GetSeedNum() != 1 {
+		t.Fatalf("targetA.GetSeedNum() = %d, want 1", targetA.GetSeedNum())
 	}
-
-	if yieldA == yieldB {
-		t.Fatal("source downstream yield counters should be edge-specific")
+	if targetB.GetSeedNum() != 1 {
+		t.Fatalf("targetB.GetSeedNum() = %d, want 1", targetB.GetSeedNum())
+	}
+	if targetA.GetFruitNum() != 1 {
+		t.Fatalf("targetA.GetFruitNum() = %d, want 1", targetA.GetFruitNum())
+	}
+	if targetB.GetFruitNum() != 1 {
+		t.Fatalf("targetB.GetFruitNum() = %d, want 1", targetB.GetFruitNum())
 	}
 }
 

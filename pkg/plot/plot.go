@@ -25,11 +25,9 @@ type PlotNode interface {
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
+	SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
 	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
 	SetEventClient(eventClient runtime.EventClient)
-
-	AddUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
-	GetDownstreamYieldCounter(name string) *atomic.Int64
 
 	StartAsync()
 	WaitAsync()
@@ -140,7 +138,10 @@ func (p *Plot[S, F]) ConnectTo(next PlotNode) error {
 	}
 
 	p.fruitChans[next.GetName()] = seedChan
-	p.AddDownstreamYieldCounter(next.GetName(), &atomic.Int64{})
+
+	downstreamYield := &atomic.Int64{}
+	p.SetDownstreamYieldCounter(next.GetName(), downstreamYield)
+	next.SetUpstreamYieldCounter(p.GetName(), downstreamYield)
 	return nil
 }
 

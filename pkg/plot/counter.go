@@ -26,6 +26,19 @@ func NewCounter() *Counter {
 	}
 }
 
+// ==== Counter Registration ====
+
+// SetUpstreamYieldCounter 登记一个上游 plot 及其产出计数器。
+// 用于 seal 聚合和种子统计。
+func (c *Counter) SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.upstreamYields[name] = yieldCounter
+}
+
+// SetDownstreamYieldCounter 登记一个下游 plot 及其产出计数器。
+func (c *Counter) SetDownstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.downstreamYields[name] = yieldCounter
+}
+
 // ==== Adders ====
 
 // AddSeedNum 原子地增加种子总数。
@@ -46,17 +59,6 @@ func (c *Counter) AddWeedNum(addNum int) {
 // AddDownstreamYieldNum 原子地增加下游 plot 的产出数。
 func (c *Counter) AddDownstreamYieldNum(name string, addNum int) {
 	c.downstreamYields[name].Add(int64(addNum))
-}
-
-// AddUpstreamYieldCounter 登记一个上游 plot 及其产出计数器。
-// 用于 seal 聚合和种子统计。
-func (c *Counter) AddUpstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
-	c.upstreamYields[name] = yieldCounter
-}
-
-// AddDownstreamYieldCounter 登记一个下游 plot 及其产出计数器。
-func (c *Counter) AddDownstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
-	c.downstreamYields[name] = yieldCounter
 }
 
 // ==== Getters ====

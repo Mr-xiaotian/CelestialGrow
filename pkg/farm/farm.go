@@ -164,9 +164,7 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 			if err := from.ConnectTo(to); err != nil {
 				return err
 			}
-			fromName, toName := from.GetName(), to.GetName()
-			to.AddUpstreamYieldCounter(fromName, from.GetDownstreamYieldCounter(toName))
-			f.AddEdge(fromName, toName)
+			f.AddEdge(from.GetName(), to.GetName())
 		}
 	}
 

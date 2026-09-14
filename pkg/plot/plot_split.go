@@ -52,7 +52,10 @@ func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, 
 		p.AddDownstreamYieldNum(nextPlot, len(fruits))
 		for _, fruit := range fruits {
 			downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
-			p.lifecycleInlet.SeedIn(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
+			yieldRepr := trunc(fmt.Sprintf("%+v", fruit), 50)
+
+			p.logInlet.SeedInput(nextPlot, yieldRepr, downstreamSeedID)
+			p.lifecycleInlet.SeedInput(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
 			yieldPayload := runtime.Payload[F]{Value: fruit, EventID: downstreamSeedID}
 			ch <- yieldPayload
 		}

@@ -198,11 +198,11 @@ func (f *Farm) Run(inputs map[string][]any) error {
 
 	f.logSpout.Start()
 	f.lifecycleSpout.Start()
-	f.logInlet.StartFarm(f.name, f.getStructureList())
+	f.logInlet.FarmStart(f.name, f.getStructureList())
 	defer f.logSpout.Stop()
 	defer f.lifecycleSpout.Stop()
 	defer func() {
-		f.logInlet.EndFarm(f.name, time.Since(startTime).Seconds())
+		f.logInlet.FarmEnd(f.name, time.Since(startTime).Seconds())
 	}()
 
 	for _, plot := range f.plots {

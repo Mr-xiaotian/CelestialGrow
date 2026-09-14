@@ -74,7 +74,9 @@ func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTim
 	for nextPlot, ch := range p.yieldChans {
 		p.AddDownstreamYieldNum(nextPlot, 1)
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
-		p.lifecycleInlet.SeedIn(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
+
+		p.logInlet.SeedInput(nextPlot, fruitRepr, downstreamSeedID)
+		p.lifecycleInlet.SeedInput(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
 		yieldPayload := runtime.Payload[F]{Value: fruit, EventID: downstreamSeedID}
 		ch <- yieldPayload
 	}

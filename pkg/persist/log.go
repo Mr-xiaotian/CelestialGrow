@@ -115,27 +115,32 @@ func (l *LogInlet) log(level string, message string) {
 	})
 }
 
-// StartFarm 记录 Farm 启动，并逐行输出图结构。
-func (l *LogInlet) StartFarm(farmName string, structureList []string) {
+// FarmStart 记录 Farm 启动，并逐行输出图结构。
+func (l *LogInlet) FarmStart(farmName string, structureList []string) {
 	l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", farmName))
 	for _, s := range structureList {
 		l.log("INFO", s)
 	}
 }
 
-// EndFarm 记录 Farm 结束，包含总耗时。
-func (l *LogInlet) EndFarm(farmName string, useTime float64) {
+// FarmEnd 记录 Farm 结束，包含总耗时。
+func (l *LogInlet) FarmEnd(farmName string, useTime float64) {
 	l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", farmName, useTime))
 }
 
-// StartPlot 记录 Plot 启动，包含 tender 数量。
-func (l *LogInlet) StartPlot(plotName string, numTenders int) {
+// PlotStart 记录 Plot 启动，包含 tender 数量。
+func (l *LogInlet) PlotStart(plotName string, numTenders int) {
 	l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", plotName, numTenders))
 }
 
-// EndPlot 记录 Plot 结束，包含耗时、成功数和失败数。
-func (l *LogInlet) EndPlot(plotName string, useTime float64, fruitNum, weedNum int) {
+// PlotEnd 记录 Plot 结束，包含耗时、成功数和失败数。
+func (l *LogInlet) PlotEnd(plotName string, useTime float64, fruitNum, weedNum int) {
 	l.log("INFO", fmt.Sprintf("Plot '%s' end. Use %.2fs. %d ripened, %d withered.", plotName, useTime, fruitNum, weedNum))
+}
+
+// SeedInput 记录种子输入，包含种子的字符串表示和唯一标识符。
+func (l *LogInlet) SeedInput(plotName string, seedRepr string, seedID int) {
+	l.log("DEBUG", fmt.Sprintf("In '%s', Seed %s input. [%d*]", plotName, seedRepr, seedID))
 }
 
 // SeedRipen 记录种子成熟（培育成功），包含种子和果实的字符串表示及耗时。
@@ -149,6 +154,6 @@ func (l *LogInlet) SeedWither(plotName string, seedRepr string, err error, useTi
 }
 
 // SeedReplant 记录种子重新种植（重试），包含当前尝试次数和错误信息。
-func (l *LogInlet) SeedReplant(plotName string, seedRepr string, attempt int, err error) {
-	l.log("WARNING", fmt.Sprintf("In '%s', Seed %s attempt %d withered: %v. Replanting...", plotName, seedRepr, attempt, err))
+func (l *LogInlet) SeedReplant(plotName string, seedRepr string, attempt int, err error, seedID int) {
+	l.log("WARNING", fmt.Sprintf("In '%s', Seed %s attempt %d withered: %v. Replanting. [%d*]", plotName, seedRepr, attempt, err, seedID))
 }

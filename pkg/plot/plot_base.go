@@ -270,6 +270,7 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 	var fruit F
 	var err error
 	seed := seedPayload.Value
+	seedID := seedPayload.EventID
 
 	for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 		fruit, err = p.cultivator(seed)
@@ -280,7 +281,7 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 			break
 		}
 		if attempt <= p.maxRetries {
-			p.logInlet.SeedReplant(p.name, seedRepr, attempt, err)
+			p.logInlet.SeedReplant(p.name, seedRepr, attempt, err, seedID)
 		}
 		time.Sleep(p.retryDelay(attempt))
 	}
@@ -309,7 +310,10 @@ func (p *basePlot[S, F, Y]) SeedAny(seed any) error {
 // 该输入视为外部调用者注入，而非来自某个上游 plot。
 func (p *basePlot[S, F, Y]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
-	p.lifecycleInlet.SeedIn(p.name, seedID, nil, seed)
+	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
+
+	p.logInlet.SeedInput(p.name, seedRepr, seedID)
+	p.lifecycleInlet.SeedInput(p.name, seedID, nil, seed)
 	p.seedChan <- runtime.Payload[S]{Value: seed, EventID: seedID}
 
 	p.AddSeedNum(1)
@@ -329,14 +333,14 @@ func (p *basePlot[S, F, Y]) Seal() {
 // Farm 模式下则由 Farm 注入初始种子并接收上游转发的 yield。完成后需调用 WaitAsync 等待退出。
 func (p *basePlot[S, F, Y]) StartAsync() {
 	p.wg.Go(func() {
-		p.logInlet.StartPlot(p.name, p.numTenders)
+		p.logInlet.PlotStart(p.name, p.numTenders)
 		startTime := time.Now()
 
 		p.notifyStart()
 		p.sprout()
 		p.notifyFinish()
 
-		p.logInlet.EndPlot(p.name, time.Since(startTime).Seconds(), p.GetFruitNum(), p.GetWeedNum())
+		p.logInlet.PlotEnd(p.name, time.Since(startTime).Seconds(), p.GetFruitNum(), p.GetWeedNum())
 	})
 }
 

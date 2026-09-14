@@ -138,8 +138,8 @@ func NewLifecycleInlet(ch chan<- LifecycleRecord, timeout time.Duration) *Lifecy
 	}
 }
 
-// SeedIn 记录一条输入事件和对应的 pending 状态。
-func (l *LifecycleInlet) SeedIn(plot string, eventID int, parentIDs []int, task any) {
+// SeedInput 记录一条输入事件和对应的 pending 状态。
+func (l *LifecycleInlet) SeedInput(plot string, eventID int, parentIDs []int, task any) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
 		Kind:           lifecycleSeed,

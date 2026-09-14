@@ -14,6 +14,9 @@ type Farm = farm.Farm
 // Plot 是对外暴露的泛型节点类型。
 type Plot[S any, F any] = plot.Plot[S, F]
 
+// SplitPlot 是对外暴露的拆分节点类型。
+type SplitPlot[S any, F any] = plot.SplitPlot[S, F]
+
 // PlotNode 是 Farm 连接 plot 时使用的统一接口。
 type PlotNode = plot.PlotNode
 
@@ -28,6 +31,11 @@ func NewFarm(name string, logLevel string) *Farm {
 // NewPlot 创建一个 Plot。
 func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *Plot[S, F] {
 	return plot.NewPlot(name, cultivator, opts...)
+}
+
+// NewSplitPlot 创建一个 SplitPlot。
+func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F] {
+	return plot.NewSplitPlot(name, splitter, opts...)
 }
 
 // NewProgressBar 创建一个进度条。

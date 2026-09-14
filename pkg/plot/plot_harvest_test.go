@@ -9,8 +9,12 @@ import (
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
+type harvestable interface {
+	Harvest() ([]persist.LifecycleStatusRecord, error)
+}
+
 // mustHarvest 运行后读取指定 plot 的生命周期状态快照。
-func mustHarvest[S any, F any](t *testing.T, plot *plot.Plot[S, F]) []persist.LifecycleStatusRecord {
+func mustHarvest(t *testing.T, plot harvestable) []persist.LifecycleStatusRecord {
 	t.Helper()
 
 	records, err := plot.Harvest()
@@ -91,15 +95,15 @@ func TestPlot_PartialError(t *testing.T) {
 
 		if seed%2 == 0 {
 			failedCount++
-				if record.Status != "wither" || record.ErrorMessage != "even number error" {
-					t.Fatalf("seed %d expected wither/even number error, got %#v", seed, record)
+			if record.Status != "wither" || record.ErrorMessage != "even number error" {
+				t.Fatalf("seed %d expected wither/even number error, got %#v", seed, record)
 			}
 			continue
 		}
 
 		successCount++
-			if record.Status != "ripen" || record.ResultJSON != strconv.Itoa(seed*10) {
-				t.Fatalf("seed %d expected ripen/result %d, got %#v", seed, seed*10, record)
+		if record.Status != "ripen" || record.ResultJSON != strconv.Itoa(seed*10) {
+			t.Fatalf("seed %d expected ripen/result %d, got %#v", seed, seed*10, record)
 		}
 	}
 

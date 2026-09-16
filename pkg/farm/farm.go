@@ -12,7 +12,7 @@ import (
 
 // ==== Struct ====
 
-// Farm 管理多个 Plot 组成的静态有向图。
+// Farm 管理多个 plot 节点（Plot/SplitPlot/RoutePlot）组成的静态有向图。
 // 负责节点注册、名称唯一性校验、超边式连接建立，
 // 以及统一的 spout 管理和生命周期调度。
 type Farm struct {
@@ -135,8 +135,9 @@ func uniquePlots(plots []plot.PlotNode) []plot.PlotNode {
 }
 
 // Connect 在源组和目标组之间建立全连接（笛卡尔积）。
-// 每条连接调用 from.ConnectTo(to) 将上游产出通道接入下游 seedChan，
-// 并在下游登记上游名称与产出计数器用于 seal 聚合和种子统计。
+// 每条连接调用 from.ConnectTo(to) 完成类型校验与产出通道接入，
+// 并由 ConnectTo 内部创建对应的下游产出计数器、双向登记，
+// 供 seal 聚合和种子统计使用。
 func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error {
 	fromUnique := uniquePlots(fromPlots)
 	toUnique := uniquePlots(toPlots)

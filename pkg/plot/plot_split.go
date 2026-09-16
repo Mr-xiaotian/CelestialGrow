@@ -23,6 +23,8 @@ type SplitPlot[S any, F any] struct {
 // name 为 plot 名称（在 Farm 中需唯一），splitter 为拆分函数，
 // opts 为可选配置项。
 func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F] {
+	// 先声明 p 再构造 base：ripen 钩子闭包捕获 p，但该闭包只在
+	// StartAsync 启动后的 sprout/tend 路径中被调用，彼时 p 已完成赋值。
 	var p *SplitPlot[S, F]
 	base := newBasePlot[S, []F, F](name, splitter, func(seedPayload runtime.Payload[S], fruits []F, startTime time.Time) {
 		p.ripenSeed(seedPayload, fruits, startTime)

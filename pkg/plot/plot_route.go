@@ -24,6 +24,8 @@ type RoutePlot[S any, Y any] struct {
 // name 为 plot 名称（在 Farm 中需唯一），cultivator 为返回路由表的培育函数，
 // opts 为可选配置项。
 func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y] {
+	// 先声明 p 再构造 base：ripen 钩子闭包捕获 p，但该闭包只在
+	// StartAsync 启动后的 sprout/tend 路径中被调用，彼时 p 已完成赋值。
 	var p *RoutePlot[S, Y]
 	base := newBasePlot[S, map[string]Y, Y](name, cultivator, func(seedPayload runtime.Payload[S], routes map[string]Y, startTime time.Time) {
 		p.ripenSeed(seedPayload, routes, startTime)

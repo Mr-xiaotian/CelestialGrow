@@ -24,11 +24,11 @@ func mustHarvest(t *testing.T, plot harvestable) []persist.LifecycleStatusRecord
 	return records
 }
 
-// indexStatusesByTask 使用 task_json 作为键建立索引，便于逐任务断言。
-func indexStatusesByTask(records []persist.LifecycleStatusRecord) map[string]persist.LifecycleStatusRecord {
+// indexStatusesBySeed 使用 seed_json 作为键建立索引，便于逐种子断言。
+func indexStatusesBySeed(records []persist.LifecycleStatusRecord) map[string]persist.LifecycleStatusRecord {
 	index := make(map[string]persist.LifecycleStatusRecord, len(records))
 	for _, record := range records {
-		index[record.TaskJSON] = record
+		index[record.SeedJSON] = record
 	}
 	return index
 }
@@ -52,7 +52,7 @@ func TestPlot_AllError(t *testing.T) {
 		if record.Status != "wither" {
 			t.Fatalf("expected wither status, got %#v", record)
 		}
-		if record.ErrorMessage != "always fail" {
+		if record.WitherMessage != "always fail" {
 			t.Fatalf("expected error message %q, got %#v", "always fail", record)
 		}
 	}
@@ -79,7 +79,7 @@ func TestPlot_PartialError(t *testing.T) {
 
 	plot.Run(seeds)
 	records := mustHarvest(t, plot)
-	index := indexStatusesByTask(records)
+	index := indexStatusesBySeed(records)
 
 	if len(records) != len(seeds) {
 		t.Fatalf("expected %d statuses, got %d", len(seeds), len(records))
@@ -95,14 +95,14 @@ func TestPlot_PartialError(t *testing.T) {
 
 		if seed%2 == 0 {
 			failedCount++
-			if record.Status != "wither" || record.ErrorMessage != "even number error" {
+			if record.Status != "wither" || record.WitherMessage != "even number error" {
 				t.Fatalf("seed %d expected wither/even number error, got %#v", seed, record)
 			}
 			continue
 		}
 
 		successCount++
-		if record.Status != "ripen" || record.ResultJSON != strconv.Itoa(seed*10) {
+		if record.Status != "ripen" || record.FruitJSON != strconv.Itoa(seed*10) {
 			t.Fatalf("seed %d expected ripen/result %d, got %#v", seed, seed*10, record)
 		}
 	}
@@ -129,7 +129,7 @@ func TestPlot_AllSuccess(t *testing.T) {
 
 	plot.Run(seeds)
 	records := mustHarvest(t, plot)
-	index := indexStatusesByTask(records)
+	index := indexStatusesBySeed(records)
 
 	if len(records) != len(seeds) {
 		t.Fatalf("expected %d statuses, got %d", len(seeds), len(records))
@@ -139,7 +139,7 @@ func TestPlot_AllSuccess(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing lifecycle status for seed %d", seed)
 		}
-		if record.Status != "ripen" || record.ResultJSON != strconv.Itoa(seed*2) {
+		if record.Status != "ripen" || record.FruitJSON != strconv.Itoa(seed*2) {
 			t.Fatalf("seed %d expected ripen/result %d, got %#v", seed, seed*2, record)
 		}
 	}

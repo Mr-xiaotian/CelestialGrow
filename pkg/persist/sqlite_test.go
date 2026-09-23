@@ -75,8 +75,8 @@ func TestLifecycleSQLiteStatusRoundTrip(t *testing.T) {
 	if loadedStatus.Status != "ripen" {
 		t.Fatalf("LoadLifecycleStatus() status = %q, want %q", loadedStatus.Status, "ripen")
 	}
-	if loadedStatus.ResultJSON != `{"ok":true}` {
-		t.Fatalf("LoadLifecycleStatus() result json = %q, want %q", loadedStatus.ResultJSON, `{"ok":true}`)
+	if loadedStatus.FruitJSON != `{"ok":true}` {
+		t.Fatalf("LoadLifecycleStatus() fruit json = %q, want %q", loadedStatus.FruitJSON, `{"ok":true}`)
 	}
 }
 
@@ -130,15 +130,15 @@ func TestLifecycleSQLiteStatusPairs(t *testing.T) {
 	if len(statuses) != 2 {
 		t.Fatalf("LoadLifecycleStatuses() len = %d, want 2", len(statuses))
 	}
-	if statuses[0].TaskJSON != `{"value":"alpha"}` ||
+	if statuses[0].SeedJSON != `{"value":"alpha"}` ||
 		statuses[0].Status != "ripen" ||
-		statuses[0].ResultJSON != `{"ok":true}` {
-		t.Fatalf("LoadLifecycleStatuses()[0] = %#v, want task alpha/ripen", statuses[0])
+		statuses[0].FruitJSON != `{"ok":true}` {
+		t.Fatalf("LoadLifecycleStatuses()[0] = %#v, want seed alpha/ripen", statuses[0])
 	}
-	if statuses[1].TaskJSON != `{"value":"beta"}` ||
+	if statuses[1].SeedJSON != `{"value":"beta"}` ||
 		statuses[1].Status != "wither" ||
-		statuses[1].ErrorType != "*errors.errorString" ||
-		statuses[1].ErrorMessage != "boom" {
-		t.Fatalf("LoadLifecycleStatuses()[1] = %#v, want task beta/wither", statuses[1])
+		statuses[1].WitherType != "*errors.errorString" ||
+		statuses[1].WitherMessage != "boom" {
+		t.Fatalf("LoadLifecycleStatuses()[1] = %#v, want seed beta/wither", statuses[1])
 	}
 }

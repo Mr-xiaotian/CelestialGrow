@@ -22,11 +22,11 @@ func TestRoutePlot_RunHarvest(t *testing.T) {
 		t.Fatalf("expected 2 statuses, got %d", len(records))
 	}
 
-	index := indexStatusesByTask(records)
-	if got := index["1"]; got.Status != "ripen" || got.ResultJSON != `{"left":"L1","right":"R1"}` {
+	index := indexStatusesBySeed(records)
+	if got := index["1"]; got.Status != "ripen" || got.FruitJSON != `{"left":"L1","right":"R1"}` {
 		t.Fatalf("seed 1 status = %#v, want ripen with route result", got)
 	}
-	if got := index["2"]; got.Status != "ripen" || got.ResultJSON != `{"left":"L2","right":"R2"}` {
+	if got := index["2"]; got.Status != "ripen" || got.FruitJSON != `{"left":"L2","right":"R2"}` {
 		t.Fatalf("seed 2 status = %#v, want ripen with route result", got)
 	}
 }

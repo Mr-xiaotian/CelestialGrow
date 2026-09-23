@@ -30,7 +30,7 @@ func TestPlot_RetrySuccess(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "ripen" || records[0].ResultJSON != "10" {
+	if records[0].Status != "ripen" || records[0].FruitJSON != "10" {
 		t.Fatalf("expected ripen/result 10, got %#v", records[0])
 	}
 	if attempts.Load() != 3 {
@@ -56,7 +56,7 @@ func TestPlot_RetryExhausted(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "wither" || records[0].ErrorMessage != "permanent error" {
+	if records[0].Status != "wither" || records[0].WitherMessage != "permanent error" {
 		t.Fatalf("expected wither/permanent error, got %#v", records[0])
 	}
 	if attempts.Load() != 3 {
@@ -86,7 +86,7 @@ func TestPlot_RetryIf(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "wither" || records[0].ErrorMessage != "permanent" {
+	if records[0].Status != "wither" || records[0].WitherMessage != "permanent" {
 		t.Fatalf("expected wither/permanent, got %#v", records[0])
 	}
 	if attempts.Load() != 1 {
@@ -120,7 +120,7 @@ func TestPlot_RetryDelay(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(records))
 	}
-	if records[0].Status != "ripen" || records[0].ResultJSON != "1" {
+	if records[0].Status != "ripen" || records[0].FruitJSON != "1" {
 		t.Fatalf("expected ripen/result 1, got %#v", records[0])
 	}
 	if elapsed < 100*time.Millisecond {

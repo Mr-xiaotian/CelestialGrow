@@ -23,11 +23,11 @@ func TestSplitPlot_RunHarvest(t *testing.T) {
 		t.Fatalf("expected 2 statuses, got %d", len(records))
 	}
 
-	index := indexStatusesByTask(records)
-	if got := index["0"]; got.Status != "ripen" || got.ResultJSON != "[]" {
+	index := indexStatusesBySeed(records)
+	if got := index["0"]; got.Status != "ripen" || got.FruitJSON != "[]" {
 		t.Fatalf("seed 0 status = %#v, want ripen with empty result", got)
 	}
-	if got := index["2"]; got.Status != "ripen" || got.ResultJSON != "[\"2-0\",\"2-1\"]" {
+	if got := index["2"]; got.Status != "ripen" || got.FruitJSON != "[\"2-0\",\"2-1\"]" {
 		t.Fatalf("seed 2 status = %#v, want ripen with split result", got)
 	}
 }

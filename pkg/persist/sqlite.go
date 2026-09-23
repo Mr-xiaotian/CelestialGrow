@@ -16,16 +16,16 @@ type LifecycleEventRecord struct {
 	TS        float64
 }
 
-// LifecycleStatusRecord 表示一条任务状态快照。
+// LifecycleStatusRecord 表示一条种子状态快照。
 type LifecycleStatusRecord struct {
 	InputEventID   int
 	CurrentEventID int
-	TaskJSON       string
 	Plot           string
 	Status         string
-	ErrorType      string
-	ErrorMessage   string
-	ResultJSON     string
+	SeedJSON       string
+	FruitJSON      string
+	WitherType     string
+	WitherMessage  string
 	TS             float64
 }
 
@@ -50,10 +50,10 @@ CREATE TABLE IF NOT EXISTS status (
     current_event_id INTEGER NOT NULL,
     plot TEXT NOT NULL,
     status TEXT NOT NULL,
-    task_json TEXT NOT NULL,
-    result_json TEXT NOT NULL DEFAULT 'null',
-    error_type TEXT NOT NULL DEFAULT '',
-    error_message TEXT NOT NULL DEFAULT '',
+    seed_json TEXT NOT NULL,
+    fruit_json TEXT NOT NULL DEFAULT 'null',
+    wither_type TEXT NOT NULL DEFAULT '',
+    wither_message TEXT NOT NULL DEFAULT '',
     ts REAL NOT NULL,
     FOREIGN KEY (input_event_id) REFERENCES events(event_id) ON DELETE CASCADE,
     FOREIGN KEY (current_event_id) REFERENCES events(event_id)
@@ -149,18 +149,18 @@ func LoadLifecycleEventParents(db *sql.DB, eventID int) ([]int, error) {
 // ==== status 表操作 ====
 
 // UpsertLifecycleStatusSeed 写入一条当前状态快照。
-func UpsertLifecycleStatusSeed(db *sql.DB, InputEventID int, TaskJSON, Plot string, TS float64) error {
+func UpsertLifecycleStatusSeed(db *sql.DB, InputEventID int, SeedJSON, Plot string, TS float64) error {
 	_, err := db.Exec(
 		`
 		INSERT INTO status (
-			input_event_id, current_event_id, plot, status, task_json, ts
+			input_event_id, current_event_id, plot, status, seed_json, ts
 		) VALUES (?, ?, ?, ?, ?, ?)
 		`,
 		InputEventID,
 		InputEventID,
 		Plot,
 		"seed",
-		TaskJSON,
+		SeedJSON,
 		TS,
 	)
 	if err != nil {
@@ -170,15 +170,15 @@ func UpsertLifecycleStatusSeed(db *sql.DB, InputEventID int, TaskJSON, Plot stri
 }
 
 // PromoteLifecycleStatusRipen 将一条状态快照晋升为成功。
-func PromoteLifecycleStatusRipen(db *sql.DB, inputEventID int, currentEventID int, resultJSON string, ts float64) error {
+func PromoteLifecycleStatusRipen(db *sql.DB, inputEventID int, currentEventID int, fruitJSON string, ts float64) error {
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'ripen', result_json = ?, ts = ?
+		SET current_event_id = ?, status = 'ripen', fruit_json = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
-		resultJSON,
+		fruitJSON,
 		ts,
 		inputEventID,
 	)
@@ -193,19 +193,19 @@ func PromoteLifecycleStatusWither(
 	db *sql.DB,
 	inputEventID int,
 	currentEventID int,
-	errorType string,
-	errorMessage string,
+	witherType string,
+	witherMessage string,
 	ts float64,
 ) error {
 	_, err := db.Exec(
 		`
 		UPDATE status
-		SET current_event_id = ?, status = 'wither', error_type = ?, error_message = ?, ts = ?
+		SET current_event_id = ?, status = 'wither', wither_type = ?, wither_message = ?, ts = ?
 		WHERE input_event_id = ?
 		`,
 		currentEventID,
-		errorType,
-		errorMessage,
+		witherType,
+		witherMessage,
 		ts,
 		inputEventID,
 	)
@@ -222,8 +222,8 @@ func LoadLifecycleStatus(db *sql.DB, inputEventID int) (LifecycleStatusRecord, e
 	var record LifecycleStatusRecord
 	err := db.QueryRow(
 		`
-		SELECT input_event_id, current_event_id, task_json, plot, status,
-		       error_type, error_message, result_json, ts
+		SELECT input_event_id, current_event_id, plot, status,
+		       seed_json, fruit_json, wither_type, wither_message, ts
 		FROM status
 		WHERE input_event_id = ?
 		`,
@@ -231,12 +231,12 @@ func LoadLifecycleStatus(db *sql.DB, inputEventID int) (LifecycleStatusRecord, e
 	).Scan(
 		&record.InputEventID,
 		&record.CurrentEventID,
-		&record.TaskJSON,
 		&record.Plot,
 		&record.Status,
-		&record.ErrorType,
-		&record.ErrorMessage,
-		&record.ResultJSON,
+		&record.SeedJSON,
+		&record.FruitJSON,
+		&record.WitherType,
+		&record.WitherMessage,
 		&record.TS,
 	)
 	if err != nil {
@@ -245,12 +245,12 @@ func LoadLifecycleStatus(db *sql.DB, inputEventID int) (LifecycleStatusRecord, e
 	return record, nil
 }
 
-// LoadLifecycleStatuses 读取指定 plot 的全部任务状态快照。
+// LoadLifecycleStatuses 读取指定 plot 的全部种子状态快照。
 func LoadLifecycleStatuses(db *sql.DB, plotName string) ([]LifecycleStatusRecord, error) {
 	rows, err := db.Query(
 		`
-		SELECT input_event_id, current_event_id, task_json, plot, status,
-		       error_type, error_message, result_json, ts
+		SELECT input_event_id, current_event_id, plot, status,
+		       seed_json, fruit_json, wither_type, wither_message, ts
 		FROM status
 		WHERE plot = ?
 		ORDER BY ts, input_event_id
@@ -268,12 +268,12 @@ func LoadLifecycleStatuses(db *sql.DB, plotName string) ([]LifecycleStatusRecord
 		if err := rows.Scan(
 			&record.InputEventID,
 			&record.CurrentEventID,
-			&record.TaskJSON,
 			&record.Plot,
 			&record.Status,
-			&record.ErrorType,
-			&record.ErrorMessage,
-			&record.ResultJSON,
+			&record.SeedJSON,
+			&record.FruitJSON,
+			&record.WitherType,
+			&record.WitherMessage,
 			&record.TS,
 		); err != nil {
 			return nil, fmt.Errorf("scan lifecycle status for plot %q: %w", plotName, err)

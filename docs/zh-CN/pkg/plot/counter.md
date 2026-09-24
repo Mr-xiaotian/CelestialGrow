@@ -1,14 +1,16 @@
 # pkg/plot/counter.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
-`counter.go` 定义 `Counter`：一个并发安全的「种子 / 果实 / 杂草」三联计数器。`Plot` 通过内嵌 `*Counter` 直接获得 `AddSeedNum` / `GetCompleted` 等方法，用于在多个 tend 协程同时写、观察者同时读的场景下避免加锁。
+`counter.go` 定义 `Counter`：一个并发安全的「种子 / 果实 / 杂草」三联计数器，并额外维护**按边跟踪**的上下游 yield 计数器。
+
+`basePlot` 通过内嵌 `*Counter` 直接获得 `AddSeedNum` / `GetCompleted` 等方法，用于在多个 tend 协程同时写、观察者同时读的场景下避免加锁。
 
 ## 作用
 
 - 跟踪当前 plot 的「种子总数」「成功产出（果实）」「失败产出（杂草）」；
-- 统计上游 plot 的产出量（用于在 `GetSeedNum` 中合并出真实总输入数）；
-- 提供「是否完成」的谓词 `IsFinish` 与「已完成数」`GetCompleted` 供观察者/调度逻辑使用。
+- 按**每条边**分别记录「本 plot 发给某下游的 yield 数」（`downstreamYields`）与「某上游发给本 plot 的 yield 数」（`upstreamYields`）；
+- 在 `GetSeedNum` 中把本地播入的种子与各上游转入的 yield 合并成「真实总输入数」，供观察者与 `IsFinish` 使用。
 
 ## 核心对象
 
@@ -16,22 +18,24 @@
 
 ```go
 type Counter struct {
-    seedNum  atomic.Int64
-    fruitNum atomic.Int64
-    weedNum  atomic.Int64
+	seedNum  atomic.Int64
+	fruitNum atomic.Int64
+	weedNum  atomic.Int64
 
-    upstreamYields map[string]*atomic.Int64
+	upstreamYields   map[string]*atomic.Int64
+	downstreamYields map[string]*atomic.Int64
 }
 ```
 
 | 字段 | 类型 | 含义 |
 |------|------|------|
-| `seedNum` | `atomic.Int64` | 本地播入 + 上游转入的种子总数（仅 `AddSeedNum` 自增，`GetSeedNum` 会合并上游） |
-| `fruitNum` | `atomic.Int64` | 成功产出的果实数（`bearFruit` 调用 `AddFruitNum(1)`） |
-| `weedNum` | `atomic.Int64` | 失败产出的杂草数（`bearWeed` 调用 `AddWeedNum(1)`） |
-| `upstreamYields` | `map[string]*atomic.Int64` | 上游 plot 名称 → 其 fruit 计数指针；`GetSeedNum` 会把它们累加进来 |
+| `seedNum` | `atomic.Int64` | **本地**播入的种子数（只有 `AddSeedNum` 自增） |
+| `fruitNum` | `atomic.Int64` | 成功产出的果实数 |
+| `weedNum` | `atomic.Int64` | 失败产出的杂草数 |
+| `upstreamYields` | `map[string]*atomic.Int64` | 上游 plot 名 → **该边**共享的 yield 计数器指针；`GetSeedNum` 会把这些值累加进来 |
+| `downstreamYields` | `map[string]*atomic.Int64` | 下游 plot 名 → **该边**共享的 yield 计数器指针；由本 plot 的 `ripenSeed` 通过 `AddDownstreamYieldNum` 自增 |
 
-> 注意：`seedNum` 本身**只**记录「本地 `Seed` 调用次数」；上游转入的 fruit 不通过 `AddSeedNum` 自增，而是通过 `upstreamYields` 在 `GetSeedNum` 时合并统计。`Plot` 自身并不直接调用 `AddUpstream`（这是 Farm 的事），`Counter` 只是提供存储与合并能力。
+> `upstreamYields` 与 `downstreamYields` 中的指针是**同一批对象的两端**：`ConnectTo` 为每条边新建一个 `*atomic.Int64`，上游放进自己的 `downstreamYields`，下游放进自己的 `upstreamYields`。因此上游自增、下游读到的就是同一条边的实时产量，不同边之间互不干扰。
 
 ## 公开方法
 
@@ -39,23 +43,31 @@ type Counter struct {
 
 #### `NewCounter() *Counter`
 
-构造一个空计数器，`upstreamYields` 初始化为空 map（**注意**：`NewCounter` 没有 lazy-init，所以 `NewCounter` 返回的对象调用 `GetSeedNum` 不会 panic——只是 map 为空，`range` 0 次）。
+创建一个计数器：三个原子量都是零，两个 map 都初始化为空（**非 nil**），因此新建后立即调用 `GetSeedNum` 不会 panic。
+
+### 计数器登记
+
+| 方法 | 签名 | 行为 |
+|------|------|------|
+| `SetUpstreamYieldCounter` | `func (c *Counter) SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)` | 把 `name`（上游 plot 名）与该边计数器写入 `upstreamYields`，供 `GetSeedNum` 聚合 |
+| `SetDownstreamYieldCounter` | `func (c *Counter) SetDownstreamYieldCounter(name string, yieldCounter *atomic.Int64)` | 把 `name`（下游 plot 名）与该边计数器写入 `downstreamYields`，供 `AddDownstreamYieldNum` 自增 |
+
+> 两者通常由 `basePlot.ConnectTo` 成对调用，业务代码一般不需要直接使用。重复登记同名边会**覆盖**旧指针（旧计数器被丢弃）。
 
 ### Adders（自增）
 
 | 方法 | 签名 | 行为 |
 |------|------|------|
-| `AddSeedNum` | `func (c *Counter) AddSeedNum(addNNum int)` | 原子地把 `seedNum` 增加 `addNNum` |
-| `AddFruitNum` | `func (c *Counter) AddFruitNum(addNNum int)` | 原子地把 `fruitNum` 增加 `addNNum` |
-| `AddWeedNum` | `func (c *Counter) AddWeedNum(addNNum int)` | 原子地把 `weedNum` 增加 `addNNum` |
-
-> 参数名 `addNNum` 取自源码（多次自增场景保留命名风格），调用方通常传 `1`。
+| `AddSeedNum` | `func (c *Counter) AddSeedNum(addNum int)` | 原子地把 `seedNum` 增加 `addNum` |
+| `AddFruitNum` | `func (c *Counter) AddFruitNum(addNum int)` | 原子地把 `fruitNum` 增加 `addNum` |
+| `AddWeedNum` | `func (c *Counter) AddWeedNum(addNum int)` | 原子地把 `weedNum` 增加 `addNum` |
+| `AddDownstreamYieldNum` | `func (c *Counter) AddDownstreamYieldNum(name string, addNum int)` | 原子地把 `downstreamYields[name]` 增加 `addNum` |
 
 ### Getters（只读）
 
 | 方法 | 签名 | 返回值 |
 |------|------|--------|
-| `GetSeedNum` | `func (c *Counter) GetSeedNum() int` | `seedNum` + `Σ upstreamYields[*].Load()`；即「本 plot 处理过的总种子数」 |
+| `GetSeedNum` | `func (c *Counter) GetSeedNum() int` | `seedNum` + `Σ upstreamYields[*].Load()`，即「本 plot 将要/已经处理的总种子数」 |
 | `GetFruitNum` | `func (c *Counter) GetFruitNum() int` | 成功果实数 |
 | `GetWeedNum` | `func (c *Counter) GetWeedNum() int` | 失败杂草数 |
 | `GetCompleted` | `func (c *Counter) GetCompleted() int` | `GetFruitNum() + GetWeedNum()` |
@@ -64,31 +76,34 @@ type Counter struct {
 
 | 方法 | 签名 | 含义 |
 |------|------|------|
-| `IsFinish` | `func (c *Counter) IsFinish() bool` | `GetCompleted() == GetSeedNum()`；二者**不**是同一时刻的快照，但在 tend 全部结束后会自然趋于稳定 |
+| `IsFinish` | `func (c *Counter) IsFinish() bool` | `GetCompleted() == GetSeedNum()`；当前仓库内没有调用点，作为预留判断提供 |
 
-## 与 Plot 的协作
+## 与节点的协作
 
-`Plot` 通过内嵌 `*Counter` 获得上述所有方法：
+`Counter` 被 `basePlot` 内嵌，各节点通过它完成任务统计与上下游同步：
 
-- `Plot.Seed` 调用 `AddSeedNum(1)`；
-- `bearFruit` 调用 `AddFruitNum(1)` + `reportProgress`；
-- `bearWeed` 调用 `AddWeedNum(1)` + `reportProgress`；
-- 观察者通过 `GetCompleted` / `GetSeedNum` 计算进度（`completed / seedNum`）。
+| 调用点 | 动作 |
+|--------|------|
+| `basePlot.Seed` | `AddSeedNum(1)`（本地播入 1 颗） |
+| `basePlot.ConnectTo` | 新建该边的 `*atomic.Int64`，`p.SetDownstreamYieldCounter(nextName, c)` + `next.SetUpstreamYieldCounter(p.GetName(), c)` |
+| `basePlot.witherSeed` | `AddWeedNum(1)` + 触发 `reportProgress` |
+| `Plot.ripenSeed` | `AddFruitNum(1)` + 对**每个**下游 `AddDownstreamYieldNum(nextPlot, 1)` |
+| `SplitPlot.ripenSeed` | `AddFruitNum(1)` + 对每个下游 `AddDownstreamYieldNum(nextPlot, len(fruits))` |
+| `RoutePlot.ripenSeed` | `AddFruitNum(1)` + 对**每个被路由到的**下游 `AddDownstreamYieldNum(nextPlot, 1)` |
+| `basePlot.reportProgress` / `notifyStart` / `notifyFinish` | 读取 `GetCompleted()` / `GetSeedNum()` 并回调 `observer.Observer` |
 
-`Counter` 本身**不感知**上游 plot，是被 `Plot` 通过「共享 `*atomic.Int64` 指针」的方式在 plot 之间传递产量的：
+数据流示意：
 
-```go
-// 上游 plot 提供
-p.GetYieldCounter() // = &p.fruitNum
-
-// 下游 plot 登记
-next.AddUpstream(upstreamName, upstream.GetYieldCounter())
+```mermaid
+flowchart LR
+    U["上游 basePlot<br/>downstreamYields[下游名]"] -->|AddDownstreamYieldNum| C["该边共享的<br/>atomic.Int64"]
+    C -->|Load| D["下游 basePlot<br/>upstreamYields[上游名]"]
+    D --> GSN["GetSeedNum = seedNum + Σ 上游 yield"]
 ```
-
-之后上游的每次 `AddFruitNum(1)` 都会让下游的 `GetSeedNum` 自然增长。
 
 ## 注意事项
 
-- `seedNum` 与 `fruitNum` / `weedNum` **不是**同一时刻的原子快照，因此 `IsFinish` 可能在「最后一批 tend 还没全部走完 `AddFruitNum` / `AddWeedNum`」的瞬间返回 `true` 之前先返回 `false`，这是正常现象，最终会稳定。
-- `upstreamYields` 仅在 `GetSeedNum` 中读取，**Counter 自身不负责写入**——上游 plot 的 fruit 计数更新由上游自己完成，本 Counter 只是「读指针」。
-- `AddSeedNum` / `AddFruitNum` / `AddWeedNum` 接受 `int` 但内部强转为 `int64` 后 `Add`；传负数会让计数倒退，业务层应避免。
+- `AddDownstreamYieldNum` 不做存在性检查：`name` 未登记时会取到 `nil` 的 `*atomic.Int64` 并直接 `Add`，从而**panic**。因此自增方必须与 `ConnectTo` 的注册保持成对出现（`Plot` / `SplitPlot` / `RoutePlot` 都只在已连接目标上自增）。
+- `seedNum`、`fruitNum`、`weedNum` 与各 yield 计数器**不是同一时刻的原子快照**，因此 `IsFinish` 与观察者进度在并发下可能出现瞬时偏差，最终会趋于稳定。
+- `upstreamYields` 只被 `GetSeedNum` 读取，`Counter` 自身不写入来自上游的数据——上游的 yield 计数由上游自己 `Add`，本 Counter 只是持有同一个指针。
+- `AddSeedNum` / `AddFruitNum` / `AddWeedNum` / `AddDownstreamYieldNum` 接受 `int` 并在内部转为 `int64`；传负数会让计数倒退，业务层应避免。

@@ -1,6 +1,6 @@
 # pkg/persist/log.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -41,7 +41,7 @@ type LogRecordHandler struct {
 |------|----------|------|
 | `BeforeStart() error` | Spout 启动前 | 创建 `logs/` 目录（权限 `0755`），并以 `O_CREATE \| O_WRONLY \| O_APPEND`（权限 `0644`）打开 `logs/grow_log(<YYYY-MM-DD>).log` |
 | `HandleRecord(record LogRecord) error` | 每条记录到达 | 将 `record.FormatTime + " " + record.Level + " " + record.Message + "\n"` 整体 `WriteString` 到文件 |
-| `AfterStop() error` | Spout 停止后 | 关闭 `logFile` 句柄 |
+| `AfterStop() error` | Spout 停止后 | 关闭 `logFile` 句柄（不置空） |
 
 > `LogPath` 为公开字段，暴露实际打开的文件路径，便于在测试或排查时定位。
 
@@ -56,6 +56,10 @@ type LogInlet struct {
 
 - 内嵌 `funnel.Inlet[LogRecord]`，同时持有 `minLevel`（即 `levelOrder[level]` 的数值）。
 - 构造时通过 `NewLogInlet` 把字符串级别映射成 `minLevel`；**不存在的级别字符串**会被替换为 `INFO`（`minLevel = levelOrder["INFO"]`），不会返回错误。
+
+```go
+func NewLogInlet(ch chan<- LogRecord, timeout time.Duration, level string) *LogInlet
+```
 
 ### 级别表 `levelOrder`
 
@@ -79,7 +83,7 @@ var levelOrder = map[string]int{
 
 ```text
 logs/
-└── grow_log(2026-09-01).log
+└── grow_log(2026-09-24).log
 ```
 
 - `BeforeStart` 用 `time.Now().Format("2006-01-02")` 得到日期，拼出 `logs/grow_log(YYYY-MM-DD).log`。
@@ -102,8 +106,8 @@ sequenceDiagram
     Handler->>FS: MkdirAll("logs", 0755)
     Handler->>FS: OpenFile(O_CREATE\|O_WRONLY\|O_APPEND, 0644)
 
-    Caller->>Inlet: StartPlot("harvester", 8)
-    Inlet->>Inlet: log("INFO", "Plot 'harvester' start by 8 tends.")
+    Caller->>Inlet: PlotStart("harvester", 4)
+    Inlet->>Inlet: log("INFO", "Plot 'harvester' start with 4 tenders.")
     Inlet->>Inlet: levelOrder["INFO"] >= minLevel?
     Inlet->>Ch: Inlet.Send(LogRecord{FormatTime, "INFO", ...})
     Ch->>Spout: 通道读出
@@ -140,19 +144,22 @@ func (l *LogInlet) log(level string, message string) {
 
 ## 业务级发送方法
 
-`LogInlet` 在 `log` 之上暴露 7 个业务方法，把常用文案格式固化在 `pkg/persist` 中：
+`LogInlet` 在 `log` 之上暴露 8 个业务方法，把常用文案格式固化在 `pkg/persist` 中：
 
-| 方法 | 级别 | 典型格式 | 触发时机 |
+| 方法 | 级别 | 实际格式 | 触发时机 |
 |------|------|----------|----------|
-| `StartFarm(farmName string)` | `INFO` | `Farm '<name>' start.` | Farm 启动 |
-| `EndFarm(farmName string, useTime float64)` | `INFO` | `Farm '<name>' end. Use <s>s.` | Farm 结束 |
-| `StartPlot(plotName string, numTends int)` | `INFO` | `Plot '<name>' start by <n> tends.` | Plot 启动 |
-| `EndPlot(plotName string, useTime float64, fruitNum, weedNum int)` | `INFO` | `Plot '<name>' end. Use <s>s. <fruit> ripened, <weed> withered.` | Plot 结束 |
-| `SeedRipen(plotName, seedRepr, fruitRepr string, useTime float64, seedID, fruitID int)` | `SUCCESS` | `In '<plot>', Seed <s> ripened. Fruit is <f>. Use <s>s. [<seedID>-><fruitID>*]` | 种子成功 |
-| `SeedWither(plotName, seedRepr string, err error, useTime float64, seedID, weedID int)` | `ERROR` | `In '<plot>', Seed <s> withered: <err>. Use <s>s. [<seedID>-><weedID>*]` | 种子失败 |
-| `SeedReplant(plotName, seedRepr string, attempt int, err error)` | `WARNING` | `In '<plot>', Seed <s> attempt <n> withered: <err>. Replanting...` | 重试中间态 |
+| `FarmStart(farmName string, structureList []string)` | `INFO` | 首行 `Farm '<name>' start. Graph structure:`，随后**逐行**输出 `structureList` 中每个元素 | Farm 启动 |
+| `FarmEnd(farmName string, useTime float64)` | `INFO` | `Farm '<name>' end. Use <s>s.` | Farm 结束 |
+| `PlotStart(plotName string, numTenders int)` | `INFO` | `Plot '<name>' start with <n> tenders.` | Plot 启动 |
+| `PlotEnd(plotName string, useTime float64, fruitNum, weedNum int)` | `INFO` | `Plot '<name>' end. Use <s>s. <fruit> ripened, <weed> withered.` | Plot 结束 |
+| `SeedInput(plotName, seedRepr string, seedID int)` | `DEBUG` | `In '<plot>', Seed <seedRepr> input. [<seedID>*]` | 种子进入 Plot |
+| `SeedRipen(plotName, seedRepr, fruitRepr string, useTime float64, seedID, fruitID int)` | `SUCCESS` | `In '<plot>', Seed <seedRepr> ripened. Fruit is <fruitRepr>. Use <s>s. [<seedID>-><fruitID>*]` | 种子成功 |
+| `SeedWither(plotName, seedRepr string, err error, useTime float64, seedID, weedID int)` | `ERROR` | `In '<plot>', Seed <seedRepr> withered: <err>. Use <s>s. [<seedID>-><weedID>*]` | 种子最终失败 |
+| `SeedReplant(plotName, seedRepr string, attempt int, err error, seedID int)` | `WARNING` | `In '<plot>', Seed <seedRepr> attempt <n> withered: <err>. Replanting. [<seedID>*]` | 重试中间态 |
 
-> 上述方法全部经过 `log(level, ...)`，因此同样受 `minLevel` 过滤。
+> 上述方法全部经过 `log(level, ...)`，因此同样受 `minLevel` 过滤。`FarmStart` 是唯一会一次产生多行输出的方法。
+>
+> `useTime` 由调用方传入（业务侧一般用 `time.Since(start).Seconds()`），本文件不做计时。`seedID` / `fruitID` / `weedID` 是 `runtime.EventClient` 分配的事件 ID。
 
 ## 公开符号清单
 
@@ -162,10 +169,11 @@ func (l *LogInlet) log(level string, message string) {
 | `LogRecordHandler` | 类型 | 消费端 `funnel.RecordHandler[LogRecord]` 实现 |
 | `LogInlet` | 类型 | 生产端（内嵌 `funnel.Inlet[LogRecord]`，含 `minLevel` 过滤） |
 | `NewLogInlet` | 函数 | 构造 `LogInlet`，把字符串级别映射成 `minLevel`；未知级别回落到 `INFO` |
-| `(*LogInlet).StartFarm` | 方法 | `INFO` Farm 启动 |
-| `(*LogInlet).EndFarm` | 方法 | `INFO` Farm 结束 |
-| `(*LogInlet).StartPlot` | 方法 | `INFO` Plot 启动 |
-| `(*LogInlet).EndPlot` | 方法 | `INFO` Plot 结束 |
+| `(*LogInlet).FarmStart` | 方法 | `INFO` Farm 启动 + 图结构逐行输出 |
+| `(*LogInlet).FarmEnd` | 方法 | `INFO` Farm 结束 |
+| `(*LogInlet).PlotStart` | 方法 | `INFO` Plot 启动 |
+| `(*LogInlet).PlotEnd` | 方法 | `INFO` Plot 结束 |
+| `(*LogInlet).SeedInput` | 方法 | `DEBUG` 种子输入 |
 | `(*LogInlet).SeedRipen` | 方法 | `SUCCESS` 种子成熟 |
 | `(*LogInlet).SeedWither` | 方法 | `ERROR` 种子枯萎 |
 | `(*LogInlet).SeedReplant` | 方法 | `WARNING` 重试中间态 |
@@ -180,6 +188,7 @@ func (l *LogInlet) log(level string, message string) {
 package main
 
 import (
+    "context"
     "time"
 
     "github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
@@ -188,37 +197,50 @@ import (
 
 func main() {
     handler := &persist.LogRecordHandler{}
-    spout := funnel.NewSpout[persist.LogRecord](handler, 256, 3*time.Second)
-    if err := spout.Start(); err != nil { panic(err) }
+    spout := funnel.NewSpout[persist.LogRecord](handler, 100, time.Second)
+    if err := spout.Start(); err != nil {
+        panic(err)
+    }
 
-    inlet := persist.NewLogInlet(spout.GetQueue(), 1*time.Second, "INFO")
-    inlet.StartFarm("demo_farm")
-    inlet.StartPlot("harvester", 4)
+    inlet := persist.NewLogInlet(spout.GetQueue(), time.Second, "INFO")
+
+    inlet.FarmStart("demo_farm", []string{"harvester -> packager"})
+    inlet.PlotStart("harvester", 4)
+
+    inlet.SeedInput("harvester", "{v:1}", 1)
     inlet.SeedRipen("harvester", "{v:1}", "{v:2}", 0.12, 1, 2)
-    inlet.SeedWither("harvester", "{v:3}", context.DeadlineExceeded, 0.40, 3, 4)
-    inlet.EndPlot("harvester", 1.23, 1, 1)
-    inlet.EndFarm("demo_farm", 1.40)
 
-    if err := spout.Stop(); err != nil { panic(err) }
+    inlet.SeedInput("harvester", "{v:3}", 3)
+    inlet.SeedReplant("harvester", "{v:3}", 1, context.DeadlineExceeded, 3)
+    inlet.SeedWither("harvester", "{v:3}", context.DeadlineExceeded, 0.40, 3, 4)
+
+    inlet.PlotEnd("harvester", 1.23, 1, 1)
+    inlet.FarmEnd("demo_farm", 1.40)
+
+    if err := spout.Stop(); err != nil {
+        panic(err)
+    }
 }
 ```
 
-运行后 `logs/grow_log(2026-09-01).log` 内容（节选）：
+运行后 `logs/grow_log(2026-09-24).log` 内容（节选，`minLevel = INFO` 时 `SeedInput` 的 DEBUG 行会被过滤掉）：
 
 ```text
-2026-09-01 10:00:00 INFO Farm 'demo_farm' start.
-2026-09-01 10:00:00 INFO Plot 'harvester' start by 4 tends.
-2026-09-01 10:00:00 SUCCESS In 'harvester', Seed {v:1} ripened. Fruit is {v:2}. Use 0.12s. [1->2*]
-2026-09-01 10:00:00 ERROR In 'harvester', Seed {v:3} withered: context deadline exceeded. Use 0.40s. [3->4*]
-2026-09-01 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered.
-2026-09-01 10:00:00 INFO Farm 'demo_farm' end. Use 1.40s.
+2026-09-24 10:00:00 INFO Farm 'demo_farm' start. Graph structure:
+2026-09-24 10:00:00 INFO harvester -> packager
+2026-09-24 10:00:00 INFO Plot 'harvester' start with 4 tenders.
+2026-09-24 10:00:00 SUCCESS In 'harvester', Seed {v:1} ripened. Fruit is {v:2}. Use 0.12s. [1->2*]
+2026-09-24 10:00:00 WARNING In 'harvester', Seed {v:3} attempt 1 withered: context deadline exceeded. Replanting. [3*]
+2026-09-24 10:00:00 ERROR In 'harvester', Seed {v:3} withered: context deadline exceeded. Use 0.40s. [3->4*]
+2026-09-24 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered.
+2026-09-24 10:00:00 INFO Farm 'demo_farm' end. Use 1.40s.
 ```
 
 ## 注意事项
 
-- **级别过滤发生在生产端**：`minLevel` 阈值在 `LogInlet.log` 中判断，未达阈值的日志不会进入通道；调整日志级别会同时关闭上游 `Send` 调用，比依赖 Spout 端过滤更省内存。
-- **未知级别回落到 `INFO`**：`NewLogInlet(ch, d, "VERBOSE")` 不会报错，而是把 `minLevel` 设为 `levelOrder["INFO"]`；若想完全静默请直接传 `"CRITICAL"+1`（但目前没有显式 `OFF` 常量）。
+- **级别过滤发生在生产端**：`minLevel` 阈值在 `LogInlet.log` 中判断，未达阈值的日志不会进入通道；调整日志级别会同时关闭上游 `Send` 调用，比依赖 Spout 端过滤更省内存。默认构造（`"INFO"`）会丢弃 `SeedInput` 这类 `DEBUG` 日志。
+- **未知级别回落到 `INFO`**：`NewLogInlet(ch, d, "VERBOSE")` 不会报错，而是把 `minLevel` 设为 `levelOrder["INFO"]`。注意 `log` 内部直接读 `levelOrder[level]`，未登记的级别会取 map 零值 `0`，从而被当作最低优先级（`minLevel > 0` 时被丢弃）——业务代码应只使用上表中的 7 个级别名。
 - **没有显式轮转**：跨日期会自然切换文件；如需按体积轮转，需要在 `LogRecordHandler` 之外自行实现（当前未提供）。
 - **没有并发写保护**：`LogRecordHandler` 假设 `HandleRecord` 由 `Spout` 单 goroutine 串行调用；如果绕开 `Spout` 自行多 goroutine 写入同一 `LogRecordHandler`，`os.File.WriteString` 仍由 OS 原子化（≤ `PIPE_BUF`），但行与行之间没有显式锁，极端情况下会交错。
 - **日志目录权限 `0755`**：与 `lifecycles/<date>/` 风格一致；多用户主机上需要收紧权限时请在外层封装 `BeforeStart`。
-- **错误传播只来自 `HandleRecord` / `BeforeStart` / `AfterStop`**：`LogInlet` 自身**不**返回错误；如果 `Send` 在超时后失败，错误会被 `funnel.Inlet` 静默返回给调用方；当前业务级方法（`StartFarm` 等）都直接丢弃 `l.Send` 的返回值。
+- **错误传播只来自 `HandleRecord` / `BeforeStart` / `AfterStop`**：`LogInlet` 自身**不**返回错误；`Send` 在超时后失败时错误由 `funnel.Inlet` 记录，而当前业务级方法（`FarmStart` 等）都直接丢弃 `l.Send` 的返回值。

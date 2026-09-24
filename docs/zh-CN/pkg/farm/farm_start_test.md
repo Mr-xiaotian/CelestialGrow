@@ -1,6 +1,6 @@
 # pkg/farm/farm_start_test.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -14,7 +14,7 @@
 
 ### `TestFarmRunLinear`
 
-- 创建 `root`（`seed * 2`，`WithTends(2)`）和 `head`（收集 seed，`WithTends(2)`）。
+- 创建 `root`（`seed * 2`，`WithTenders(2)`）和 `head`（收集 seed，`WithTenders(2)`）。
 - `Connect(root → head)`。
 - `Run` 时给 `root` 注入 `{1, 2, 3}`。
 - 期望：
@@ -31,7 +31,7 @@
 ## 关联源码
 
 - `pkg/farm/farm.go` 的 `Run` 流程
-- `pkg/plot/plot.go` 的 `Seed` / `Seal` / `sprout` / `tend`
+- `pkg/plot/plot_base.go` 的 `Seed` / `Seal` / `sprout` / `tend`
 - `pkg/plot/constant.go` 中 `sourceInput = "__input__"`
 
 ## 运行方式

@@ -1,6 +1,6 @@
 # pkg/observer/progress.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -24,7 +24,7 @@ type ProgressBar struct {
 | `bar` | 延迟创建的 `progressbar.ProgressBar` 实例；首次 `OnStart` / `OnProgress` / `OnFinish` 拿到非零 `total` 后才真正构造 |
 | `mu` | 保护 `bar` 字段与 `bar.Set` / `bar.Finish` 调用的互斥锁，确保并发安全 |
 
-`ProgressBar` 自身并未导出，因此只能通过 `NewProgressBar` 构造，通过 `Observer` 接口使用。
+`ProgressBar` 是导出类型（可从 `pkg/api` 通过 `api.NewProgressBar` 获得），但字段 `description` / `bar` / `mu` 均未导出，因此只能通过 `NewProgressBar` 构造；它实现了 `observer.Observer`，可直接传给任何 Plot 节点的 `AddObserver`。
 
 ### `NewProgressBar` 构造
 
@@ -61,14 +61,14 @@ func (p *ProgressBar) ensureBar(total int) {
 | `OptionSetDescription(p.description)` | 设置进度条前缀描述，使用 `NewProgressBar` 传入的字符串 |
 | `OptionSetWriter(os.Stderr)` | 输出目标为 `os.Stderr`，避免与 stdout 业务输出冲突 |
 | `OptionSetWidth(10)` | 进度条字符宽度 10 |
-| `OptionShowTotalBytes(true)` | 同时按字节风格显示总量（与 `OptionSetWidth(10)` 组合成总长度） |
+| `OptionShowTotalBytes(true)` | 以字节单位展示总量 |
 | `OptionThrottle(time.Millisecond)` | 渲染节流为 1ms，避免高并发 `Set` 时刷屏 |
 | `OptionShowCount()` | 显示当前计数 |
 | `OptionShowIts()` | 显示迭代次数（每秒刷新率） |
 | `OptionOnCompletion(...)` | 完成时输出一个换行符 |
 | `OptionSpinnerType(14)` | 使用第 14 号 spinner 动画 |
 | `OptionFullWidth()` | 让进度条铺满终端宽度（与固定 width 配合时由库决定） |
-| `OptionSetRenderBlankState(true)` | 允许在 `total == 0` 状态下渲染空白占位 |
+| `OptionSetRenderBlankState(true)` | 允许在 `total == 0` 时渲染空白占位；因 `ensureBar` 在 `total == 0` 时根本不创建 `bar`，该选项当前无实际效果（仅在 `total > 0` 后的首帧生效） |
 
 颜色方案由 `schollz/progressbar/v3` 的默认主题提供，未通过 `OptionSetTheme` 自定义；如需更换颜色，需要在 `ensureBar` 中追加 `progressbar.OptionSetTheme(...)` 调用。
 
@@ -97,14 +97,14 @@ func (p *ProgressBar) OnFinish(completed, total int) {
 }
 ```
 
-- `OnStart`：仅确保 `bar` 已被创建；`completed` 信息此时还没意义。
+- `OnStart`：仅确保 `bar` 已创建（仅当 `total > 0` 时），不推进进度；该方法只接收 `total`，没有 `completed` 参数。
 - `OnProgress`：把 `completed` 写入 `bar`，由 `progressbar/v3` 内部重绘。
 - `OnFinish`：强制把 `bar` 推满到 `total`（即使最新 `completed < total`），再调用 `Finish()` 标记收尾，触发 `OptionOnCompletion` 写出换行。
 - 所有 `bar.Set` / `bar.Finish` 返回的错误都被显式 `_ =` 忽略，遵循 `progressbar/v3` 在标准流关闭时返回 io 错误的常见模式，避免噪音日志。
 
 ## 使用示例
 
-与 `pkg/plot` 配合的标准写法：
+直接配合 `pkg/plot`：
 
 ```go
 package main
@@ -133,6 +133,15 @@ func main() {
 }
 ```
 
+业务代码通常只需导入 `pkg/api`——`api.NewProgressBar` 返回 `*observer.ProgressBar`，`api.Plot` 是 `plot.Plot` 的类型别名，所以 `AddObserver` 同样可用：
+
+```go
+import "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+
+p := api.NewPlot[Seed, Fruit]("harvester", cultivate)
+p.AddObserver(api.NewProgressBar("harvesting"))
+```
+
 运行后 `os.Stderr` 会出现类似：
 
 ```
@@ -142,7 +151,7 @@ harvesting |█████████-| 1,000/1,000 [100%] 2.5s
 ## 注意事项
 
 - **输出介质固定为 `os.Stderr`**：通过 `OptionSetWriter` 显式设定，调用方若把 stderr 重定向到 `/dev/null`，进度条将不可见但不会影响 Plot 正常运行。
-- **宽度由 `OptionFullWidth` 决定**：实际显示宽度受 `OptionSetWidth(10)` 与终端列数共同影响；如需在窄终端显示，建议替换为固定 `OptionSetWidth` 而非 `OptionFullWidth`。
-- **重入安全**：`bar` 一旦创建就只被替换为非空指针；并发触发 `OnStart` / `OnProgress` / `OnFinish` 由 `mu` 串行化，不会出现 race。
+- **宽度同时受两个选项影响**：`ensureBar` 同时传入 `OptionSetWidth(10)` 与 `OptionFullWidth()`，实际渲染宽度由库结合终端列数决定；如需在窄终端获得稳定宽度，应移除 `OptionFullWidth()` 而保留固定 `OptionSetWidth`。
+- **重入安全**：`bar` 最多被赋值一次（`ensureBar` 在 `p.bar != nil` 时直接返回），并发触发 `OnStart` / `OnProgress` / `OnFinish` 由 `mu` 串行化，不会出现 race。
 - **错误忽略**：`bar.Set` / `bar.Finish` 的 `error` 被显式丢弃，符合终端 UI 场景下「绘制失败不应影响主流程」的惯例。
 - **不可重用**：`ProgressBar` 与单个 Plot 生命周期绑定，没有 `Reset` / `ResetTotal` 方法；如需在另一批任务中复用，请重新 `NewProgressBar`。

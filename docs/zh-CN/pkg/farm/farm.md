@@ -1,6 +1,6 @@
 # pkg/farm/farm.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -9,6 +9,7 @@
 - 节点注册与名称唯一性校验
 - 组到组（hyper-edge）式的全连接建立
 - 全局日志 / 生命周期 spout 启动与 inlet 绑定
+- 运行前渲染图结构（`getStructureList` → `RenderStructureList`）写入 farm 启动日志
 - 统一的 source 节点探测、初始种子注入与 seal
 - 等待所有 plot 完成并清理 spout
 
@@ -42,25 +43,26 @@ type Farm struct {
 | `*OrderGraph` | 嵌入的有向图，记录 plot 间的连边，用于拓扑与 SCC 分析 |
 | `eventClient` | 共享的运行时事件客户端，通过 `AddPlot` 注入到每个 plot |
 | `logSpout` / `lifecycleSpout` | 全局的日志 / 生命周期消息 spout，`Run` 时统一启动 |
-| `logInlet` / `lifecycleInlet` | farm 侧的 inlet 句柄，仅用于 `StartFarm` / `EndFarm` 包级日志 |
+| `logInlet` / `lifecycleInlet` | farm 侧的 inlet 句柄，仅用于 `FarmStart`（含图结构）/ `FarmEnd` 包级日志 |
 
 ### `PlotNode` 接口契约
 
-`Farm` 通过 `plot.PlotNode` 接口与具体 `Plot[S, F]` 解耦。`Farm` 调用以下方法：
+`Farm` 通过 `plot.PlotNode` 接口与具体 `Plot[S, F]` 解耦。该接口定义在 `pkg/plot/plot_base.go`，`Farm` 调用以下方法：
 
 | 方法 | 用途 |
 | --- | --- |
 | `GetName() string` | 唯一标识与连边匹配 |
-| `GetYieldCounter() *atomic.Int64` | 把上游 yield 计数器登记到下游用于种子同步 |
-| `ConnectTo(next PlotNode) error` | 真正建立下游 seed 通道；类型不匹配时返回 error |
-| `AddUpstream(name, yieldCounter)` | 登记上游名 + 计数器，用于 seal 聚合 |
-| `SetEventClient(runtime.EventClient)` | `AddPlot` 时统一注入同一事件客户端 |
+| `GetState() int32` | 读取节点状态（`0=idle` / `1=running` / `2=done`） |
+| `GetSeedChanAny() any` | 以 `any` 暴露 `seedChan`，供上游 `ConnectTo` 做类型断言 |
+| `ConnectTo(next PlotNode) error` | 校验类型兼容，登记下游 yield 通道，并双向接线 yield 计数器；类型不匹配时返回 error |
+| `SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)` | 登记上游名 + yield 计数器，用于 `GetSeedNum` 聚合与 seal 等待 |
 | `BindInlet(logChan, lifecycleChan)` | `Run` 时绑定全局 spout 通道 |
+| `SetEventClient(runtime.EventClient)` | `AddPlot` 时统一注入同一事件客户端 |
 | `StartAsync()` / `WaitAsync()` | 异步生命周期控制 |
 | `SeedAny(seed any) error` | `Run` 时按 `inputs` 注入初始种子 |
 | `Seal()` | `Run` 时向每个 source 发送 `SignalSeal` |
 
-接口实现细节参见 `pkg/plot` 文档。
+> yield 计数器的双向接线已内聚在 `ConnectTo` 中（上游写 `downstreamYields`、下游写 `upstreamYields`），`Farm.Connect` 不再单独登记。接口与实现的细节参见 `pkg/plot` 文档。
 
 ## 公开符号
 
@@ -105,7 +107,7 @@ sequenceDiagram
     F->>F: requireRegistered(tos)
     loop from × to 笛卡尔积
         F->>P: from.ConnectTo(to)
-        F->>P: to.AddUpstream(from, yieldCounter)
+        Note over P: 登记 yieldChans +<br/>双向 yield 计数器
         F->>G: AddEdge(from, to)
     end
 
@@ -113,7 +115,7 @@ sequenceDiagram
     F->>F: validateRunInputs(inputs)
     F->>G: SourceNodes(OrderGraph) → sourceNodes
     F->>S: logSpout.Start() / lifecycleSpout.Start()
-    F->>F: logInlet.StartFarm(name)
+    F->>F: logInlet.FarmStart(name, structureList)
     loop 每个 plot
         F->>P: BindInlet(logSpout, lifecycleSpout)
     end
@@ -129,7 +131,7 @@ sequenceDiagram
     loop 每个 plot
         F->>P: WaitAsync()
     end
-    F->>F: logInlet.EndFarm(name, duration)
+    F->>F: logInlet.FarmEnd(name, duration)
     F->>S: lifecycleSpout.Stop() / logSpout.Stop()
 ```
 
@@ -147,7 +149,7 @@ sequenceDiagram
 - 任意 plot 未注册到 farm → `plot %q is not registered in farm`
 - 某对 `from → to` 在 `from.ConnectTo(to)` 阶段类型断言失败 → 透传 `plot.ConnectTo` 的错误
 
-> ⚠️ **部分失败不撤销**：`Connect` 在内层循环中一旦失败立即返回。已成功建立的连接（`ConnectTo` 内部已写入下游 `fruitChans`、图已 `AddEdge`）会保留下来，后续再次 `Connect` 时图层面会因重复边被忽略，但 `PlotNode` 内部的 `fruitChans` 会保留旧映射。如需重启，请新建 `Farm`。
+> ⚠️ **部分失败不撤销**：`Connect` 在内层循环中一旦失败立即返回。已成功建立的连接（`ConnectTo` 内部已写入上游 `yieldChans` 并双向登记 yield 计数器，图已 `AddEdge`）会保留下来；后续再次 `Connect` 时图层面会因重复边被忽略，但 `PlotNode` 内部的 `yieldChans` 会保留旧映射。如需重启，请新建 `Farm`。
 
 ### `Run` 错误返回点
 
@@ -177,9 +179,15 @@ farm.Connect([]plot.PlotNode{root}, []plot.PlotNode{midA, midB})
 - `StartAsync` 内部使用 `sync.WaitGroup.Go`（Go 1.25 新写法）启动每个 plot 的 `sprout` 调度器。
 - 全局 `logSpout` / `lifecycleSpout` 容量均为 100，flush 间隔 `1s`，由 `Run` 末尾 `defer` 顺序停止。
 
+### 图结构渲染
+
+`Run` 在写启动日志前调用 `getStructureList()`：它把 `Nodes()`、`OutEdges()` 与本次算出的 `sourceNodes` 交给 `RenderStructureList`，渲染成带边框的树形文本行列表，再交给 `logInlet.FarmStart` 逐行输出。渲染规则与算法详见 [`render.md`](./render.md)。
+
+> `sourceNodes` 在 `Run` 中先于 `logInlet.FarmStart` 计算，因此渲染出的结构与实际 seal 的节点集合一致。
+
 ### 与 `pkg/persist` 的协作
 
-`Farm` 在 `Run` 期间通过 `logInlet.StartFarm(name)` / `EndFarm(name, duration)` 写「farm 级别」的运行摘要；每个 plot 仍由 `Plot` 自身通过 `BindInlet` 拿到的 inlet 写各自的 `StartPlot` / `EndPlot` / `SeedRipen` / `SeedWither` / `SeedIn` / `SeedSuccess` / `SeedFailed` 记录。
+`Farm` 在 `Run` 期间通过 `logInlet.FarmStart(name, structureList)` / `FarmEnd(name, duration)` 写「farm 级别」的运行摘要，其中 `structureList` 即上一节的渲染结果；每个 plot 仍由 `Plot` 自身通过 `BindInlet` 拿到的 inlet 写各自的 `PlotStart` / `PlotEnd` / `SeedInput` / `SeedRipen` / `SeedWither` / `SeedReplant` 记录。
 
 ### 与 `pkg/runtime` 的协作
 
@@ -202,7 +210,7 @@ import (
 func main() {
     double := plot.NewPlot("double", func(seed int) (int, error) {
         return seed * 2, nil
-    }, plot.WithTends(2))
+    }, plot.WithTenders(2))
 
     format := plot.NewPlot("format", func(seed int) (string, error) {
         return fmt.Sprintf("result=%d", seed), nil
@@ -226,7 +234,7 @@ func main() {
 
 ## 注意事项
 
-- **测试覆盖**：`pkg/farm` 下的 `farm_connect_test.go`、`farm_start_test.go`、`farm_structure_test.go` 共同覆盖了注册、连接（含类型不匹配 / 超边 / 重复名）、`Run` 线性流、`121` / `21-fanin` / 多个连通分量等拓扑形态。详情见各自测试说明文档。
+- **测试覆盖**：`pkg/farm` 下的 `farm_connect_test.go`、`farm_start_test.go`、`farm_structure_test.go`、`farm_route_test.go`、`farm_split_test.go`、`graph_test.go`、`render_test.go` 共同覆盖了注册、连接（含类型不匹配 / 超边 / 重复名）、`Run` 线性流、`121` / `21-fanin` / 多个连通分量、`RoutePlot` 定向路由、`SplitPlot` 拆分、图算法与结构渲染等场景。详情见各自测试说明文档。
 - **图与节点的同步**：`OrderGraph` 节点集与 `f.plots` 并不强等价——`AddNode` 也会在 `Connect` 中因 `AddEdge` 自动补全。`Run` 中的 `SourceNodes` 使用的是 `OrderGraph` 视图，因此孤立 plot（未连边但已 `AddPlot`）也会被当作 source 收到 `Seal()`。
 - **不可重入**：`Run` 没有并发保护；同一 `Farm` 实例不支持并发执行多次 `Run`，也不支持在 `Run` 进行中再 `AddPlot` / `Connect`。
 - **错误恢复**：`Run` 失败后部分 plot 可能已经启动；如需重跑请新建 `Farm` 实例。

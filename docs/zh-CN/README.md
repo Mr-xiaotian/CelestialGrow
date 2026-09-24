@@ -1,6 +1,6 @@
 # CelestialGrow
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Go-00ADD8">
@@ -12,7 +12,7 @@
 
 它把任务处理拆成两个层次：
 
-- **Plot**: 泛型并发处理节点，负责消费 seed、执行 cultivator、产出 fruit
+- **Plot**: 泛型并发处理节点，负责消费 seed、执行 cultivator、产出 fruit（含 `Plot`、`SplitPlot`、`RoutePlot` 三种语义）
 - **Farm**: 由多个 Plot 组成的静态有向图，负责注册、连接、启动与全局调度
 
 除了执行编排本身，CelestialGrow 还内置了：
@@ -51,7 +51,7 @@ CelestialGrow 的核心数据流可以概括为：
 1. 外部输入 seed
 2. Plot 并发执行 cultivator
 3. 成功时产出 fruit 并转发给下游 Plot
-4. 失败时记录 weed / error 生命周期
+4. 失败时发出 weed 事件，并把生命周期状态推进为 wither
 5. 全流程写入日志与生命周期 SQLite
 
 ## 快速开始（Quick Start）
@@ -81,9 +81,10 @@ func addOne(num int) (int, error) {
 	return num + 1, nil
 }
 
+// main 演示一条 Farm 流水线：root 将种子翻倍后传给 head 加一。
 func main() {
-	root := grow.NewPlot("root", double, grow.WithTends(2))
-	head := grow.NewPlot("head", addOne, grow.WithTends(2))
+	root := grow.NewPlot("root", double, grow.WithTenders(2))
+	head := grow.NewPlot("head", addOne, grow.WithTenders(2))
 
 	farm := grow.NewFarm("demo_farm", "INFO")
 	if err := farm.AddPlot(root, head); err != nil {
@@ -119,7 +120,7 @@ import (
 func main() {
 	plot := grow.NewPlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
-	}, grow.WithTends(4))
+	}, grow.WithTenders(4))
 
 	plot.AddObserver(grow.NewProgressBar("double"))
 	plot.Run([]int{1, 2, 3, 4, 5})
@@ -130,16 +131,16 @@ func main() {
 	}
 
 	for _, record := range records {
-		fmt.Println(record.TaskJSON, record.Status, record.ResultJSON)
+		fmt.Println(record.SeedJSON, record.Status, record.FruitJSON)
 	}
 }
 ```
 
 ## 核心能力（Core Features）
 
-- **泛型 Plot 节点**：`Plot[S, F]` 明确表达输入 seed 类型与输出 fruit 类型
+- **泛型 Plot 节点**：`Plot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]` 明确表达输入 seed 类型与输出 fruit 类型
 - **类型安全连接**：上游 `F` 与下游 `S` 不匹配时，`Connect` 会直接报错
-- **并发培育模型**：通过 `WithTends` 控制并发工作协程数
+- **并发培育模型**：通过 `WithTenders` 控制并发照料协程（tender）数
 - **失败重试机制**：支持 `WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`
 - **图级调度**：`Farm` 统一管理节点注册、连边、源节点 seal 与整体运行
 - **生命周期持久化**：默认将事件图和状态快照写入 SQLite
@@ -147,9 +148,9 @@ func main() {
 
 ## 包说明（Packages）
 
-- `pkg/api`: 对外统一入口，封装 `Farm`、`Plot`、`PlotNode` 以及常用配置项
-- `pkg/farm`: 图结构、节点注册、连边与整体调度
-- `pkg/plot`: 泛型任务节点、并发执行、重试、上下游数据传播
+- `pkg/api`: 对外统一入口，封装 `Farm`、`Plot`、`SplitPlot`、`RoutePlot`、`PlotNode` 以及常用配置项
+- `pkg/farm`: 图结构、节点注册、连边、结构渲染与整体调度
+- `pkg/plot`: 泛型任务节点（`Plot`/`SplitPlot`/`RoutePlot`）、并发执行、重试、上下游数据传播
 - `pkg/observer`: 观察器接口与终端进度条实现
 - `pkg/persist`: 日志与生命周期 SQLite 持久化
 - `pkg/funnel`: 通用异步记录生产/消费基础设施
@@ -165,7 +166,7 @@ func main() {
 4. 调用 `farm.Connect(...)` 建立上下游关系
 5. 调用 `farm.Run(...)` 注入初始输入并执行
 
-其中 `Farm.Connect` 使用的是"组到组的全连接"语义，也就是源组与目标组之间建立笛卡尔积式连接。
+其中 `Farm.Connect` 使用的是"组到组的全连接"语义，也就是源组与目标组之间建立笛卡尔积式连接。如果需要一个 seed 派生多个下游任务，可以改用 `api.NewSplitPlot(...)`（一拆多）或 `api.NewRoutePlot(...)`（按名称定向转发）。
 
 ## 文件结构（File Structure）
 
@@ -178,6 +179,8 @@ pkg/
   persist/   # 日志与生命周期持久化
   plot/      # 泛型并发节点
   runtime/   # 事件、信号与运行时载体
+
+demo/        # 示例程序
 ```
 
 ## 环境要求（Requirements）
@@ -215,20 +218,29 @@ go test ./pkg/...
 
 - [`docs/zh-CN/pkg/farm/farm.md`](./pkg/farm/farm.md) — Farm 调度器
 - [`docs/zh-CN/pkg/farm/graph.md`](./pkg/farm/graph.md) — 拓扑图（OrderGraph）
+- [`docs/zh-CN/pkg/farm/render.md`](./pkg/farm/render.md) — 图结构文本渲染（RenderStructureList）
 - [`docs/zh-CN/pkg/farm/farm_structure_test.md`](./pkg/farm/farm_structure_test.md) — Farm 结构测试重点
 - [`docs/zh-CN/pkg/farm/farm_connect_test.md`](./pkg/farm/farm_connect_test.md) — Farm Connect 测试重点
 - [`docs/zh-CN/pkg/farm/farm_start_test.md`](./pkg/farm/farm_start_test.md) — Farm Start 测试重点
+- [`docs/zh-CN/pkg/farm/farm_split_test.md`](./pkg/farm/farm_split_test.md) — Farm SplitPlot 端到端测试重点
+- [`docs/zh-CN/pkg/farm/farm_route_test.md`](./pkg/farm/farm_route_test.md) — Farm RoutePlot 端到端测试重点
 - [`docs/zh-CN/pkg/farm/graph_test.md`](./pkg/farm/graph_test.md) — OrderGraph 测试重点
+- [`docs/zh-CN/pkg/farm/render_test.md`](./pkg/farm/render_test.md) — 图结构渲染测试重点
 
 ### pkg/plot
 
 - [`docs/zh-CN/pkg/plot/plot.md`](./pkg/plot/plot.md) — 泛型 Plot 节点
+- [`docs/zh-CN/pkg/plot/plot_base.md`](./pkg/plot/plot_base.md) — 共享运行骨架（PlotNode / basePlot）
+- [`docs/zh-CN/pkg/plot/plot_split.md`](./pkg/plot/plot_split.md) — 一拆多节点（SplitPlot）
+- [`docs/zh-CN/pkg/plot/plot_route.md`](./pkg/plot/plot_route.md) — 定向转发节点（RoutePlot）
 - [`docs/zh-CN/pkg/plot/option.md`](./pkg/plot/option.md) — Plot 可选配置（Option）
 - [`docs/zh-CN/pkg/plot/constant.md`](./pkg/plot/constant.md) — Plot 常量与信号定义
 - [`docs/zh-CN/pkg/plot/counter.md`](./pkg/plot/counter.md) — Plot 计数器与同步原语
 - [`docs/zh-CN/pkg/plot/helper.md`](./pkg/plot/helper.md) — Plot 内部辅助函数
 - [`docs/zh-CN/pkg/plot/plot_harvest_test.md`](./pkg/plot/plot_harvest_test.md) — Plot Harvest 测试重点
 - [`docs/zh-CN/pkg/plot/plot_retry_test.md`](./pkg/plot/plot_retry_test.md) — Plot 重试测试重点
+- [`docs/zh-CN/pkg/plot/plot_split_test.md`](./pkg/plot/plot_split_test.md) — SplitPlot 测试重点
+- [`docs/zh-CN/pkg/plot/plot_route_test.md`](./pkg/plot/plot_route_test.md) — RoutePlot 测试重点
 
 ### pkg/observer
 

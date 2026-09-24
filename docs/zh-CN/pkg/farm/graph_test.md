@@ -1,6 +1,6 @@
 # pkg/farm/graph_test.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -13,8 +13,8 @@
 - 创建 `OrderGraph`；先 `AddNode("isolated")`，再 `AddEdge("a", "b")`、`AddEdge("a", "c")`，并重复一次 `AddEdge("a", "b")`。
 - 期望：
   - `HasNode("isolated") == true`
-  - `Nodes() == ["isolated", "a", "b", "c"]`（按插入顺序）
-  - `Successors("a") == ["b", "c"]`（重复边被忽略）
+  - `Nodes()` 排序后为 `["a", "b", "c", "isolated"]`（节点集合顺序不保证，测试先 `sort.Strings`）
+  - `Successors("a") == ["b", "c"]`（重复边被忽略，顺序即插入顺序）
   - `Predecessors("b") == ["a"]`
 
 ### `TestGraphAlgorithms_TopoSortAndLevels`
@@ -40,7 +40,7 @@
 
 - **canonicalizeSCCs 辅助函数**：测试中通过该函数对 `SCC` 切片做「内部排序 + 整体排序」，避免依赖 `TarjanSCC` 内部实现细节导致脆弱断言。
 - **凝聚图节点命名**：`GetCondensation` 将 SCC 命名为 `scc_0, scc_1, ...`；测试通过 `fmt.Sprintf("scc_%d", mapping["a"])` 拼出对应名字，保证对 `mapping` 的间接断言。
-- **稳定顺序断言**：`TestOrderGraph_BasicOperations` 与 `TestGraphAlgorithms_TopoSortAndLevels` 都显式依赖 `AddNode` / `AddEdge` 顺序，这是 `OrderGraph` 的核心保证。
+- **顺序断言**：`TestOrderGraph_BasicOperations` 对 `Nodes()` 先排序再比较，只依赖 `Successors` / `Predecessors` 的**邻接表插入顺序**这一核心保证；`TestGraphAlgorithms_TopoSortAndLevels` 的菱形图只有一个零入度源节点，因此 `TopoSort` 结果确定（多源图上同层候选顺序不保证）。
 
 ## 关联源码
 

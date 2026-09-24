@@ -1,13 +1,13 @@
 # pkg/plot/helper.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
-`helper.go` 是 `plot` 包内的私有工具函数集合，目前只提供一个字符串截断函数 `trunc`，专门用于在写日志前把 seed / fruit 的字符串表示压缩成较短的形式，避免日志行过长。
+`helper.go` 是 `plot` 包内的私有工具函数集合，目前只提供一个字符串截断函数 `trunc`，专门用于在写日志前把 seed / fruit / yield 的字符串表示压缩成较短的形式，避免日志行过长。
 
 ## 作用
 
 - 提供「保留首尾各 1/3、中间用 `...` 替代」的字符串截断能力；
-- 供 `Plot.bearFruit` / `Plot.bearWeed` / `Plot.tend` 在调用 `logInlet.*` 之前，把 `fmt.Sprintf("%+v", value)` 结果压短。
+- 供 `basePlot` 与三种节点在调用 `logInlet.*` 之前，把 `fmt.Sprintf("%+v", value)` 的结果压短。
 
 ## 公开符号
 
@@ -22,15 +22,15 @@
 
 ```go
 func trunc(s string, maxLen int) string {
-    runes := []rune(s)
-    if len(runes) <= maxLen {
-        return s
-    }
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
 
-    segmentLen := max(1, maxLen/3)
-    headStr := string(runes[:segmentLen])
-    tailStr := string(runes[len(runes)-segmentLen:])
-    return headStr + "..." + tailStr
+	segmentLen := max(1, maxLen/3)
+	headStr := string(runes[:segmentLen])
+	tailStr := string(runes[len(runes)-segmentLen:])
+	return headStr + "..." + tailStr
 }
 ```
 
@@ -51,11 +51,18 @@ func trunc(s string, maxLen int) string {
 
 ## 在 `plot` 包内的使用点
 
+当前 `trunc` 的调用点分布在 `basePlot` 骨架与三种节点的成功/失败路径上，按所在的日志语义分组如下：
+
 | 位置 | 调用 | 效果 |
 |------|------|------|
-| `Plot.tend` | `trunc(fmt.Sprintf("%+v", seedPayload.Value), 50)` | 把 seed 字符串表示压到 ≤ 50 rune，用作 `SeedReplant` 日志 |
-| `Plot.bearFruit` | `trunc(fmt.Sprintf("%+v", seed), 50)`、`trunc(fmt.Sprintf("%+v", fruit), 25)` | seed ≤ 50、fruit ≤ 25，用于 `SeedRipen` 日志 |
-| `Plot.bearWeed` | `trunc(seedString, 50)` | seed ≤ 50，用于 `SeedWither` 日志 |
+| `basePlot.tend` | `trunc(fmt.Sprintf("%+v", seedPayload.Value), 50)` | seed ≤ 50，用于 `SeedReplant` 日志 |
+| `basePlot.witherSeed` | `trunc(seedString, 50)` | seed ≤ 50，用于 `SeedWither` 日志 |
+| `basePlot.Seed` | `trunc(fmt.Sprintf("%+v", seed), 50)` | 本地播入的 seed ≤ 50，用于 `SeedInput` 日志 |
+| `Plot.ripenSeed` | seed ≤ 50、fruit ≤ 25 | 用于 `SeedRipen` 日志；fruit 是**单个** `F` |
+| `SplitPlot.ripenSeed` | seed ≤ 50、`[]F` ≤ 25；每个元素 ≤ 50 | 结果切片用于 `SeedRipen`，单个元素用于下游的 `SeedInput` |
+| `RoutePlot.ripenSeed` | seed ≤ 50、路由表 ≤ 25；单个 yield ≤ 50 | 路由表用于 `SeedRipen`，单个 yield 用于下游的 `SeedInput` |
+
+> 「结果」统一用 25 rune（可能很长，只需辨识），「seed / 单个 yield」统一用 50 rune（辨识度更重要），这是包内约定俗成的分工。
 
 > 日志在 SQLite 中是文本字段；通过 `trunc` 控制每条日志长度既能保留关键首尾信息，又避免大对象（如 `[]byte`、长字符串）撑爆日志文件。
 
@@ -64,3 +71,4 @@ func trunc(s string, maxLen int) string {
 - `trunc` 是未导出函数，外部包**无法**直接调用；如需截断字符串，请自行实现或复用 `pkg/persist` 内已封装的处理。
 - `trunc` 不会在结果中保留「完整原长」信息；如果调试时需要完整内容，建议在测试或开发模式下绕过该函数（例如自定义 inlet / 日志 handler）。
 - 当原始字符串 `len(runes) <= maxLen` 时函数**不会**返回 `s + "..."`，而是原样返回——这意味着当恰好等于 `maxLen` 时也不会带省略号。
+- 生命周期记录（`LifecycleRecord.SeedJSON` / `FruitJSON`）**不经过** `trunc`，始终保存完整 JSON；截断只发生在日志路径。

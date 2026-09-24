@@ -1,6 +1,6 @@
 # pkg/farm/farm_connect_test.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -19,13 +19,13 @@
 
 - `TestFarmAddPlot` 同时校验 `GetPlot` 拿到的指针与原 `plot` 一致——`Farm.plots` 是按指针保存的，不做值拷贝。
 - `TestFarmConnectHyperEdge` 中重复出现的 `targetA` 不会导致 `source → targetA` 被建两次：内部 `uniquePlots` 在调用 `Connect` 之前完成去重。
-- `TestFarmConnectTypeMismatch` 中上下游 `Plot[S, F]` 的 `F` 与 `S` 不同，`ConnectTo` 内的 `.(chan runtime.Payload[F])` 类型断言失败，因此 `Connect` 整体返回 error，且 `OrderGraph` 中不会留下 `AddEdge` 记录。
+- `TestFarmConnectTypeMismatch` 中上下游 `Plot[S, F]` 的 `F` 与 `S` 不同，`ConnectTo` 内对 `next.GetSeedChanAny()` 的 `.(chan runtime.Payload[Y])` 类型断言失败，因此 `Connect` 整体返回 error，且 `OrderGraph` 中不会留下 `AddEdge` 记录。
 
 ## 关联源码
 
 - `AddPlot` 错误返回：`pkg/farm/farm.go` 中的 `AddPlot` / `requireRegistered`
 - `Connect` 错误返回：`pkg/farm/farm.go` 中的 `Connect` / `uniquePlots` / `requireRegistered`
-- 类型断言：`pkg/plot/plot.go` 中的 `Plot.ConnectTo`
+- 类型断言：`pkg/plot/plot_base.go` 中的 `basePlot.ConnectTo`
 
 ## 运行方式
 

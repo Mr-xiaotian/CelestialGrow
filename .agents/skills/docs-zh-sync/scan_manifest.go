@@ -1,16 +1,20 @@
 // CelestialGrow 项目 docs-zh-sync 扫描脚本（Go 版本）。
 //
-// 与原 Python 版本的差异：
+// 与通用框架 scan_manifest.py 的差异：
 //   - 仅使用 Go 标准库，编译/运行无需 Python 解释器
 //   - 代码后缀固定为 .go（含 *_test.go），后缀映射 .go -> .md
 //   - 排除 .git、logs、lifecycles 等目录
-//   - CLI 与 Python 版本保持一致
+//   - CLI 保持一致：--project-root / --pairs / --top-level / --format / --output / --rename-threshold
+//
+// 输出四表：exists（审计内容一致性）/ missing（需新建）/ orphans（需移动或删除）/
+// overviews（无 1:1 源码的总览文档，保留、勿删、不套用 H1 规范）。
 //
 // 用法：
 //
 //	go run .agents/skills/docs-zh-sync/scan_manifest.go \
 //	    --project-root . \
-//	    --pairs "pkg/api:docs/zh-CN/pkg/api pkg/farm:docs/zh-CN/pkg/farm"
+//	    --pairs "pkg/api:docs/zh-CN/pkg/api pkg/farm:docs/zh-CN/pkg/farm" \
+//	    --top-level docs/zh-CN --output tmp_manifest.md
 //
 //	go run .agents/skills/docs-zh-sync/scan_manifest.go \
 //	    --project-root . --top-level docs/zh-CN --format json
@@ -41,8 +45,10 @@ var excludeDirNames = map[string]bool{
 
 var suffixMap = map[string]string{".go": ".md"}
 
-const initPairCode = "__init__.go"
-const initPairDoc = "__init__.md"
+// overviewDocNames 是无 1:1 源码的总览文档：保留、勿删，也不套用 H1 规范。
+// 镜像目录内出现同名文件时同样受保护，不会被当作孤立文档。
+var overviewDocNames = map[string]bool{"readme.md": true}
+
 const defaultRenameThreshold = 0.5
 
 // ---- 数据结构 --------------------------------------------------------
@@ -56,50 +62,44 @@ type RenameCandidate struct {
 }
 
 type AreaResult struct {
-	CodeDir string              `json:"code_dir"`
-	DocDir  string              `json:"doc_dir"`
-	Exists  []map[string]string `json:"exists"`
-	Missing []map[string]string `json:"missing"`
-	Orphans []map[string]string `json:"orphans"`
-	Renames []RenameCandidate   `json:"renames"`
+	CodeDir   string              `json:"code_dir"`
+	DocDir    string              `json:"doc_dir"`
+	Exists    []map[string]string `json:"exists"`
+	Missing   []map[string]string `json:"missing"`
+	Orphans   []map[string]string `json:"orphans"`
+	Overviews []map[string]string `json:"overviews"`
+	Renames   []RenameCandidate   `json:"renames"`
 }
 
 // ---- 路径推导 --------------------------------------------------------
 
+// codeToDoc 按后缀映射推导源码文件对应的文档路径；无法映射时返回 ""。
 func codeToDoc(code, codeRoot, docRoot string) string {
 	rel, err := filepath.Rel(codeRoot, code)
 	if err != nil {
 		return ""
 	}
-	if filepath.Base(rel) == initPairCode {
-		return filepath.Join(docRoot, filepath.Dir(rel), initPairDoc)
-	}
 	ext := filepath.Ext(rel)
-	if newExt, ok := suffixMap[ext]; ok {
-		return filepath.Join(docRoot, trimExt(rel, ext)+newExt)
+	newExt, ok := suffixMap[ext]
+	if !ok {
+		return ""
 	}
-	return filepath.Join(docRoot, rel)
+	return filepath.Join(docRoot, strings.TrimSuffix(rel, ext)+newExt)
 }
 
+// docToCode 按后缀映射反向推导文档对应的源码路径；无法映射时返回 ""。
 func docToCode(doc, docRoot, codeRoot string) string {
 	rel, err := filepath.Rel(docRoot, doc)
 	if err != nil {
 		return ""
 	}
-	if filepath.Base(rel) == initPairDoc {
-		return filepath.Join(codeRoot, filepath.Dir(rel), initPairCode)
-	}
 	ext := filepath.Ext(rel)
 	for codeExt, docExt := range suffixMap {
 		if ext == docExt {
-			return filepath.Join(codeRoot, trimExt(rel, ext)+codeExt)
+			return filepath.Join(codeRoot, strings.TrimSuffix(rel, ext)+codeExt)
 		}
 	}
-	return filepath.Join(codeRoot, rel)
-}
-
-func trimExt(p, ext string) string {
-	return strings.TrimSuffix(p, ext)
+	return ""
 }
 
 // ---- 扫描 ------------------------------------------------------------
@@ -219,6 +219,9 @@ func buildArea(codeDir, docDir, projectRoot string, threshold float64) AreaResul
 	}
 	for _, cf := range scanFiles(codeDir, codeExts) {
 		target := codeToDoc(cf, codeDir, docDir)
+		if target == "" {
+			continue
+		}
 		relCode := relPath(cf, projectRoot)
 		relTarget := relPath(target, projectRoot)
 		if fileExists(target) {
@@ -229,13 +232,22 @@ func buildArea(codeDir, docDir, projectRoot string, threshold float64) AreaResul
 	}
 	for _, df := range scanFiles(docDir, docExts) {
 		relDoc := relPath(df, projectRoot)
-		target := docToCode(df, docDir, codeDir)
-		if !fileExists(target) {
-			result.Orphans = append(result.Orphans, map[string]string{
-				"doc":            relDoc,
-				"code_candidate": relPath(target, projectRoot),
-			})
+		if overviewDocNames[strings.ToLower(filepath.Base(df))] {
+			result.Overviews = append(result.Overviews, map[string]string{"doc": relDoc})
+			continue
 		}
+		target := docToCode(df, docDir, codeDir)
+		if target != "" && fileExists(target) {
+			continue
+		}
+		candidate := "（无直接源码对应）"
+		if target != "" {
+			candidate = relPath(target, projectRoot)
+		}
+		result.Orphans = append(result.Orphans, map[string]string{
+			"doc":            relDoc,
+			"code_candidate": candidate,
+		})
 	}
 	result.Renames = detectRenames(result.Missing, result.Orphans, threshold)
 	return result
@@ -251,15 +263,11 @@ func buildTopLevel(docDir, projectRoot string) AreaResult {
 		return result
 	}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !docExts[filepath.Ext(e.Name())] {
 			continue
 		}
-		if !docExts[filepath.Ext(e.Name())] {
-			continue
-		}
-		result.Orphans = append(result.Orphans, map[string]string{
-			"doc":            relPath(filepath.Join(docDir, e.Name()), projectRoot),
-			"code_candidate": "（无直接源码对应）",
+		result.Overviews = append(result.Overviews, map[string]string{
+			"doc": relPath(filepath.Join(docDir, e.Name()), projectRoot),
 		})
 	}
 	return result
@@ -272,15 +280,8 @@ func renderMarkdown(areas []AreaResult) string {
 	for _, area := range areas {
 		if area.CodeDir == "(top-level)" {
 			sb.WriteString(fmt.Sprintf("\n## 顶层文档目录: %s\n", area.DocDir))
-			sb.WriteString("无 1:1 源码对应。\n\n")
-			sb.WriteString("| # | 文档文件 |\n|---|---------|\n")
-			if len(area.Orphans) == 0 {
-				sb.WriteString("| - | 无 |\n")
-			} else {
-				for i, item := range area.Orphans {
-					sb.WriteString(fmt.Sprintf("| %d | `%s` |\n", i+1, item["doc"]))
-				}
-			}
+			sb.WriteString("无 1:1 源码对应，均为总览文档（保留，勿删，不套用 H1 规范）。\n")
+			writeOverviewTable(&sb, area.Overviews)
 			continue
 		}
 
@@ -288,45 +289,57 @@ func renderMarkdown(areas []AreaResult) string {
 
 		sb.WriteString("\n### 有代码且有文档（审计内容一致性）\n")
 		sb.WriteString("| # | 代码文件 | 文档文件 |\n|---|---------|---------|\n")
-		writeExistsOrMissing(&sb, area.Exists, "code", "doc", true)
+		writeRows(&sb, area.Exists, "code", "doc")
 
 		sb.WriteString("\n### 有代码但无文档（需新建）\n")
 		sb.WriteString("| # | 代码文件 | 目标文档 |\n|---|---------|---------|\n")
-		writeExistsOrMissing(&sb, area.Missing, "code", "doc", true)
+		writeRows(&sb, area.Missing, "code", "doc")
 
 		sb.WriteString("\n### 孤立文档（需移动/删除）\n")
 		sb.WriteString("| # | 当前文档 | 源码实际位置 | 处理建议 |\n|---|---------|-------------|---------|\n")
 		if len(area.Orphans) == 0 {
 			sb.WriteString("| - | - | - | 无 |\n")
-			continue
-		}
-		renameByOrphan := make(map[string]RenameCandidate, len(area.Renames))
-		for _, r := range area.Renames {
-			renameByOrphan[r.OrphanDoc] = r
-		}
-		for i, item := range area.Orphans {
-			suggestion := "删除（无对应源码）"
-			if r, ok := renameByOrphan[item["doc"]]; ok {
-				suggestion = r.Suggestion
+		} else {
+			renameByOrphan := make(map[string]RenameCandidate, len(area.Renames))
+			for _, r := range area.Renames {
+				renameByOrphan[r.OrphanDoc] = r
 			}
-			sb.WriteString(fmt.Sprintf("| %d | `%s` | `%s` | %s |\n",
-				i+1, item["doc"], item["code_candidate"], suggestion))
+			for i, item := range area.Orphans {
+				suggestion := "删除（无对应源码）"
+				if r, ok := renameByOrphan[item["doc"]]; ok {
+					suggestion = r.Suggestion
+				}
+				sb.WriteString(fmt.Sprintf("| %d | `%s` | `%s` | %s |\n",
+					i+1, item["doc"], item["code_candidate"], suggestion))
+			}
 		}
+
+		sb.WriteString("\n### 总览文档（保留，勿删）\n")
+		writeOverviewTable(&sb, area.Overviews)
 	}
 	return sb.String()
 }
 
-func writeExistsOrMissing(sb *strings.Builder, items []map[string]string, k1, k2 string, twoCols bool) {
+// writeRows 渲染「代码文件 | 文档文件」两列三行式表格，空列表输出一行「无」。
+func writeRows(sb *strings.Builder, items []map[string]string, k1, k2 string) {
 	if len(items) == 0 {
-		if twoCols {
-			sb.WriteString("| - | - | 无 |\n")
-		} else {
-			sb.WriteString("| - | 无 |\n")
-		}
+		sb.WriteString("| - | - | 无 |\n")
 		return
 	}
 	for i, item := range items {
 		sb.WriteString(fmt.Sprintf("| %d | `%s` | `%s` |\n", i+1, item[k1], item[k2]))
+	}
+}
+
+// writeOverviewTable 渲染总览文档列表，空列表输出一行「无」。
+func writeOverviewTable(sb *strings.Builder, items []map[string]string) {
+	sb.WriteString("\n| # | 文档文件 |\n|---|---------|\n")
+	if len(items) == 0 {
+		sb.WriteString("| - | 无 |\n")
+		return
+	}
+	for i, item := range items {
+		sb.WriteString(fmt.Sprintf("| %d | `%s` |\n", i+1, item["doc"]))
 	}
 }
 
@@ -376,40 +389,30 @@ func collectFlagValues(args []string, name string) []string {
 	return out
 }
 
-// filterArgs 从 args 中移除 flags 及其后续值。
+// filterArgs 从 args 中移除指定 flags 及其所有后续值。
 // flags 列表传入不带前导 -- 的 flag 名，内部同时匹配 --flag/-flag 与 =value 形式。
+// 与 collectFlagValues 保持一致：一个 flag 后面所有连续的非 flag 参数都算它的值（等价 argparse 的 nargs="+"），
+// 否则 --pairs 之后出现的其他 flag 会被 flag.Parse 当作位置参数而静默忽略。
 func filterArgs(args []string, flags []string) []string {
-	flagSet := make(map[string]bool, 2*len(flags))
-	for _, f := range flags {
-		flagSet["--"+f] = true
-		flagSet["-"+f] = true
-	}
 	out := make([]string, 0, len(args))
 	i := 0
 	for i < len(args) {
-		a := args[i]
-		// 短前缀匹配（处理 --flag=... 与 -flag=...）
-		matchedFlag := false
+		matched := false
 		for _, f := range flags {
-			if strings.HasPrefix(a, "--"+f+"=") || strings.HasPrefix(a, "-"+f+"=") {
-				matchedFlag = true
-				break
-			}
-			if a == "--"+f || a == "-"+f {
-				matchedFlag = true
+			if ok, _, _ := flagMatch(args[i], f); ok {
+				matched = true
 				break
 			}
 		}
-		if matchedFlag {
-			// 若是 =value 形式则不再 skipNext
-			if !strings.Contains(a, "=") {
-				i++ // skip the value
-			}
+		if !matched {
+			out = append(out, args[i])
 			i++
 			continue
 		}
-		out = append(out, a)
 		i++
+		for i < len(args) && !isFlagStart(args[i]) {
+			i++
+		}
 	}
 	return out
 }
@@ -428,14 +431,15 @@ func main() {
 	fs := flag.NewFlagSet("scan-manifest", flag.ExitOnError)
 	projectRoot := fs.String("project-root", ".", "项目根目录（用于将所有路径输出为相对路径）")
 	format := fs.String("format", "markdown", "输出格式：markdown 或 json")
+	output := fs.String("output", "", "输出文件路径；留空则打印到 stdout（写文件时按 UTF-8 编码）")
 	renameThreshold := fs.Float64("rename-threshold", defaultRenameThreshold, "重命名相似度阈值（0-1）")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, `用法：scan_manifest --project-root <root> (--pairs <c1:d1 [c2:d2 ...]> | --top-level <dir>)
+		fmt.Fprintf(os.Stderr, `用法：scan_manifest --project-root <root> (--pairs <c1:d1 [c2:d2 ...]> | --top-level <dir>) [--format markdown|json] [--output <file>]
 
 示例：
   scan_manifest --project-root . \
       --pairs "pkg/api:docs/zh-CN/pkg/api pkg/farm:docs/zh-CN/pkg/farm" \
-      --top-level docs/zh-CN
+      --top-level docs/zh-CN --output tmp_manifest.md
 `)
 		fs.PrintDefaults()
 	}
@@ -490,8 +494,23 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println(string(out))
+		if err := emit(string(out)+"\n", *output); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
-	fmt.Print(renderMarkdown(areas))
+	if err := emit(renderMarkdown(areas), *output); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// emit 把结果写入文件（UTF-8）或 stdout。
+func emit(s, output string) error {
+	if output == "" {
+		fmt.Print(s)
+		return nil
+	}
+	return os.WriteFile(output, []byte(s), 0o644)
 }

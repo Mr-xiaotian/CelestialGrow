@@ -1,7 +1,7 @@
 # Subagent Base Rules（CelestialGrow 项目特化）
 
 > 通用规则见 `~/.agents/skills/docs-zh-sync/_subagent-base.md`。
-> 本文件仅覆盖本项目的路径映射、文件类型差异与具体子任务清单。
+> 本文件仅覆盖本项目的路径映射、文件类型差异与补充要点。
 
 ---
 
@@ -12,7 +12,7 @@
 1. `~/.agents/skills/docs-zh-sync/_subagent-base.md`——通用规则、输出格式
 2. `~/.agents/skills/docs-zh-sync/_subagent-audit.md`——通用审计清单
 3. `~/.agents/skills/docs-zh-sync/_subagent-writing.md`——通用写作规范
-4. 项目内的 `.agents/skills/docs-zh-sync/SKILL.md`——项目配置与子任务划分
+4. 项目内的 `.agents/skills/docs-zh-sync/SKILL.md`——项目配置、子任务划分、扫描脚本调用
 5. 项目内的 `.agents/skills/docs-zh-sync/_subagent-base.md`（本文件）——项目路径映射
 
 ---
@@ -24,9 +24,6 @@
 | `pkg/<name>/<file>.go` | `docs/zh-CN/pkg/<name>/<file>.md` |
 | `pkg/<name>/<file>_test.go` | `docs/zh-CN/pkg/<name>/<file>_test.md` |
 | `demo/<file>.go` | `docs/zh-CN/demo/<file>.md` |
-
-> - 没有 `__init__.py`，故不需要 `__init__.md`。
-> - 测试文件单独建文档，子代理在子任务中根据「是否存在非平凡验证逻辑」自行决定是否新建测试说明文档；若仅为重复简单行为验证，可以**不**建文档，但在最终报告「未修改文档」一节注明。
 
 ### 镜像文档 H1 规范（本项目强制）
 
@@ -40,6 +37,10 @@
 | `docs/zh-CN/README.md` | `# CelestialGrow`（顶层 README 例外） |
 
 禁止：包级别短名（`# pkg/api`）、符号名（`# funnel.Inlet`）、追加后缀（`# pkg/plot/option.go — 配置函数`）、中文别名。审计时若发现不合规，按 🔴 极高优先级修复。
+
+### 总览文档
+
+`docs/zh-CN/README.md` 以及镜像目录内可能存在的 `README.md` 均为**无 1:1 源码的总览文档**：保留、勿删，不套用上面的 H1 规范（顶层 README 固定为 `# CelestialGrow`）。扫描脚本会将其列入 `overviews` 表而不是 `orphans`。
 
 ---
 
@@ -63,18 +64,22 @@
 
 严格遵循通用 `~/.agents/skills/docs-zh-sync/_subagent-base.md` 中定义的输出格式。每个子任务结束必须输出「区域报告」。
 
+除通用格式外，还必须附上**本区域的旧名集合**——本次审计中发现的、已被重命名或删除的类型、函数、方法、字段、配置项、SQLite 表名/列名、状态常量、路径名，供主 agent 做跨分区残留扫描。
+
 ---
 
-## 5. 子任务清单（按编号）
+## 5. 测试文档判定
 
-| 编号 | 名称 | 代码目录 | 文档目录 | 备注 |
-|:----:|------|---------|---------|------|
-| A1 | `pkg/api` | `pkg/api` | `docs/zh-CN/pkg/api` | 仅 1 个文件 `api.go` |
-| A2 | `pkg/farm` | `pkg/farm` | `docs/zh-CN/pkg/farm` | 含 `farm.go`、`graph.go` 与 3 个测试 |
-| A3 | `pkg/plot` | `pkg/plot` | `docs/zh-CN/pkg/plot` | 含 5 个核心文件与 2 个测试 |
-| A4 | `pkg/observer` | `pkg/observer` | `docs/zh-CN/pkg/observer` | 含 `observer.go`、`progress.go` |
-| A5 | `pkg/persist` | `pkg/persist` | `docs/zh-CN/pkg/persist` | 含 3 个核心文件与 1 个测试 |
-| A6 | `pkg/funnel` | `pkg/funnel` | `docs/zh-CN/pkg/funnel` | 含 `inlet.go`、`spout.go` |
-| A7 | `pkg/runtime` | `pkg/runtime` | `docs/zh-CN/pkg/runtime` | 含 `event.go`、`type.go` |
-| A8 | `demo` | `demo` | `docs/zh-CN/demo` | 含 `demo_farm.go` |
-| A9 | 顶层 README | （无源码） | `docs/zh-CN/README.md` | 从根 `README.md` 同步并保持与代码现状一致 |
+对镜像清单中每个 `*_test.go`，按以下准则决定是否新建 `*_test.md`：
+
+- **建**：断言覆盖 ≥ 2 类行为分支，或涉及并发、边界值、持久化/序列化断言、性能回归（如深链递归）等非平凡验证逻辑。
+- **不建**：仅重复验证单一简单行为（例如只断言一个 getter 的返回值）。
+- 决定不建时，必须在区域报告的「未修改文档」一节列出该测试文件并说明理由。
+
+---
+
+## 6. 工作纪律
+
+- **只改 `docs/zh-CN/**`**：不改动 `pkg/**`、`demo/**`、根 `README.md` 等源码或源文档。
+- **不留临时产物**：示例需要编译验证时，使用项目外的临时目录（或用 `go vet`），验证后清理；不得在仓库留下 `*.exe`、`tmp_*`、`logs/`、`lifecycles/` 等产物。
+- **不触碰 git 区**：不执行 commit / add / checkout / stash。

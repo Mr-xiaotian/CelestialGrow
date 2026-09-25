@@ -80,6 +80,41 @@ func TestLifecycleSQLiteStatusRoundTrip(t *testing.T) {
 	}
 }
 
+// TestLifecycleSQLitePruneStatus 验证 prune 状态的晋升与读回。
+func TestLifecycleSQLitePruneStatus(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "lifecycle.sqlite3")
+	db, err := OpenLifecycleSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenLifecycleSQLite() error = %v", err)
+	}
+	defer db.Close()
+
+	if err := InsertLifecycleEvent(db, 1, "seed", "stage_a", 1.0, nil); err != nil {
+		t.Fatalf("InsertLifecycleEvent(seed) error = %v", err)
+	}
+	if err := InsertLifecycleEvent(db, 2, "prune", "stage_a", 2.0, []int{1}); err != nil {
+		t.Fatalf("InsertLifecycleEvent(prune) error = %v", err)
+	}
+
+	if err := UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed() error = %v", err)
+	}
+	if err := PromoteLifecycleStatusPrune(db, 1, 2, 2.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusPrune() error = %v", err)
+	}
+
+	loadedStatus, loadErr := LoadLifecycleStatus(db, 1)
+	if loadErr != nil {
+		t.Fatalf("LoadLifecycleStatus() error = %v", loadErr)
+	}
+	if loadedStatus.CurrentEventID != 2 {
+		t.Fatalf("LoadLifecycleStatus() current event = %d, want %d", loadedStatus.CurrentEventID, 2)
+	}
+	if loadedStatus.Status != "prune" {
+		t.Fatalf("LoadLifecycleStatus() status = %q, want %q", loadedStatus.Status, "prune")
+	}
+}
+
 // TestLifecycleSQLiteStatusPairs 验证成功对和失败对查询。
 func TestLifecycleSQLiteStatusPairs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "lifecycle.sqlite3")

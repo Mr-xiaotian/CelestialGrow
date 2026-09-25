@@ -198,13 +198,27 @@ func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error
 
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
-	seedString := fmt.Sprintf("%+v", seed)
+	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	weedID := p.eventClient.Emit("weed", []int{seedID})
 
-	seedRepr := trunc(seedString, 50)
 	useTime := time.Since(startTime).Seconds()
 	p.logInlet.SeedWither(p.name, seedRepr, err, useTime, seedID, weedID)
 	p.lifecycleInlet.SeedWither(p.name, seedID, seedID, weedID, err)
+}
+
+// pruneSeed 处理剪枝种子：更新计数、记录日志并推进生命周期。
+func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime time.Time) {
+	p.AddPruneNum(1)
+	p.reportProgress()
+
+	seed := seedPayload.Value
+	seedID := seedPayload.EventID
+	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
+	pruneID := p.eventClient.Emit("prune", []int{seedID})
+
+	useTime := time.Since(startTime).Seconds()
+	p.logInlet.SeedPrune(p.name, seedRepr, useTime, seedID, pruneID)
+	p.lifecycleInlet.SeedPrune(p.name, seedID, seedID, pruneID)
 }
 
 // ==== Internal Pipeline ====
@@ -287,12 +301,17 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 	}()
 
 	startTime := time.Now()
-	seedRepr := trunc(fmt.Sprintf("%+v", seedPayload.Value), 50)
 
 	var fruit F
 	var err error
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
+	seedRepr := trunc(fmt.Sprintf("%+v", seedPayload.Value), 50)
+
+	if p.pruneIf != nil && p.pruneIf(seed) {
+		p.pruneSeed(seedPayload, startTime)
+		return
+	}
 
 	for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 		fruit, err = p.cultivator(seed)
@@ -362,7 +381,7 @@ func (p *basePlot[S, F, Y]) StartAsync() {
 		p.sprout()
 		p.notifyFinish()
 
-		p.logInlet.PlotEnd(p.name, time.Since(startTime).Seconds(), p.GetFruitNum(), p.GetWeedNum())
+		p.logInlet.PlotEnd(p.name, time.Since(startTime).Seconds(), p.GetFruitNum(), p.GetWeedNum(), p.GetPruneNum())
 	})
 }
 

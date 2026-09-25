@@ -11,6 +11,7 @@ type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64
 	weedNum  atomic.Int64
+	pruneNum atomic.Int64
 
 	upstreamYields   map[string]*atomic.Int64
 	downstreamYields map[string]*atomic.Int64
@@ -46,14 +47,19 @@ func (c *Counter) AddSeedNum(addNum int) {
 	c.seedNum.Add(int64(addNum))
 }
 
-// AddFruitNum 原子地增加成功数（果实）。
+// AddFruitNum 原子地增加果实数。
 func (c *Counter) AddFruitNum(addNum int) {
 	c.fruitNum.Add(int64(addNum))
 }
 
-// AddWeedNum 原子地增加失败数（杂草）。
+// AddWeedNum 原子地增加杂草数。
 func (c *Counter) AddWeedNum(addNum int) {
 	c.weedNum.Add(int64(addNum))
+}
+
+// AddPruneNum 原子地增加剪枝数。
+func (c *Counter) AddPruneNum(addNum int) {
+	c.pruneNum.Add(int64(addNum))
 }
 
 // AddDownstreamYieldNum 原子地增加下游 plot 的产出数。
@@ -83,9 +89,14 @@ func (c *Counter) GetWeedNum() int {
 	return int(c.weedNum.Load())
 }
 
-// GetCompleted 返回已完成总数（果实 + 杂草）。
+// GetPruneNum 返回剪枝数。
+func (c *Counter) GetPruneNum() int {
+	return int(c.pruneNum.Load())
+}
+
+// GetCompleted 返回已完成总数（果实 + 杂草 + 剪枝）。
 func (c *Counter) GetCompleted() int {
-	return c.GetFruitNum() + c.GetWeedNum()
+	return c.GetFruitNum() + c.GetWeedNum() + c.GetPruneNum()
 }
 
 // ==== Predicates ====

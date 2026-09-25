@@ -17,6 +17,7 @@ type plotOptions struct {
 	maxRetries int
 	retryDelay func(attempt int) time.Duration
 	retryIf    func(error) bool
+	pruneIf    func(any) bool
 	logLevel   string
 }
 
@@ -70,6 +71,18 @@ func WithRetryDelay(fn func(attempt int) time.Duration) Option {
 func WithRetryIf(fn func(error) bool) Option {
 	return func(o *plotOptions) {
 		o.retryIf = fn
+	}
+}
+
+// WithPruneIf 设置修剪谓词：返回 true 的种子不经过培育直接终结为 prune，
+// 不触发重试，也不向下游产出。谓词在 cultivator 之前判断。默认不修剪。
+// 泛型参数 S 由调用方的谓词参数推断，无需显式指定。
+func WithPruneIf[S any](fn func(S) bool) Option {
+	return func(o *plotOptions) {
+		o.pruneIf = func(seed any) bool {
+			typed, ok := seed.(S)
+			return ok && fn(typed)
+		}
 	}
 }
 

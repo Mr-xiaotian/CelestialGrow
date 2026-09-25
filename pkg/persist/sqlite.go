@@ -215,6 +215,24 @@ func PromoteLifecycleStatusWither(
 	return nil
 }
 
+// PromoteLifecycleStatusPrune 将一条状态快照晋升为剪枝。
+func PromoteLifecycleStatusPrune(db *sql.DB, inputEventID int, currentEventID int, ts float64) error {
+	_, err := db.Exec(
+		`
+		UPDATE status
+		SET current_event_id = ?, status = 'prune', ts = ?
+		WHERE input_event_id = ?
+		`,
+		currentEventID,
+		ts,
+		inputEventID,
+	)
+	if err != nil {
+		return fmt.Errorf("promote lifecycle status prune for input event %d: %w", inputEventID, err)
+	}
+	return nil
+}
+
 // ==== status 表查询 ====
 
 // LoadLifecycleStatus 读取一条状态快照。

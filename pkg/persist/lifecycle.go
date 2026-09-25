@@ -15,6 +15,7 @@ const (
 	lifecycleSeed   = "seed"
 	lifecycleRipen  = "ripen"
 	lifecycleWither = "wither"
+	lifecyclePrune  = "prune"
 )
 
 // LifecycleRecord 表示一条生命周期持久化操作。
@@ -89,6 +90,11 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
 			record.WitherMessage,
 			record.TS,
 		)
+	case lifecyclePrune:
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+			return err
+		}
+		return PromoteLifecycleStatusPrune(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.TS)
 	default:
 		return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
 	}
@@ -177,6 +183,19 @@ func (l *LifecycleInlet) SeedWither(plot string, inputEventID int, parentEventID
 		ParentIDs:      []int{parentEventID},
 		WitherType:     fmt.Sprintf("%T", err),
 		WitherMessage:  fmt.Sprintf("%v", err),
+		TS:             float64(now) / 1000,
+	})
+}
+
+// SeedPrune 记录剪枝事件并将状态晋升为 prune。
+func (l *LifecycleInlet) SeedPrune(plot string, inputEventID int, parentEventID int, pruneEventID int) {
+	now := time.Now().UnixMilli()
+	l.Send(LifecycleRecord{
+		Kind:           lifecyclePrune,
+		CurrentEventID: pruneEventID,
+		InputEventID:   inputEventID,
+		PlotName:       plot,
+		ParentIDs:      []int{parentEventID},
 		TS:             float64(now) / 1000,
 	})
 }

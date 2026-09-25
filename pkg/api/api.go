@@ -61,3 +61,9 @@ var (
 	WithRetryIf  = plot.WithRetryIf
 	WithLogLevel = plot.WithLogLevel
 )
+
+// WithPruneIf 设置修剪谓词：返回 true 的种子不经过培育直接终结为 prune。
+// 泛型参数 S 由调用方的谓词参数推断。
+func WithPruneIf[S any](fn func(S) bool) Option {
+	return plot.WithPruneIf(fn)
+}

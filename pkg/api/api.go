@@ -14,6 +14,12 @@ type Farm = farm.Farm
 // Plot 是对外暴露的泛型节点类型。
 type Plot[S any, F any] = plot.Plot[S, F]
 
+// SplitPlot 是对外暴露的拆分节点类型。
+type SplitPlot[S any, F any] = plot.SplitPlot[S, F]
+
+// RoutePlot 是对外暴露的路由节点类型。
+type RoutePlot[S any, Y any] = plot.RoutePlot[S, Y]
+
 // PlotNode 是 Farm 连接 plot 时使用的统一接口。
 type PlotNode = plot.PlotNode
 
@@ -28,6 +34,16 @@ func NewFarm(name string, logLevel string) *Farm {
 // NewPlot 创建一个 Plot。
 func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *Plot[S, F] {
 	return plot.NewPlot(name, cultivator, opts...)
+}
+
+// NewSplitPlot 创建一个 SplitPlot。
+func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F] {
+	return plot.NewSplitPlot(name, splitter, opts...)
+}
+
+// NewRoutePlot 创建一个 RoutePlot。
+func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y] {
+	return plot.NewRoutePlot(name, cultivator, opts...)
 }
 
 // NewProgressBar 创建一个进度条。
@@ -45,3 +61,9 @@ var (
 	WithRetryIf  = plot.WithRetryIf
 	WithLogLevel = plot.WithLogLevel
 )
+
+// WithPruneIf 设置修剪谓词：返回 true 的种子不经过培育直接终结为 prune。
+// 泛型参数 S 由调用方的谓词参数推断。
+func WithPruneIf[S any](fn func(S) bool) Option {
+	return plot.WithPruneIf(fn)
+}

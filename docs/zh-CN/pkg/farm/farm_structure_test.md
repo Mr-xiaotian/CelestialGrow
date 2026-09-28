@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 最后更新日期: 2026/09/01
+> 📅 最后更新日期: 2026/09/24
 
 ## 作用
 
@@ -57,14 +57,16 @@
 
 - **多连通分量**：`TestFarmStructureDisconnectedComponents` 间接覆盖了 `SourceNodes` 会从**每个** Source SCC 取一个代表节点——这意味着 `Farm.Run` 会向 `rootA`、`rootB1`、`rootB2` 都发送 `Seal()`。
 - **fan-out / fan-in 计数**：`counts[seed]` 来自 `head` 的 `cultivator`，被并发调用，因此测试使用 `sync.Mutex` 保护。
-- **失败路由**：`Plot.bearWeed` 仅记录失败，不向下游转发；`head` 收到的 fruit 数与 `midA.GetFruitNum() + midB.GetFruitNum()` 严格相等，这一断言在 `TestFarmStructure121PartialFailure` 中被验证。
+- **失败路由**：`basePlot.witherSeed` 仅记录失败，不向下游转发；`head` 收到的 fruit 数与 `midA.GetFruitNum() + midB.GetFruitNum()` 严格相等，这一断言在 `TestFarmStructure121PartialFailure` 中被验证。
 - **通道配置**：`WithChanSize` 在 `TestFarmStructure21FaninDifferentSpeed` 中显式放大，避免慢 source 阻塞快 source 写入。
 
 ## 关联源码
 
 - `pkg/farm/farm.go`：`Run`、`SourceNodes`、`AddPlot`、`Connect`
 - `pkg/farm/graph.go`：`SourceNodes`、`TarjanSCC`
-- `pkg/plot/plot.go`：`GetFruitNum` / `GetWeedNum` / `GetState` / `sprout` / `tend` / `bearFruit` / `bearWeed`
+- `pkg/plot/plot_base.go`：`GetState` / `sprout` / `tend` / `witherSeed`
+- `pkg/plot/plot.go`：`Plot.ripenSeed`
+- `pkg/plot/counter.go`：`GetSeedNum` / `GetFruitNum` / `GetWeedNum`
 
 ## 运行方式
 

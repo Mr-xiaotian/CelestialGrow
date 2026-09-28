@@ -12,22 +12,24 @@ import (
 )
 
 const (
-	lifecycleSeed  = "seed"
-	lifecycleFruit = "fruit"
-	lifecycleWeed  = "weed"
+	lifecycleSeed   = "seed"
+	lifecycleRipen  = "ripen"
+	lifecycleWither = "wither"
+	lifecyclePrune  = "prune"
 )
 
 // LifecycleRecord 表示一条生命周期持久化操作。
 type LifecycleRecord struct {
 	Kind           string
-	Event          LifecycleEventRecord
-	ParentIDs      []int
 	InputEventID   int
 	CurrentEventID int
-	TaskJSON       string
-	ResultJSON     string
-	ErrorType      string
-	ErrorMessage   string
+	ParentIDs      []int
+	PlotName       string
+	SeedJSON       string
+	FruitJSON      string
+	WitherType     string
+	WitherMessage  string
+	TS             float64
 }
 
 // LifecycleRecordHandler 消费生命周期操作并将其写入 sqlite。
@@ -62,35 +64,37 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
 
 	switch record.Kind {
 	case lifecycleSeed:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return UpsertLifecycleStatus(l.sqliteDB, LifecycleStatusRecord{
-			InputEventID:   record.InputEventID,
-			CurrentEventID: record.CurrentEventID,
-			TaskJSON:       record.TaskJSON,
-			Plot:           record.Event.Plot,
-			Status:         "pending",
-			ResultJSON:     "null",
-			TS:             record.Event.TS,
-		})
-	case lifecycleFruit:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		return UpsertLifecycleStatusSeed(l.sqliteDB,
+			record.InputEventID,
+			record.SeedJSON,
+			record.PlotName,
+			record.TS,
+		)
+	case lifecycleRipen:
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusSuccess(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.ResultJSON, record.Event.TS)
-	case lifecycleWeed:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.Event, record.ParentIDs); err != nil {
+		return PromoteLifecycleStatusRipen(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.FruitJSON, record.TS)
+	case lifecycleWither:
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusFailed(
+		return PromoteLifecycleStatusWither(
 			l.sqliteDB,
 			record.InputEventID,
 			record.CurrentEventID,
-			record.ErrorType,
-			record.ErrorMessage,
-			record.Event.TS,
+			record.WitherType,
+			record.WitherMessage,
+			record.TS,
 		)
+	case lifecyclePrune:
+		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+			return err
+		}
+		return PromoteLifecycleStatusPrune(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.TS)
 	default:
 		return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
 	}
@@ -109,7 +113,7 @@ func (l *LifecycleRecordHandler) AfterStop() error {
 	return nil
 }
 
-// LoadStatuses 读取指定 plot 的全部任务状态快照。
+// LoadStatuses 读取指定 plot 的全部种子状态快照。
 func (l *LifecycleRecordHandler) LoadStatuses(plotName string) ([]LifecycleStatusRecord, error) {
 	if l.sqliteDB != nil {
 		return LoadLifecycleStatuses(l.sqliteDB, plotName)
@@ -140,58 +144,59 @@ func NewLifecycleInlet(ch chan<- LifecycleRecord, timeout time.Duration) *Lifecy
 	}
 }
 
-// SeedIn 记录一条输入事件和对应的 pending 状态。
-func (l *LifecycleInlet) SeedIn(plot string, eventID int, parentIDs []int, task any) {
+// SeedInput 记录一条 seed 输入事件和对应的初始状态。
+func (l *LifecycleInlet) SeedInput(plot string, eventID int, parentIDs []int, seed any) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleSeed,
-		Event: LifecycleEventRecord{
-			EventID:   eventID,
-			EventType: "seed",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      parentIDs,
-		InputEventID:   eventID,
+		Kind:           lifecycleSeed,
 		CurrentEventID: eventID,
-		TaskJSON:       toLifecycleJSON(task),
+		InputEventID:   eventID,
+		ParentIDs:      parentIDs,
+		PlotName:       plot,
+		SeedJSON:       toLifecycleJSON(seed),
+		TS:             float64(now) / 1000,
 	})
 }
 
-// SeedSuccess 记录成功事件并将状态晋升为 success。
-func (l *LifecycleInlet) SeedSuccess(plot string, inputEventID int, parentEventID int, successEventID int, result any) {
+// SeedRipen 记录成功事件并将状态晋升为 ripen。
+func (l *LifecycleInlet) SeedRipen(plot string, inputEventID int, parentEventID int, ripenEventID int, fruit any) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleFruit,
-		Event: LifecycleEventRecord{
-			EventID:   successEventID,
-			EventType: "fruit",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      []int{parentEventID},
+		Kind:           lifecycleRipen,
+		CurrentEventID: ripenEventID,
 		InputEventID:   inputEventID,
-		CurrentEventID: successEventID,
-		ResultJSON:     toLifecycleJSON(result),
+		ParentIDs:      []int{parentEventID},
+		FruitJSON:      toLifecycleJSON(fruit),
+		PlotName:       plot,
+		TS:             float64(now) / 1000,
 	})
 }
 
-// SeedFailed 记录失败事件并将状态晋升为 failed。
-func (l *LifecycleInlet) SeedFailed(plot string, inputEventID int, parentEventID int, failedEventID int, err error) {
+// SeedWither 记录失败事件并将状态晋升为 wither。
+func (l *LifecycleInlet) SeedWither(plot string, inputEventID int, parentEventID int, witherEventID int, err error) {
 	now := time.Now().UnixMilli()
 	l.Send(LifecycleRecord{
-		Kind: lifecycleWeed,
-		Event: LifecycleEventRecord{
-			EventID:   failedEventID,
-			EventType: "weed",
-			Plot:      plot,
-			TS:        float64(now) / 1000,
-		},
-		ParentIDs:      []int{parentEventID},
+		Kind:           lifecycleWither,
+		CurrentEventID: witherEventID,
 		InputEventID:   inputEventID,
-		CurrentEventID: failedEventID,
-		ErrorType:      fmt.Sprintf("%T", err),
-		ErrorMessage:   fmt.Sprintf("%v", err),
+		PlotName:       plot,
+		ParentIDs:      []int{parentEventID},
+		WitherType:     fmt.Sprintf("%T", err),
+		WitherMessage:  fmt.Sprintf("%v", err),
+		TS:             float64(now) / 1000,
+	})
+}
+
+// SeedPrune 记录剪枝事件并将状态晋升为 prune。
+func (l *LifecycleInlet) SeedPrune(plot string, inputEventID int, parentEventID int, pruneEventID int) {
+	now := time.Now().UnixMilli()
+	l.Send(LifecycleRecord{
+		Kind:           lifecyclePrune,
+		CurrentEventID: pruneEventID,
+		InputEventID:   inputEventID,
+		PlotName:       plot,
+		ParentIDs:      []int{parentEventID},
+		TS:             float64(now) / 1000,
 	})
 }
 

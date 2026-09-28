@@ -11,15 +11,33 @@ type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64
 	weedNum  atomic.Int64
+	pruneNum atomic.Int64
 
-	upstreamYields map[string]*atomic.Int64
+	upstreamYields   map[string]*atomic.Int64
+	downstreamYields map[string]*atomic.Int64
 }
 
 // ==== Constructor ====
 
 // NewCounter 创建并返回一个新的 Counter，所有计数初始为零。
 func NewCounter() *Counter {
-	return &Counter{upstreamYields: make(map[string]*atomic.Int64)}
+	return &Counter{
+		upstreamYields:   make(map[string]*atomic.Int64),
+		downstreamYields: make(map[string]*atomic.Int64),
+	}
+}
+
+// ==== Counter Registration ====
+
+// SetUpstreamYieldCounter 登记一个上游 plot 及其产出计数器。
+// 用于 seal 聚合和种子统计。
+func (c *Counter) SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.upstreamYields[name] = yieldCounter
+}
+
+// SetDownstreamYieldCounter 登记一个下游 plot 及其产出计数器。
+func (c *Counter) SetDownstreamYieldCounter(name string, yieldCounter *atomic.Int64) {
+	c.downstreamYields[name] = yieldCounter
 }
 
 // ==== Adders ====
@@ -29,14 +47,24 @@ func (c *Counter) AddSeedNum(addNum int) {
 	c.seedNum.Add(int64(addNum))
 }
 
-// AddFruitNum 原子地增加成功数（果实）。
+// AddFruitNum 原子地增加果实数。
 func (c *Counter) AddFruitNum(addNum int) {
 	c.fruitNum.Add(int64(addNum))
 }
 
-// AddWeedNum 原子地增加失败数（杂草）。
+// AddWeedNum 原子地增加杂草数。
 func (c *Counter) AddWeedNum(addNum int) {
 	c.weedNum.Add(int64(addNum))
+}
+
+// AddPruneNum 原子地增加剪枝数。
+func (c *Counter) AddPruneNum(addNum int) {
+	c.pruneNum.Add(int64(addNum))
+}
+
+// AddDownstreamYieldNum 原子地增加下游 plot 的产出数。
+func (c *Counter) AddDownstreamYieldNum(name string, addNum int) {
+	c.downstreamYields[name].Add(int64(addNum))
 }
 
 // ==== Getters ====
@@ -61,9 +89,14 @@ func (c *Counter) GetWeedNum() int {
 	return int(c.weedNum.Load())
 }
 
-// GetCompleted 返回已完成总数（果实 + 杂草）。
+// GetPruneNum 返回剪枝数。
+func (c *Counter) GetPruneNum() int {
+	return int(c.pruneNum.Load())
+}
+
+// GetCompleted 返回已完成总数（果实 + 杂草 + 剪枝）。
 func (c *Counter) GetCompleted() int {
-	return c.GetFruitNum() + c.GetWeedNum()
+	return c.GetFruitNum() + c.GetWeedNum() + c.GetPruneNum()
 }
 
 // ==== Predicates ====

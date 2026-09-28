@@ -14,21 +14,11 @@ func TestLifecycleSQLiteEventRoundTrip(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := InsertLifecycleEvent(db, LifecycleEventRecord{
-		EventID:   1,
-		EventType: "seed",
-		Plot:      "source",
-		TS:        1.0,
-	}, nil); err != nil {
+	if err := InsertLifecycleEvent(db, 1, "seed", "source", 1.0, nil); err != nil {
 		t.Fatalf("InsertLifecycleEvent(seed) error = %v", err)
 	}
 
-	if err := InsertLifecycleEvent(db, LifecycleEventRecord{
-		EventID:   2,
-		EventType: "fruit",
-		Plot:      "source",
-		TS:        2.0,
-	}, []int{1}); err != nil {
+	if err := InsertLifecycleEvent(db, 2, "fruit", "source", 2.0, []int{1}); err != nil {
 		t.Fatalf("InsertLifecycleEvent(fruit) error = %v", err)
 	}
 
@@ -62,25 +52,17 @@ func TestLifecycleSQLiteStatusRoundTrip(t *testing.T) {
 		{EventID: 1, EventType: "seed", Plot: "stage_a", TS: 1.0},
 		{EventID: 3, EventType: "fruit", Plot: "stage_a", TS: 3.0},
 	} {
-		if err := InsertLifecycleEvent(db, record, nil); err != nil {
+		if err := InsertLifecycleEvent(db, record.EventID, record.EventType, record.Plot, record.TS, nil); err != nil {
 			t.Fatalf("InsertLifecycleEvent(%d) error = %v", record.EventID, err)
 		}
 	}
 
-	if err := UpsertLifecycleStatus(db, LifecycleStatusRecord{
-		InputEventID:   1,
-		CurrentEventID: 1,
-		TaskJSON:       `{"value":"alpha"}`,
-		Plot:           "stage_a",
-		Status:         "pending",
-		ResultJSON:     "null",
-		TS:             1.0,
-	}); err != nil {
-		t.Fatalf("UpsertLifecycleStatus() error = %v", err)
+	if err := UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed() error = %v", err)
 	}
 
-	if err := PromoteLifecycleStatusSuccess(db, 1, 3, `{"ok":true}`, 3.0); err != nil {
-		t.Fatalf("PromoteLifecycleStatusSuccess() error = %v", err)
+	if err := PromoteLifecycleStatusRipen(db, 1, 3, `{"ok":true}`, 3.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusRipen() error = %v", err)
 	}
 
 	loadedStatus, loadErr := LoadLifecycleStatus(db, 1)
@@ -90,11 +72,46 @@ func TestLifecycleSQLiteStatusRoundTrip(t *testing.T) {
 	if loadedStatus.CurrentEventID != 3 {
 		t.Fatalf("LoadLifecycleStatus() current event = %d, want %d", loadedStatus.CurrentEventID, 3)
 	}
-	if loadedStatus.Status != "success" {
-		t.Fatalf("LoadLifecycleStatus() status = %q, want %q", loadedStatus.Status, "success")
+	if loadedStatus.Status != "ripen" {
+		t.Fatalf("LoadLifecycleStatus() status = %q, want %q", loadedStatus.Status, "ripen")
 	}
-	if loadedStatus.ResultJSON != `{"ok":true}` {
-		t.Fatalf("LoadLifecycleStatus() result json = %q, want %q", loadedStatus.ResultJSON, `{"ok":true}`)
+	if loadedStatus.FruitJSON != `{"ok":true}` {
+		t.Fatalf("LoadLifecycleStatus() fruit json = %q, want %q", loadedStatus.FruitJSON, `{"ok":true}`)
+	}
+}
+
+// TestLifecycleSQLitePruneStatus 验证 prune 状态的晋升与读回。
+func TestLifecycleSQLitePruneStatus(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "lifecycle.sqlite3")
+	db, err := OpenLifecycleSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenLifecycleSQLite() error = %v", err)
+	}
+	defer db.Close()
+
+	if err := InsertLifecycleEvent(db, 1, "seed", "stage_a", 1.0, nil); err != nil {
+		t.Fatalf("InsertLifecycleEvent(seed) error = %v", err)
+	}
+	if err := InsertLifecycleEvent(db, 2, "prune", "stage_a", 2.0, []int{1}); err != nil {
+		t.Fatalf("InsertLifecycleEvent(prune) error = %v", err)
+	}
+
+	if err := UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed() error = %v", err)
+	}
+	if err := PromoteLifecycleStatusPrune(db, 1, 2, 2.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusPrune() error = %v", err)
+	}
+
+	loadedStatus, loadErr := LoadLifecycleStatus(db, 1)
+	if loadErr != nil {
+		t.Fatalf("LoadLifecycleStatus() error = %v", loadErr)
+	}
+	if loadedStatus.CurrentEventID != 2 {
+		t.Fatalf("LoadLifecycleStatus() current event = %d, want %d", loadedStatus.CurrentEventID, 2)
+	}
+	if loadedStatus.Status != "prune" {
+		t.Fatalf("LoadLifecycleStatus() status = %q, want %q", loadedStatus.Status, "prune")
 	}
 }
 
@@ -115,54 +132,30 @@ func TestLifecycleSQLiteStatusPairs(t *testing.T) {
 		{EventID: 5, EventType: "seed", Plot: "stage_b", TS: 5.0},
 		{EventID: 6, EventType: "fruit", Plot: "stage_b", TS: 6.0},
 	} {
-		if err := InsertLifecycleEvent(db, record, nil); err != nil {
+		if err := InsertLifecycleEvent(db, record.EventID, record.EventType, record.Plot, record.TS, nil); err != nil {
 			t.Fatalf("InsertLifecycleEvent(%d) error = %v", record.EventID, err)
 		}
 	}
 
-	if err := UpsertLifecycleStatus(db, LifecycleStatusRecord{
-		InputEventID:   1,
-		CurrentEventID: 1,
-		TaskJSON:       `{"value":"alpha"}`,
-		Plot:           "stage_a",
-		Status:         "pending",
-		ResultJSON:     "null",
-		TS:             1.0,
-	}); err != nil {
-		t.Fatalf("UpsertLifecycleStatus(success seed) error = %v", err)
+	if err := UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed(success seed) error = %v", err)
 	}
-	if err := PromoteLifecycleStatusSuccess(db, 1, 2, `{"ok":true}`, 2.0); err != nil {
-		t.Fatalf("PromoteLifecycleStatusSuccess() error = %v", err)
+	if err := PromoteLifecycleStatusRipen(db, 1, 2, `{"ok":true}`, 2.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusRipen() error = %v", err)
 	}
 
-	if err := UpsertLifecycleStatus(db, LifecycleStatusRecord{
-		InputEventID:   3,
-		CurrentEventID: 3,
-		TaskJSON:       `{"value":"beta"}`,
-		Plot:           "stage_a",
-		Status:         "pending",
-		ResultJSON:     "null",
-		TS:             3.0,
-	}); err != nil {
-		t.Fatalf("UpsertLifecycleStatus(failed seed) error = %v", err)
+	if err := UpsertLifecycleStatusSeed(db, 3, `{"value":"beta"}`, "stage_a", 3.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed(failed seed) error = %v", err)
 	}
-	if err := PromoteLifecycleStatusFailed(db, 3, 4, "*errors.errorString", "boom", 4.0); err != nil {
-		t.Fatalf("PromoteLifecycleStatusFailed() error = %v", err)
+	if err := PromoteLifecycleStatusWither(db, 3, 4, "*errors.errorString", "boom", 4.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusWither() error = %v", err)
 	}
 
-	if err := UpsertLifecycleStatus(db, LifecycleStatusRecord{
-		InputEventID:   5,
-		CurrentEventID: 5,
-		TaskJSON:       `{"value":"gamma"}`,
-		Plot:           "stage_b",
-		Status:         "pending",
-		ResultJSON:     "null",
-		TS:             5.0,
-	}); err != nil {
-		t.Fatalf("UpsertLifecycleStatus(other plot seed) error = %v", err)
+	if err := UpsertLifecycleStatusSeed(db, 5, `{"value":"gamma"}`, "stage_b", 5.0); err != nil {
+		t.Fatalf("UpsertLifecycleStatusSeed(other plot seed) error = %v", err)
 	}
-	if err := PromoteLifecycleStatusSuccess(db, 5, 6, `{"ok":"other"}`, 6.0); err != nil {
-		t.Fatalf("PromoteLifecycleStatusSuccess(other plot) error = %v", err)
+	if err := PromoteLifecycleStatusRipen(db, 5, 6, `{"ok":"other"}`, 6.0); err != nil {
+		t.Fatalf("PromoteLifecycleStatusRipen(other plot) error = %v", err)
 	}
 
 	statuses, queryErr := LoadLifecycleStatuses(db, "stage_a")
@@ -172,15 +165,15 @@ func TestLifecycleSQLiteStatusPairs(t *testing.T) {
 	if len(statuses) != 2 {
 		t.Fatalf("LoadLifecycleStatuses() len = %d, want 2", len(statuses))
 	}
-	if statuses[0].TaskJSON != `{"value":"alpha"}` ||
-		statuses[0].Status != "success" ||
-		statuses[0].ResultJSON != `{"ok":true}` {
-		t.Fatalf("LoadLifecycleStatuses()[0] = %#v, want task alpha/success", statuses[0])
+	if statuses[0].SeedJSON != `{"value":"alpha"}` ||
+		statuses[0].Status != "ripen" ||
+		statuses[0].FruitJSON != `{"ok":true}` {
+		t.Fatalf("LoadLifecycleStatuses()[0] = %#v, want seed alpha/ripen", statuses[0])
 	}
-	if statuses[1].TaskJSON != `{"value":"beta"}` ||
-		statuses[1].Status != "failed" ||
-		statuses[1].ErrorType != "*errors.errorString" ||
-		statuses[1].ErrorMessage != "boom" {
-		t.Fatalf("LoadLifecycleStatuses()[1] = %#v, want task beta/failed", statuses[1])
+	if statuses[1].SeedJSON != `{"value":"beta"}` ||
+		statuses[1].Status != "wither" ||
+		statuses[1].WitherType != "*errors.errorString" ||
+		statuses[1].WitherMessage != "boom" {
+		t.Fatalf("LoadLifecycleStatuses()[1] = %#v, want seed beta/wither", statuses[1])
 	}
 }

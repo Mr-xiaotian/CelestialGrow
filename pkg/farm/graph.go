@@ -322,9 +322,10 @@ func SourceNodes(graph *OrderGraph) []string {
 	sourceSCCs := SourceSCCs(graph)
 	nodes := make([]string, 0, len(sourceSCCs))
 	for _, scc := range sourceSCCs {
-		if len(scc) > 0 {
-			nodes = append(nodes, scc[0])
+		if len(scc) == 0 {
+			continue
 		}
+		nodes = append(nodes, scc[0])
 	}
 	return nodes
 }

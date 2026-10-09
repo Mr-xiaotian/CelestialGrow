@@ -4,9 +4,9 @@
 
 ## 作用
 
-`pkg/persist/sqlite_test.go` 是 `pkg/persist` 包中**唯一**的测试文件，它只针对 [`sqlite.md`](./sqlite.md) 中描述的 SQLite 存储层做端到端验证，不涉及 [`lifecycle.md`](./lifecycle.md) 的 `LifecycleRecordHandler` / `LifecycleInlet` 与 [`log.md`](./log.md) 的日志落盘。三个测试函数都使用 `t.TempDir()` 拿到独立的临时文件作为 `OpenLifecycleSQLite` 的入口，确保测试之间互不影响且无副作用。
+`pkg/persist/sqlite_test.go` 是 `pkg/persist` 包中**唯一**的测试文件，它只针对 [`sqlite.md`](./sqlite.md) 中描述的 SQLite 存储层做端到端验证，不涉及 [`lifecycle.md`](./lifecycle.md) 的 `LifecycleRecordHandler` / `LifecycleInlet` 与 [`log.md`](./log.md) 的日志落盘。四个测试函数都使用 `t.TempDir()` 拿到独立的临时文件作为 `OpenLifecycleSQLite` 的入口，确保测试之间互不影响且无副作用。
 
-> 当前文件**没有**针对 `LifecycleRecordHandler.HandleRecord` 路由（`seed` / `ripen` / `wither`）与 `LogInlet` / `LogRecordHandler` 的单元测试；如后续追加，按 `pkg/funnel` Spout 单 goroutine 调度的特性，应当用内存 channel + 同步收口的方式驱动。
+> 当前文件**没有**针对 `LifecycleRecordHandler.HandleRecord` 路由（`seed` / `ripen` / `wither` / `prune`）与 `LogInlet` / `LogRecordHandler` 的单元测试；如后续追加，按 `pkg/funnel` Spout 单 goroutine 调度的特性，应当用内存 channel + 同步收口的方式驱动。
 
 ## 测试覆盖点
 
@@ -14,6 +14,7 @@
 |------|----------|-----------|
 | `TestLifecycleSQLiteEventRoundTrip` | 打开 DB → 写 seed + 父边 → 回读事件与父边 | `events` 主键可写；`event_parents` 多对多边可写；`LoadLifecycleEvent` / `LoadLifecycleEventParents` 行为对称 |
 | `TestLifecycleSQLiteStatusRoundTrip` | 写两条事件 → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusRipen` → 回读 | 状态快照可插入；晋升只刷 `current_event_id` / `status` / `fruit_json` / `ts`，保留 `seed_json` 与 `plot` |
+| `TestLifecycleSQLitePruneStatus` | 写 seed + prune 事件 → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusPrune` → 回读 | `prune` 状态可晋升与反序列化，`Status == "prune"`、`CurrentEventID` 指向 prune 事件 |
 | `TestLifecycleSQLiteStatusPairs` | 多 plot 多事件混插 → 多次插入 + 一次 ripen + 一次 wither → 按 plot 维度查询 | `LoadLifecycleStatuses` 按 `ts, input_event_id` 升序；`plot` 过滤准确；`Status` / `SeedJSON` / `FruitJSON` / `WitherType` / `WitherMessage` 字段都正确落地 |
 
 ## 关键测试细节
@@ -59,6 +60,24 @@ loadedStatus, _ := LoadLifecycleStatus(db, 1)
 - 走完「`seed` 快照 → `ripen` 晋升」全链路。
 - 验证 `PromoteLifecycleStatusRipen` **只**改 `current_event_id` / `status` / `fruit_json` / `ts`，不破坏 `seed_json` 与 `plot`。
 - 同时验证 `LoadLifecycleStatus` 的列顺序与 `LifecycleStatusRecord` 字段一一对应（含 `WitherType` / `WitherMessage` 读出为空串）。
+
+### `TestLifecycleSQLitePruneStatus`
+
+```go
+InsertLifecycleEvent(db, 1, "seed", "stage_a", 1.0, nil)
+InsertLifecycleEvent(db, 2, "prune", "stage_a", 2.0, []int{1})
+
+UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0)
+PromoteLifecycleStatusPrune(db, 1, 2, 2.0)
+
+loadedStatus, _ := LoadLifecycleStatus(db, 1)
+// 断言: CurrentEventID == 2, Status == "prune"
+```
+
+- 前置事件为 `{EventID: 1, EventType: "seed", Plot: "stage_a", TS: 1.0}` 与 `{EventID: 2, EventType: "prune", Plot: "stage_a", TS: 2.0}`。
+- 走完「`seed` 快照 → `prune` 晋升」全链路。
+- 验证 `PromoteLifecycleStatusPrune` 把 `Status` 刷成 `"prune"`、`current_event_id` 指向 prune 事件，且不依赖 `fruit_json` / `wither_*` 字段（prune 记录这两个字段保持默认值）。
+- 与「剪枝不调用 `cultivator`」的 plot 侧语义对应：存储层只需记录「该种子被跳过了」，无需果实或错误信息。
 
 ### `TestLifecycleSQLiteStatusPairs`
 

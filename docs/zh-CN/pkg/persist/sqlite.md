@@ -1,6 +1,6 @@
 # pkg/persist/sqlite.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 ## 作用
 
@@ -24,7 +24,7 @@ type LifecycleEventRecord struct {
 | 字段 | 说明 |
 |------|------|
 | `EventID` | 事件唯一 ID（主键），通常由 `runtime.LocalEventClient.Emit` 分配 |
-| `EventType` | 事件类型；`pkg/persist` 自身写入 `seed` / `ripen` / `wither`，但表结构不强制枚举 |
+| `EventType` | 事件类型；`pkg/persist` 自身写入 `seed` / `ripen` / `wither` / `prune`，但表结构不强制枚举 |
 | `Plot` | 事件所属 plot 名称；用于按 plot 过滤与按 plot 创建目录 |
 | `TS` | 时间戳（秒，浮点）。由 `LifecycleInlet` 写入时通过 `time.Now().UnixMilli() / 1000` 计算 |
 
@@ -47,9 +47,9 @@ type LifecycleStatusRecord struct {
 | 字段 | 说明 |
 |------|------|
 | `InputEventID` | 种子（输入）事件 ID（主键），与 `events.event_id` 一一对应 |
-| `CurrentEventID` | 当前指向的事件 ID（最近一次 `seed` / `ripen` / `wither` 事件） |
+| `CurrentEventID` | 当前指向的事件 ID（最近一次 `seed` / `ripen` / `wither` / `prune` 事件） |
 | `Plot` | 所属 plot，便于按 plot 维度查询 |
-| `Status` | 状态枚举：`seed` / `ripen` / `wither` |
+| `Status` | 状态枚举：`seed` / `ripen` / `wither` / `prune` |
 | `SeedJSON` | 输入种子的 JSON 序列化文本（由 `toLifecycleJSON` 生成） |
 | `FruitJSON` | 成功时的果实 JSON；初始为表默认值字符串 `"null"`，由 `PromoteLifecycleStatusRipen` 覆盖 |
 | `WitherType` | 失败时的 Go 错误类型字符串（`fmt.Sprintf("%T", err)`），非失败时为空串 |
@@ -97,9 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_status_current_event ON status(current_event_id);
 
 | 表 | 主键 | 关键外键 / 索引 | 用途 |
 |----|------|-----------------|------|
-| `events` | `event_id` | `(event_type, ts)` 索引 | 存放所有 seed / ripen / wither 事件本身 |
+| `events` | `event_id` | `(event_type, ts)` 索引 | 存放所有 seed / ripen / wither / prune 事件本身 |
 | `event_parents` | `(event_id, parent_id)` | 两条 `FOREIGN KEY` 均级联 | 多对多父边表，描述事件 DAG 的拓扑 |
-| `status` | `input_event_id` | `idx_status_plot_status_ts`、`idx_status_current_event` | 每颗种子的最新状态快照：`seed` 时插入为 `seed`，`ripen` 提升为 `ripen`，`wither` 提升为 `wither` |
+| `status` | `input_event_id` | `idx_status_plot_status_ts`、`idx_status_current_event` | 每颗种子的最新状态快照：`seed` 时插入为 `seed`，`ripen` 提升为 `ripen`，`wither` 提升为 `wither`，`prune` 提升为 `prune` |
 
 > `fruit_json` 默认值为字符串 `"null"`，`wither_type` / `wither_message` 默认空串，避免在 `seed` 阶段出现 `NULL` 文本导致的额外分支判断；`seed_json` 与 `plot` 没有默认值，写入时必须显式提供。
 
@@ -172,10 +172,11 @@ if err := tx.Commit(); err != nil { ... }
 | `UpsertLifecycleStatusSeed(db, InputEventID, SeedJSON, Plot, TS)` | 纯 `INSERT` | 插入一行 `status = "seed"`、`current_event_id = input_event_id` 的快照；`fruit_json` / `wither_*` 取表默认值 |
 | `PromoteLifecycleStatusRipen(db, inputEventID, currentEventID, fruitJSON, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'ripen', fruit_json = ?, ts = ?`，**不**变更 `seed_json` 与 `plot` |
 | `PromoteLifecycleStatusWither(db, inputEventID, currentEventID, witherType, witherMessage, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'wither', wither_type = ?, wither_message = ?, ts = ?`，**不**变更 `seed_json` 与 `plot` |
+| `PromoteLifecycleStatusPrune(db, inputEventID, currentEventID, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'prune', ts = ?`，**不**变更 `seed_json`、`plot` 与 `fruit_json` / `wither_*` |
 
 > ⚠️ **注意**：`UpsertLifecycleStatusSeed` 名为 Upsert，实际实现是**纯 `INSERT`**（没有 `ON CONFLICT ... DO UPDATE`）。同一 `input_event_id` 重复调用会因主键冲突返回错误（错误文本为 `insert lifecycle status seed for input event <id>: ...`）；重试场景下不能依赖它覆盖旧状态。
 >
-> 两个 `Promote*` 函数都不检查 `RowsAffected`：目标行不存在时 `UPDATE` 影响 0 行且**不报错**，调用方需自行确认 `input_event_id` 已存在。
+> 三个 `Promote*` 函数都不检查 `RowsAffected`：目标行不存在时 `UPDATE` 影响 0 行且**不报错**，调用方需自行确认 `input_event_id` 已存在。
 
 ## 公开符号清单
 
@@ -191,6 +192,7 @@ if err := tx.Commit(); err != nil { ... }
 | `UpsertLifecycleStatusSeed` | 函数 | 插入种子初始状态快照（`status = "seed"`） |
 | `PromoteLifecycleStatusRipen` | 函数 | 提升状态为 `ripen` 并写入 `fruit_json` |
 | `PromoteLifecycleStatusWither` | 函数 | 提升状态为 `wither` 并写入 `wither_type` / `wither_message` |
+| `PromoteLifecycleStatusPrune` | 函数 | 提升状态为 `prune`（仅刷新 `current_event_id` / `ts`） |
 | `LoadLifecycleStatus` | 函数 | 按 `input_event_id` 读取一条快照 |
 | `LoadLifecycleStatuses` | 函数 | 按 `plot` 读取全部快照（按 `ts, input_event_id` 排序） |
 
@@ -202,19 +204,22 @@ if err := tx.Commit(); err != nil { ... }
 
 ```mermaid
 flowchart TD
-    A["HandleRecord seed/ripen/wither"] -->|Kind = seed| B[InsertLifecycleEvent]
+    A["HandleRecord seed/ripen/wither/prune"] -->|Kind = seed| B[InsertLifecycleEvent]
     A -->|Kind = ripen| B
     A -->|Kind = wither| B
+    A -->|Kind = prune| B
     B --> C["事务: INSERT events + N×INSERT event_parents"]
     C --> D{Commit?}
     D -->|是| E{Kind}
     E -->|seed| F1[UpsertLifecycleStatusSeed<br/>status = seed]
     E -->|ripen| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
     E -->|wither| F3[PromoteLifecycleStatusWither<br/>status = wither]
+    E -->|prune| F4[PromoteLifecycleStatusPrune<br/>status = prune]
     D -->|否| F[rollbackOnError 自动回滚]
     F1 --> G[(status 表)]
     F2 --> G
     F3 --> G
+    F4 --> G
 ```
 
 ### 查询路径
@@ -302,5 +307,5 @@ func main() {
 - **WAL 副作用**：启用 WAL 后同一目录下会生成 `*.sqlite3-wal` / `*.sqlite3-shm` 两个辅助文件；备份或传输 `.sqlite3` 时需要先 `db.Close()` 让 WAL 内容落盘，或使用 SQLite 的 backup API。
 - **时间戳为秒级浮点**：`TS` 来自 `float64(now) / 1000`，单位为秒；批量比较与排序时精度足够，但跨毫秒密集事件需注意浮点比较。
 - **状态表无独立外键级联**：`status.current_event_id` 的 `FOREIGN KEY` 没有 `ON DELETE CASCADE`，仅 `status.input_event_id` 级联——防止在 `current_event_id` 被误删时把整条状态记录一起带走。
-- **不强制枚举 `EventType`**：`events.event_type` 没有任何 CHECK 约束，新增类型（如自定义 plot 的中间状态）只需在生产者处约定新字符串即可；`pkg/persist` 自身只会写入 `seed` / `ripen` / `wither`。
+- **不强制枚举 `EventType`**：`events.event_type` 没有任何 CHECK 约束，新增类型（如自定义 plot 的中间状态）只需在生产者处约定新字符串即可；`pkg/persist` 自身只会写入 `seed` / `ripen` / `wither` / `prune`。
 - **路径与 DSN**：文件路径经 `filepath.ToSlash` 后拼成 `file:...`，在 Windows 上避免反斜杠带来的 DSN 解析问题；`:memory:` 走字面量分支不会被改写。

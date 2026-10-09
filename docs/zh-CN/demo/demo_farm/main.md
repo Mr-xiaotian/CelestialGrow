@@ -1,10 +1,10 @@
-# demo/demo_farm.go
+# demo/demo_farm/main.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 ## 作用
 
-`demo/demo_farm.go` 是 CelestialGrow 项目自带的最简 `Farm` 示例，演示了如何用对外统一入口 `pkg/api` 搭建并运行一条由两个 `Plot` 组成的小型流水线：
+`demo/demo_farm/main.go`（对应源码 `demo/demo_farm/main.go`）是 CelestialGrow 项目自带的最简 `Farm` 示例，演示了如何用对外统一入口 `pkg/api` 搭建并运行一条由两个 `Plot` 组成的小型流水线：
 
 - 用 `NewPlot` 创建两个并发处理节点（`root` 与 `head`）；
 - 用 `NewFarm` 创建调度图并将节点注册进去；
@@ -35,7 +35,7 @@ flowchart LR
 
 ## 关键调用
 
-`demo_farm.go` 中出现的关键 API（均来自 `pkg/api`）：
+`main.go` 中出现的关键 API（均来自 `pkg/api`）：
 
 | 调用 | 来源 | 作用 |
 |------|------|------|
@@ -65,13 +65,13 @@ flowchart LR
 - `logs/grow_log(YYYY-MM-DD).log`：本次 Farm 运行产生的结构化日志，按天追加；日志级别由 `NewFarm(name, "INFO")` 控制。
 - `lifecycles/YYYY-MM-DD/grow_lifecycle(HH-MM-SS.mmm).sqlite3`：本次 Farm 的生命周期库，存放在以当天日期命名的子目录中，文件名带启动时刻。
 
-其中 sqlite 库包含三张表：`events`（seed/fruit/weed/seal 事件）、`event_parents`（事件父子边）与 `status`（每颗种子的状态快照，状态为 `seed` / `ripen` / `wither`）。
+其中 sqlite 库包含三张表：`events`（seed/fruit/weed/prune/seal 事件）、`event_parents`（事件父子边）与 `status`（每颗种子的状态快照，状态为 `seed` / `ripen` / `wither` / `prune`）。
 
 > 上述路径与文件命名由 `pkg/persist` 决定，本示例未做自定义配置。如需清理，可以直接删除 `logs/` 与 `lifecycles/` 目录。
 
 ## 使用示例
 
-以下代码与 `demo/demo_farm.go` 源码完全一致，可直接复制运行：
+以下代码与 `demo/demo_farm/main.go` 源码完全一致，可直接复制运行：
 
 ```go
 package main
@@ -123,7 +123,7 @@ func main() {
 在项目根目录下执行：
 
 ```bash
-go run ./demo/demo_farm.go
+go run ./demo/demo_farm
 ```
 
 执行成功后：

@@ -64,7 +64,7 @@ go get github.com/Mr-xiaotian/CelestialGrow@latest
 
 推荐从统一入口 `pkg/api` 开始使用。
 
-一个最小的 `Farm` 示例（与 `demo/demo_farm.go` 完全一致）：
+一个最小的 `Farm` 示例（与 `demo/demo_farm/main.go` 完全一致）：
 
 ```go
 package main

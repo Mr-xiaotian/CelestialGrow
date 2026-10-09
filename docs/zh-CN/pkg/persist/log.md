@@ -1,6 +1,6 @@
 # pkg/persist/log.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 ## 作用
 
@@ -151,15 +151,16 @@ func (l *LogInlet) log(level string, message string) {
 | `FarmStart(farmName string, structureList []string)` | `INFO` | 首行 `Farm '<name>' start. Graph structure:`，随后**逐行**输出 `structureList` 中每个元素 | Farm 启动 |
 | `FarmEnd(farmName string, useTime float64)` | `INFO` | `Farm '<name>' end. Use <s>s.` | Farm 结束 |
 | `PlotStart(plotName string, numTenders int)` | `INFO` | `Plot '<name>' start with <n> tenders.` | Plot 启动 |
-| `PlotEnd(plotName string, useTime float64, fruitNum, weedNum int)` | `INFO` | `Plot '<name>' end. Use <s>s. <fruit> ripened, <weed> withered.` | Plot 结束 |
+| `PlotEnd(plotName string, useTime float64, fruitNum, weedNum, pruneNum int)` | `INFO` | `Plot '<name>' end. Use <s>s. <fruit> ripened, <weed> withered, <prune> pruned.` | Plot 结束 |
 | `SeedInput(plotName, seedRepr string, seedID int)` | `DEBUG` | `In '<plot>', Seed <seedRepr> input. [<seedID>*]` | 种子进入 Plot |
 | `SeedRipen(plotName, seedRepr, fruitRepr string, useTime float64, seedID, fruitID int)` | `SUCCESS` | `In '<plot>', Seed <seedRepr> ripened. Fruit is <fruitRepr>. Use <s>s. [<seedID>-><fruitID>*]` | 种子成功 |
 | `SeedWither(plotName, seedRepr string, err error, useTime float64, seedID, weedID int)` | `ERROR` | `In '<plot>', Seed <seedRepr> withered: <err>. Use <s>s. [<seedID>-><weedID>*]` | 种子最终失败 |
+| `SeedPrune(plotName, seedRepr string, useTime float64, seedID, pruneID int)` | `INFO` | `In '<plot>', Seed <seedRepr> pruned. Use <s>s. [<seedID>-><pruneID>*]` | 种子被修剪跳过 |
 | `SeedReplant(plotName, seedRepr string, attempt int, err error, seedID int)` | `WARNING` | `In '<plot>', Seed <seedRepr> attempt <n> withered: <err>. Replanting. [<seedID>*]` | 重试中间态 |
 
 > 上述方法全部经过 `log(level, ...)`，因此同样受 `minLevel` 过滤。`FarmStart` 是唯一会一次产生多行输出的方法。
 >
-> `useTime` 由调用方传入（业务侧一般用 `time.Since(start).Seconds()`），本文件不做计时。`seedID` / `fruitID` / `weedID` 是 `runtime.EventClient` 分配的事件 ID。
+> `useTime` 由调用方传入（业务侧一般用 `time.Since(start).Seconds()`），本文件不做计时。`seedID` / `fruitID` / `weedID` / `pruneID` 是 `runtime.EventClient` 分配的事件 ID。
 
 ## 公开符号清单
 
@@ -172,10 +173,11 @@ func (l *LogInlet) log(level string, message string) {
 | `(*LogInlet).FarmStart` | 方法 | `INFO` Farm 启动 + 图结构逐行输出 |
 | `(*LogInlet).FarmEnd` | 方法 | `INFO` Farm 结束 |
 | `(*LogInlet).PlotStart` | 方法 | `INFO` Plot 启动 |
-| `(*LogInlet).PlotEnd` | 方法 | `INFO` Plot 结束 |
+| `(*LogInlet).PlotEnd` | 方法 | `INFO` Plot 结束（含果/杂/剪计数） |
 | `(*LogInlet).SeedInput` | 方法 | `DEBUG` 种子输入 |
 | `(*LogInlet).SeedRipen` | 方法 | `SUCCESS` 种子成熟 |
 | `(*LogInlet).SeedWither` | 方法 | `ERROR` 种子枯萎 |
+| `(*LogInlet).SeedPrune` | 方法 | `INFO` 种子被修剪 |
 | `(*LogInlet).SeedReplant` | 方法 | `WARNING` 重试中间态 |
 
 > `levelOrder` 与 `log` 私有方法为包内实现细节，不对外暴露。
@@ -214,7 +216,10 @@ func main() {
     inlet.SeedReplant("harvester", "{v:3}", 1, context.DeadlineExceeded, 3)
     inlet.SeedWither("harvester", "{v:3}", context.DeadlineExceeded, 0.40, 3, 4)
 
-    inlet.PlotEnd("harvester", 1.23, 1, 1)
+    inlet.SeedInput("harvester", "{v:5}", 5)
+    inlet.SeedPrune("harvester", "{v:5}", 0.00, 5, 6)
+
+    inlet.PlotEnd("harvester", 1.23, 1, 1, 1)
     inlet.FarmEnd("demo_farm", 1.40)
 
     if err := spout.Stop(); err != nil {
@@ -232,7 +237,8 @@ func main() {
 2026-09-24 10:00:00 SUCCESS In 'harvester', Seed {v:1} ripened. Fruit is {v:2}. Use 0.12s. [1->2*]
 2026-09-24 10:00:00 WARNING In 'harvester', Seed {v:3} attempt 1 withered: context deadline exceeded. Replanting. [3*]
 2026-09-24 10:00:00 ERROR In 'harvester', Seed {v:3} withered: context deadline exceeded. Use 0.40s. [3->4*]
-2026-09-24 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered.
+2026-09-24 10:00:00 INFO In 'harvester', Seed {v:5} pruned. Use 0.00s. [5->6*]
+2026-09-24 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered, 1 pruned.
 2026-09-24 10:00:00 INFO Farm 'demo_farm' end. Use 1.40s.
 ```
 

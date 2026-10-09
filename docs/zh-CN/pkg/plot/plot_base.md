@@ -1,13 +1,13 @@
 # pkg/plot/plot_base.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 `plot_base.go` 是 `pkg/plot` 的**共享运行骨架**。它定义两样东西：
 
 1. `PlotNode` 接口——抹除泛型后供 `pkg/farm` 统一持有不同 seed/fruit 类型的节点；
 2. `basePlot[S, F, Y]` 泛型结构——所有具体节点（`Plot`、`SplitPlot`、`RoutePlot`）共同内嵌的基类。
 
-`basePlot` 承担几乎全部通用职责：状态机、并发调度（`sprout` + `tend`）、重试、seal 传播、上下游连接、日志与生命周期装配、standalone 跑批与结果导出。节点之间的唯一差异通过构造时注入的 `ripenSeed` 钩子表达，因此三种节点各自只需实现一个 `ripenSeed` 方法。
+`basePlot` 承担几乎全部通用职责：状态机、并发调度（`sprout` + `tend`）、修剪、重试、seal 传播、上下游连接、日志与生命周期装配、standalone 跑批与结果导出。节点之间的唯一差异通过构造时注入的 `ripenSeed` 钩子表达，因此三种节点各自只需实现一个 `ripenSeed` 方法。
 
 ## 作用
 
@@ -101,7 +101,7 @@ type basePlot[S any, F any, Y any] struct {
 | `ctx` / `cancel` | 由 `context.WithCancel(context.Background())` 派生，用于内部强终止 |
 | `wg` | 汇聚 `StartAsync` 启动的后台协程 |
 | `state` | 状态原子变量（0/1/2） |
-| `*Counter` | 种子/果实/杂草计数与上下游 yield 计数（见 `counter.md`） |
+| `*Counter` | 种子/果实/杂草/剪枝计数与上下游 yield 计数（见 `counter.md`） |
 
 ## 公开方法
 
@@ -195,7 +195,7 @@ standalone 模式的一站式入口（阻塞）：
 - `lifecycleSpout.Handler()` 断言实现 `LoadStatuses(plotName string) ([]persist.LifecycleStatusRecord, error)`；不支持则返回 `plot %q lifecycle handler does not support status queries`；
 - 否则调用 `LoadStatuses(p.name)` 并透传结果与错误。
 
-> 返回的 `LifecycleStatusRecord` 关键字段：`Status`（`ripen` / `wither`）、`SeedJSON`、`FruitJSON`、`WitherType`、`WitherMessage`。
+> 返回的 `LifecycleStatusRecord` 关键字段：`Status`（`ripen` / `wither` / `prune`）、`SeedJSON`、`FruitJSON`、`WitherType`、`WitherMessage`。
 
 ## 关键流程
 
@@ -213,6 +213,7 @@ sequenceDiagram
     loop 直到 shouldFinish
         C->>SP: Seed / 上游转入 yield
         SP->>T: go tend(seed, sem, done)
+        T->>T: pruneIf 命中? → 直接 pruneSeed
         T->>T: 重试循环执行 cultivator
         T->>R: 成功 → ripenSeed
         T->>T: 失败 → witherSeed
@@ -265,6 +266,26 @@ shouldFinish := func() bool {
 
 即：来自**所有**已登记上游的 seal 到齐，输入才视为关闭；而外部 `Seal()` 一票即可关闭。
 
+### 修剪路径 `pruneSeed`
+
+`tend` 在进入重试循环之前先判断修剪谓词：
+
+```go
+if p.pruneIf != nil && p.pruneIf(seed) {
+    p.pruneSeed(seedPayload, startTime)
+    return
+}
+```
+
+`pruneSeed` 是一次「直接终结」：
+
+1. `AddPruneNum(1)`、`reportProgress()`；
+2. `eventClient.Emit("prune", []int{seedID})` 分配 `pruneID`；
+3. 写 `logInlet.SeedPrune(...)` 与 `lifecycleInlet.SeedPrune(...)`（父事件为 `seedID`），状态在持久化层晋升为 `prune`；
+4. **不**调用 `cultivator`、**不**进入重试循环、**不**向任何下游转发。
+
+> 语义要点：修剪发生在 `cultivator` **之前**，因此被修剪的种子既不会被培育、也不会失败，而是当作一种「预先判定跳过」。它仍计入完成数（`GetCompleted` 包含 `pruneNum`），保证进度条不会卡住。
+
 ### 失败路径 `witherSeed`
 
 ```go
@@ -277,6 +298,8 @@ func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error
 4. **不**向任何下游转发。
 
 ### 重试循环 `tend`
+
+进入重试循环前，`tend` 先取 `startTime` 并判断 `pruneIf`：若修剪谓词命中则立刻走 [`pruneSeed`](#修剪路径-pruneseed) 直接返回，**不进入**下面的循环。只有未命中的种子才进入 `cultivator`。
 
 ```go
 for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
@@ -296,6 +319,7 @@ for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 
 | 场景 | 行为 |
 |------|------|
+| `pruneIf` 命中（`p.pruneIf != nil && p.pruneIf(seed)`） | 不调用 `cultivator`，直接 `pruneSeed` 后返回 |
 | `cultivator` 返回 `nil` | 立即 break，进入 `ripenSeed` |
 | 返回 err 且 `retryIf(err) == false` | 立即 break，进入 `witherSeed`（不再重试） |
 | `attempt <= maxRetries` | 写 `SeedReplant` 日志（含 attempt 序号），再 `Sleep(retryDelay(attempt))` |
@@ -321,7 +345,7 @@ ripenSeed func(seedPayload runtime.Payload[S], fruit F, startTime time.Time)
 | 方法 | 时机 | 回调 |
 |------|------|------|
 | `notifyStart` | `sprout` 启动前 | `state=1`，`OnStart(GetSeedNum())` |
-| `reportProgress` | 每次 `ripenSeed` / `witherSeed` 内 | `OnProgress(GetCompleted(), GetSeedNum())` |
+| `reportProgress` | 每次 `ripenSeed` / `witherSeed` / `pruneSeed` 内 | `OnProgress(GetCompleted(), GetSeedNum())` |
 | `notifyFinish` | `sprout` 返回后 | `state=2`，`OnFinish(GetCompleted(), GetSeedNum())` |
 
 ## 使用示例

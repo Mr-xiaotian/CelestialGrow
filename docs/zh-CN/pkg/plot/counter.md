@@ -1,14 +1,14 @@
 # pkg/plot/counter.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
-`counter.go` 定义 `Counter`：一个并发安全的「种子 / 果实 / 杂草」三联计数器，并额外维护**按边跟踪**的上下游 yield 计数器。
+`counter.go` 定义 `Counter`：一个并发安全的「种子 / 果实 / 杂草 / 剪枝」四联计数器，并额外维护**按边跟踪**的上下游 yield 计数器。
 
 `basePlot` 通过内嵌 `*Counter` 直接获得 `AddSeedNum` / `GetCompleted` 等方法，用于在多个 tend 协程同时写、观察者同时读的场景下避免加锁。
 
 ## 作用
 
-- 跟踪当前 plot 的「种子总数」「成功产出（果实）」「失败产出（杂草）」；
+- 跟踪当前 plot 的「种子总数」「成功产出（果实）」「失败产出（杂草）」「修剪产出（剪枝）」；
 - 按**每条边**分别记录「本 plot 发给某下游的 yield 数」（`downstreamYields`）与「某上游发给本 plot 的 yield 数」（`upstreamYields`）；
 - 在 `GetSeedNum` 中把本地播入的种子与各上游转入的 yield 合并成「真实总输入数」，供观察者与 `IsFinish` 使用。
 
@@ -21,6 +21,7 @@ type Counter struct {
 	seedNum  atomic.Int64
 	fruitNum atomic.Int64
 	weedNum  atomic.Int64
+	pruneNum atomic.Int64
 
 	upstreamYields   map[string]*atomic.Int64
 	downstreamYields map[string]*atomic.Int64
@@ -32,6 +33,7 @@ type Counter struct {
 | `seedNum` | `atomic.Int64` | **本地**播入的种子数（只有 `AddSeedNum` 自增） |
 | `fruitNum` | `atomic.Int64` | 成功产出的果实数 |
 | `weedNum` | `atomic.Int64` | 失败产出的杂草数 |
+| `pruneNum` | `atomic.Int64` | 被修剪跳过的剪枝数 |
 | `upstreamYields` | `map[string]*atomic.Int64` | 上游 plot 名 → **该边**共享的 yield 计数器指针；`GetSeedNum` 会把这些值累加进来 |
 | `downstreamYields` | `map[string]*atomic.Int64` | 下游 plot 名 → **该边**共享的 yield 计数器指针；由本 plot 的 `ripenSeed` 通过 `AddDownstreamYieldNum` 自增 |
 
@@ -43,7 +45,7 @@ type Counter struct {
 
 #### `NewCounter() *Counter`
 
-创建一个计数器：三个原子量都是零，两个 map 都初始化为空（**非 nil**），因此新建后立即调用 `GetSeedNum` 不会 panic。
+创建一个计数器：四个原子量都是零，两个 map 都初始化为空（**非 nil**），因此新建后立即调用 `GetSeedNum` 不会 panic。
 
 ### 计数器登记
 
@@ -61,6 +63,7 @@ type Counter struct {
 | `AddSeedNum` | `func (c *Counter) AddSeedNum(addNum int)` | 原子地把 `seedNum` 增加 `addNum` |
 | `AddFruitNum` | `func (c *Counter) AddFruitNum(addNum int)` | 原子地把 `fruitNum` 增加 `addNum` |
 | `AddWeedNum` | `func (c *Counter) AddWeedNum(addNum int)` | 原子地把 `weedNum` 增加 `addNum` |
+| `AddPruneNum` | `func (c *Counter) AddPruneNum(addNum int)` | 原子地把 `pruneNum` 增加 `addNum` |
 | `AddDownstreamYieldNum` | `func (c *Counter) AddDownstreamYieldNum(name string, addNum int)` | 原子地把 `downstreamYields[name]` 增加 `addNum` |
 
 ### Getters（只读）
@@ -70,7 +73,8 @@ type Counter struct {
 | `GetSeedNum` | `func (c *Counter) GetSeedNum() int` | `seedNum` + `Σ upstreamYields[*].Load()`，即「本 plot 将要/已经处理的总种子数」 |
 | `GetFruitNum` | `func (c *Counter) GetFruitNum() int` | 成功果实数 |
 | `GetWeedNum` | `func (c *Counter) GetWeedNum() int` | 失败杂草数 |
-| `GetCompleted` | `func (c *Counter) GetCompleted() int` | `GetFruitNum() + GetWeedNum()` |
+| `GetPruneNum` | `func (c *Counter) GetPruneNum() int` | 剪枝数（被修剪跳过的种子数） |
+| `GetCompleted` | `func (c *Counter) GetCompleted() int` | `GetFruitNum() + GetWeedNum() + GetPruneNum()` |
 
 ### 谓词
 
@@ -87,6 +91,7 @@ type Counter struct {
 | `basePlot.Seed` | `AddSeedNum(1)`（本地播入 1 颗） |
 | `basePlot.ConnectTo` | 新建该边的 `*atomic.Int64`，`p.SetDownstreamYieldCounter(nextName, c)` + `next.SetUpstreamYieldCounter(p.GetName(), c)` |
 | `basePlot.witherSeed` | `AddWeedNum(1)` + 触发 `reportProgress` |
+| `basePlot.pruneSeed` | `AddPruneNum(1)` + 触发 `reportProgress` |
 | `Plot.ripenSeed` | `AddFruitNum(1)` + 对**每个**下游 `AddDownstreamYieldNum(nextPlot, 1)` |
 | `SplitPlot.ripenSeed` | `AddFruitNum(1)` + 对每个下游 `AddDownstreamYieldNum(nextPlot, len(fruits))` |
 | `RoutePlot.ripenSeed` | `AddFruitNum(1)` + 对**每个被路由到的**下游 `AddDownstreamYieldNum(nextPlot, 1)` |
@@ -104,6 +109,7 @@ flowchart LR
 ## 注意事项
 
 - `AddDownstreamYieldNum` 不做存在性检查：`name` 未登记时会取到 `nil` 的 `*atomic.Int64` 并直接 `Add`，从而**panic**。因此自增方必须与 `ConnectTo` 的注册保持成对出现（`Plot` / `SplitPlot` / `RoutePlot` 都只在已连接目标上自增）。
-- `seedNum`、`fruitNum`、`weedNum` 与各 yield 计数器**不是同一时刻的原子快照**，因此 `IsFinish` 与观察者进度在并发下可能出现瞬时偏差，最终会趋于稳定。
+- `seedNum`、`fruitNum`、`weedNum`、`pruneNum` 与各 yield 计数器**不是同一时刻的原子快照**，因此 `IsFinish` 与观察者进度在并发下可能出现瞬时偏差，最终会趋于稳定。
 - `upstreamYields` 只被 `GetSeedNum` 读取，`Counter` 自身不写入来自上游的数据——上游的 yield 计数由上游自己 `Add`，本 Counter 只是持有同一个指针。
-- `AddSeedNum` / `AddFruitNum` / `AddWeedNum` / `AddDownstreamYieldNum` 接受 `int` 并在内部转为 `int64`；传负数会让计数倒退，业务层应避免。
+- `AddSeedNum` / `AddFruitNum` / `AddWeedNum` / `AddPruneNum` / `AddDownstreamYieldNum` 接受 `int` 并在内部转为 `int64`；传负数会让计数倒退，业务层应避免。
+- `GetCompleted`（果实 + 杂草 + 剪枝）与 `GetSeedNum`（种子总数）在剪枝场景下依然严格守恒：被修剪的种子同样计入完成，保证进度条能走到 100%。

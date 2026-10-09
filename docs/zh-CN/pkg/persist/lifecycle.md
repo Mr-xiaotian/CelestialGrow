@@ -1,10 +1,10 @@
 # pkg/persist/lifecycle.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 ## 作用
 
-`pkg/persist/lifecycle.go` 把每颗种子的 **培育轨迹** 拆成「事件（events）」与「状态快照（status）」两类记录，通过 `LifecycleRecordHandler` 订阅 `pkg/funnel` 的异步通道，写入由 [`sqlite.md`](./sqlite.md) 维护的 SQLite 文件中；同时通过 `LifecycleInlet` 暴露面向业务方的生产端 API（`SeedInput` / `SeedRipen` / `SeedWither`）。本文件本身不直接执行 SQL——所有持久化细节都在 `sqlite.go`，本文件只做事件 → 记录 → 入库的 **编排与适配**。
+`pkg/persist/lifecycle.go` 把每颗种子的 **培育轨迹** 拆成「事件（events）」与「状态快照（status）」两类记录，通过 `LifecycleRecordHandler` 订阅 `pkg/funnel` 的异步通道，写入由 [`sqlite.md`](./sqlite.md) 维护的 SQLite 文件中；同时通过 `LifecycleInlet` 暴露面向业务方的生产端 API（`SeedInput` / `SeedRipen` / `SeedWither` / `SeedPrune`）。本文件本身不直接执行 SQL——所有持久化细节都在 `sqlite.go`，本文件只做事件 → 记录 → 入库的 **编排与适配**。
 
 > 事件 ID 由 `runtime.EventClient`（如 `runtime.LocalEventClient.Emit`）分配，参见 [`pkg/runtime/event.go`](../../../../pkg/runtime/event.go)。本文件直接消费 `int` 形式的 `EventID`，不依赖 `runtime` 包。
 
@@ -29,7 +29,7 @@ type LifecycleRecord struct {
 
 | 字段 | 含义 |
 |------|------|
-| `Kind` | 操作类型；取以下三者之一：`seed` / `ripen` / `wither`（由包内常量 `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` 表示） |
+| `Kind` | 操作类型；取以下四者之一：`seed` / `ripen` / `wither` / `prune`（由包内常量 `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` / `lifecyclePrune` 表示） |
 | `InputEventID` | 本颗种子（输入）的事件 ID，对应 `status.input_event_id` |
 | `CurrentEventID` | 本次产生的事件 ID，对应 `status.current_event_id`；`seed` 时与 `InputEventID` 相同 |
 | `ParentIDs` | 父事件 ID 列表，写入 `events` 时同步写入 `event_parents` 边 |
@@ -56,7 +56,7 @@ type LifecycleRecordHandler struct {
 | 方法 | 触发时机 | 行为 |
 |------|----------|------|
 | `BeforeStart() error` | Spout 启动前 | 创建 `lifecycles/<YYYY-MM-DD>/` 目录并打开 `grow_lifecycle(<HH-MM-SS.mmm>).sqlite3`；保存路径到 `SQLitePath`、连接句柄到 `sqliteDB` |
-| `HandleRecord(record LifecycleRecord) error` | 每条记录到达 | 先检查 `sqliteDB != nil`；再按 `record.Kind` 路由到 `InsertLifecycleEvent` + `UpsertLifecycleStatusSeed` / `PromoteLifecycleStatusRipen` / `PromoteLifecycleStatusWither` |
+| `HandleRecord(record LifecycleRecord) error` | 每条记录到达 | 先检查 `sqliteDB != nil`；再按 `record.Kind` 路由到 `InsertLifecycleEvent` + `UpsertLifecycleStatusSeed` / `PromoteLifecycleStatusRipen` / `PromoteLifecycleStatusWither` / `PromoteLifecycleStatusPrune` |
 | `AfterStop() error` | Spout 停止后 | 关闭 `sqliteDB` 并置空 |
 | `LoadStatuses(plotName string) ([]LifecycleStatusRecord, error)` | 业务方主动调用 | 优先复用 `sqliteDB`；若尚未初始化则按 `SQLitePath` 重新打开 |
 
@@ -72,15 +72,16 @@ type LifecycleInlet struct {
 }
 ```
 
-内嵌 `funnel.Inlet[LifecycleRecord]`，仅在此基础上叠加 3 个面向业务的发送方法：
+内嵌 `funnel.Inlet[LifecycleRecord]`，仅在此基础上叠加 4 个面向业务的发送方法：
 
 | 方法 | `Kind` | 行为 |
 |------|--------|------|
 | `SeedInput(plot string, eventID int, parentIDs []int, seed any)` | `seed` | 发送一条 seed 记录：`CurrentEventID = InputEventID = eventID`，`SeedJSON = toLifecycleJSON(seed)`；落库时先写 `events`（`status = "seed"`），再 `UpsertLifecycleStatusSeed` |
 | `SeedRipen(plot string, inputEventID int, parentEventID int, ripenEventID int, fruit any)` | `ripen` | 发送一条 ripen 记录：`CurrentEventID = ripenEventID`，`ParentIDs = []int{parentEventID}`，`FruitJSON = toLifecycleJSON(fruit)`；落库时先写 `events`，再 `PromoteLifecycleStatusRipen` |
 | `SeedWither(plot string, inputEventID int, parentEventID int, witherEventID int, err error)` | `wither` | 发送一条 wither 记录：`CurrentEventID = witherEventID`，`ParentIDs = []int{parentEventID}`，`WitherType = %T`、`WitherMessage = %v`；落库时先写 `events`，再 `PromoteLifecycleStatusWither` |
+| `SeedPrune(plot string, inputEventID int, parentEventID int, pruneEventID int)` | `prune` | 发送一条 prune 记录：`CurrentEventID = pruneEventID`，`ParentIDs = []int{parentEventID}`；落库时先写 `events`，再 `PromoteLifecycleStatusPrune` |
 
-三个方法都在内部用 `time.Now().UnixMilli()` 生成 `TS`，然后调用内嵌 `Inlet` 的 `Send`；因此**不返回 error**，发送超时会由 `funnel.Inlet` 内部处理。
+四个方法都在内部用 `time.Now().UnixMilli()` 生成 `TS`，然后调用内嵌 `Inlet` 的 `Send`；因此**不返回 error**，发送超时会由 `funnel.Inlet` 内部处理。
 
 ### `NewLifecycleInlet` — 构造
 
@@ -89,7 +90,7 @@ func NewLifecycleInlet(ch chan<- LifecycleRecord, timeout time.Duration) *Lifecy
 ```
 
 - `ch` 必须由对应的 `funnel.Spout[LifecycleRecord].GetQueue()` 暴露。
-- `timeout` 透传给 `funnel.NewInlet`；当通道缓冲区满时 `SeedInput` / `SeedRipen` / `SeedWither` 内部 `l.Send` 会在超时后返回 `inlet send timeout after <d>`。
+- `timeout` 透传给 `funnel.NewInlet`；当通道缓冲区满时 `SeedInput` / `SeedRipen` / `SeedWither` / `SeedPrune` 内部 `l.Send` 会在超时后返回 `inlet send timeout after <d>`。
 
 ## 关键流程
 
@@ -131,6 +132,13 @@ sequenceDiagram
     Handler->>DB: InsertLifecycleEvent(events + parent edge)
     Handler->>DB: PromoteLifecycleStatusWither(status = "wither")
 
+    Caller->>Inlet: SeedPrune(plot, inputID, parentID, pruneID)
+    Inlet->>Ch: Send({Kind=prune})
+    Ch->>Spout: 通道读出
+    Spout->>Handler: HandleRecord(record)
+    Handler->>DB: InsertLifecycleEvent(events + parent edge)
+    Handler->>DB: PromoteLifecycleStatusPrune(status = "prune")
+
     Note over Spout,Handler: Spout.Stop()
     Spout->>Handler: AfterStop()
     Handler->>DB: sqliteDB.Close()
@@ -138,7 +146,7 @@ sequenceDiagram
 
 ### `Kind` 路由
 
-`HandleRecord` 先校验数据库句柄，再在内部 `switch record.Kind` 上做三向路由；任何其它取值都直接返回 `unsupported lifecycle operation: <kind>`：
+`HandleRecord` 先校验数据库句柄，再在内部 `switch record.Kind` 上做四向路由；任何其它取值都直接返回 `unsupported lifecycle operation: <kind>`：
 
 ```go
 func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
@@ -156,6 +164,9 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
     case lifecycleWither:
         InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs)
         PromoteLifecycleStatusWither(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.WitherType, record.WitherMessage, record.TS)
+    case lifecyclePrune:
+        InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs)
+        PromoteLifecycleStatusPrune(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.TS)
     default:
         return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
     }
@@ -164,7 +175,7 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
 
 要点：
 
-- 三种 Kind 都先写 `events`（`event_type` 直接取 `record.Kind`，即 `seed` / `ripen` / `wither`），再更新 `status`。
+- 四种 Kind 都先写 `events`（`event_type` 直接取 `record.Kind`，即 `seed` / `ripen` / `wither` / `prune`），再更新 `status`。
 - `events.plot` 与 `status.plot` 都来自 `record.PlotName`，`status.ts` 来自 `record.TS`，因此一次调用即可让 `status` 表同时记录「当前事件类型 + plot + 时间戳」。
 - 若 `InsertLifecycleEvent` 失败，状态更新不会执行——事件与其状态快照保持一致。
 
@@ -229,12 +240,13 @@ func toLifecycleJSON(value any) string {
 | `(*LifecycleInlet).SeedInput` | 方法 | 发送 `seed` 记录 |
 | `(*LifecycleInlet).SeedRipen` | 方法 | 发送 `ripen` 记录 |
 | `(*LifecycleInlet).SeedWither` | 方法 | 发送 `wither` 记录 |
+| `(*LifecycleInlet).SeedPrune` | 方法 | 发送 `prune` 记录 |
 | `(*LifecycleRecordHandler).BeforeStart` | 方法 | 建目录、开库 |
 | `(*LifecycleRecordHandler).HandleRecord` | 方法 | 按 `Kind` 路由落库 |
 | `(*LifecycleRecordHandler).AfterStop` | 方法 | 关库并置空句柄 |
 | `(*LifecycleRecordHandler).LoadStatuses` | 方法 | 按 plot 读取全部状态快照 |
 
-> `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` 为包内私有常量。`toLifecycleJSON` 为包内私有辅助函数。
+> `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` / `lifecyclePrune` 为包内私有常量。`toLifecycleJSON` 为包内私有辅助函数。
 
 ## 使用示例
 
@@ -287,7 +299,7 @@ func main() {
 
 ## 注意事项
 
-- **Kind 路由是单点**：`HandleRecord` 的 `default` 分支会返回 `unsupported lifecycle operation: <kind>`；`lifecycle.go` 内部只承认 `seed` / `ripen` / `wither` 三种 Kind，向通道塞入其它值会破坏流水线，需要在生产者侧保证。
+- **Kind 路由是单点**：`HandleRecord` 的 `default` 分支会返回 `unsupported lifecycle operation: <kind>`；`lifecycle.go` 内部只承认 `seed` / `ripen` / `wither` / `prune` 四种 Kind，向通道塞入其它值会破坏流水线，需要在生产者侧保证。
 - **`sqliteDB == nil` 是硬失败**：`HandleRecord` 在句柄为空时直接返回 `生命周期 sqlite 未初始化`，因此必须先 `Spout.Start()`（触发 `BeforeStart`）再发送记录。
 - **时间戳单调性**：所有 `TS` 都由 `LifecycleInlet` 在打包时 `time.Now().UnixMilli() / 1000` 生成；同一毫秒内大量事件会产生相同 TS，`status.ts` 与 `input_event_id` 共同决定 `LoadLifecycleStatuses` 的排序。
 - **错误信息为 `fmt.Sprintf` 形式**：`WitherType` / `WitherMessage` 由 `fmt.Sprintf("%T", err)` / `fmt.Sprintf("%v", err)` 生成，包装过的错误可能丢失错误链；需要精确错误链时只能从业务侧另行记录。

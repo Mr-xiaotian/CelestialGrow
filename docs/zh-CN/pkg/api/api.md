@@ -1,6 +1,6 @@
 # pkg/api/api.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 ## 作用
 
@@ -8,7 +8,7 @@
 
 1. **类型别名**：`type X = pkg.Y`，例如 `Farm`、`Plot`、`SplitPlot`、`RoutePlot`、`PlotNode`、`Option`；
 2. **构造函数薄包装**：`NewFarm`、`NewPlot`、`NewSplitPlot`、`NewRoutePlot`、`NewProgressBar`；
-3. **包级函数变量**：`WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`、`WithLogLevel`。
+3. **包级函数变量/泛型函数**：`WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`、`WithLogLevel`，以及泛型函数 `WithPruneIf`。
 
 下游用户只需导入 `github.com/Mr-xiaotian/CelestialGrow/pkg/api` 一个包即可使用整个框架。
 
@@ -83,7 +83,7 @@
 
 ## 配置函数
 
-`With*` 在本包中以**包级变量**（函数值）形式转发，例如 `WithTenders = plot.WithTenders`；仅 `WithRetryDelay` 用一层闭包显式标注了返回类型 `Option`，对外行为与底层零差异。
+`With*` 在本包中以**包级变量**（函数值）形式转发，例如 `WithTenders = plot.WithTenders`；仅 `WithRetryDelay` 用一层闭包显式标注了返回类型 `Option`，对外行为与底层零差异。唯一的泛型函数是 `WithPruneIf[S any]`（并非包级变量，而是独立的泛型函数），它直接转发到 `plot.WithPruneIf`。
 
 ```go
 package main
@@ -108,6 +108,7 @@ func main() {
         }),
         grow.WithRetryIf(func(err error) bool { return !errors.Is(err, context.Canceled) }),
         grow.WithLogLevel("DEBUG"),
+        grow.WithPruneIf(func(seed int) bool { return seed < 0 }), // 负数种子直接修剪
     )
 
     p.Run([]int{1, 2, 3})
@@ -122,10 +123,13 @@ func main() {
 | `WithRetryDelay(fn func(attempt int) time.Duration)` | 设置重试间隔策略，`attempt` 从 `1` 开始递增。 | `func(int) time.Duration { return 0 }`（立即重试） | 在 `pkg/api` 中通过闭包二次封装，参数类型与底层一致。 |
 | `WithRetryIf(fn func(error) bool)` | 错误过滤器；仅返回 `true` 的错误才触发重试。 | `func(error) bool { return true }`（全部重试） | 可用于屏蔽不可重试错误（如 `context.Canceled`）。 |
 | `WithLogLevel(level string)` | 设置当前节点的日志最低级别。 | `"INFO"` | 只作用于该节点；Farm 自身的级别在 `NewFarm` 时设置。 |
+| `WithPruneIf[S any](fn func(S) bool)` | 设置修剪谓词；对每个 seed 在培育前求值，返回 `true` 则跳过培育直接终结为 prune。 | `nil`（不修剪） | 泛型参数 `S` 由谓词参数推断；命中计入 `pruneNum` 与 `GetCompleted`。 |
 
 > 默认值统一来自 `pkg/plot/option.go` 的 `defaultOptions()`，修改底层默认值即可全局生效。
 >
 > 重试语义（`basePlot.tend`）：最多执行 `maxRetries + 1` 次；`retryIf(err)` 返回 `false` 时立即停止重试；`cultivator` 若 panic 会被 `recover` 捕获并记为失败，错误文本为 `cultivator panic: ...`。
+>
+> 修剪语义（`basePlot.tend`）：`pruneIf` 在 **cultivator 之前**求值，命中则直接走 `pruneSeed` 通路；修剪**优先于重试**——只要命中就不会进入重试逻辑。示例可与 [`demo/demo_prune`](../../demo/demo_prune/main.md) 对照。
 
 ## 使用示例
 

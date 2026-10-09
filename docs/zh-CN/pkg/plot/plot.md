@@ -1,6 +1,6 @@
 # pkg/plot/plot.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/10/09
 
 `plot.go` 定义 `pkg/plot` 中最常用的节点类型 `Plot[S, F]`：把「接收 seed → 并发执行 cultivator → 产出 fruit → 转发下游」封装为可连接、可观察、可重试的泛型节点。
 
@@ -82,9 +82,11 @@ flowchart LR
     UP[上游 yieldChans] --> SC
     SC --> SP[sprout 调度器]
     SP --> T[tend 协程池]
+    T -->|pruneIf 命中| PR[basePlot.pruneSeed]
     T -->|成功| R[Plot.ripenSeed]
     T -->|失败 / 重试耗尽 / panic| W[basePlot.witherSeed]
     R --> FC[yieldChans 各下游]
+    PR --> LI
     R --> LI[LogInlet / LifecycleInlet]
     W --> LI
     SP -->|收尾发 seal| FC
@@ -95,12 +97,13 @@ flowchart LR
 
 ### 从 seed 到下游 yield
 
-`basePlot.tend` 调用 `cultivator(seed)` 后按结果分流：
+`basePlot.tend` 调用 `cultivator(seed)` 前先判断修剪谓词，若命中直接走 `basePlot.pruneSeed`（不调用 `cultivator`）；否则按结果分流：
 
 - **成功**（`err == nil`）：调用注入的 `ripenSeed`，即本文件的实现；
-- **失败**（重试耗尽、`retryIf` 拒绝、或 `panic` 被 `recover` 捕获）：走 `basePlot.witherSeed`，**不向任何下游转发**。
+- **失败**（重试耗尽、`retryIf` 拒绝、或 `panic` 被 `recover` 捕获）：走 `basePlot.witherSeed`，**不向任何下游转发**；
+- **修剪**（`WithPruneIf` 谓词返回 `true`）：走 `basePlot.pruneSeed`，**不向任何下游转发**。
 
-重试循环、seal 传播、并发模型等通用逻辑见 `plot_base.md`。
+修剪、重试循环、seal 传播、并发模型等通用逻辑见 `plot_base.md`。
 
 ## 使用示例
 

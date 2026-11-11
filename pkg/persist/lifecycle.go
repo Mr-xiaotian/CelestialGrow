@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 )
 
 const (
@@ -132,72 +133,113 @@ func (l *LifecycleRecordHandler) LoadStatuses(plotName string) ([]LifecycleStatu
 	return LoadLifecycleStatuses(db, plotName)
 }
 
-// LifecycleInlet 生产生命周期记录。
-type LifecycleInlet struct {
-	funnel.Inlet[LifecycleRecord]
+// ==== Observer ====
+
+// LifecycleObserver 将观察者事件转换为生命周期记录并异步写入 sqlite。
+//
+// 种子输入、成熟、枯萎与剪枝事件分别映射为 seed / ripen / wither / prune 记录；
+// 事件携带的事件 ID 与父事件 ID 直接用于重建生命周期图。
+type LifecycleObserver struct {
+	spout *funnel.Spout[LifecycleRecord]
+	inlet *funnel.Inlet[LifecycleRecord]
 }
 
-// NewLifecycleInlet 创建 LifecycleInlet。
-func NewLifecycleInlet(ch chan<- LifecycleRecord, timeout time.Duration) *LifecycleInlet {
-	return &LifecycleInlet{
-		Inlet: *funnel.NewInlet(ch, timeout),
+// NewLifecycleObserver 创建一个生命周期观察者。
+func NewLifecycleObserver() *LifecycleObserver {
+	return newLifecycleObserver(&LifecycleRecordHandler{})
+}
+
+// newLifecycleObserver 使用指定处理器创建观察者，便于测试注入处理器。
+func newLifecycleObserver(handler funnel.RecordHandler[LifecycleRecord]) *LifecycleObserver {
+	spout := funnel.NewSpout(handler, 100, time.Second)
+	return &LifecycleObserver{
+		spout: spout,
+		inlet: funnel.NewInlet(spout.GetQueue(), time.Second),
 	}
 }
 
-// SeedInput 记录一条 seed 输入事件和对应的初始状态。
-func (l *LifecycleInlet) SeedInput(plot string, eventID int, parentIDs []int, seed any) {
-	now := time.Now().UnixMilli()
-	l.Send(LifecycleRecord{
-		Kind:           lifecycleSeed,
-		CurrentEventID: eventID,
-		InputEventID:   eventID,
-		ParentIDs:      parentIDs,
-		PlotName:       plot,
-		SeedJSON:       toLifecycleJSON(seed),
-		TS:             float64(now) / 1000,
-	})
+// Start 启动生命周期消费循环并打开 sqlite 数据库。
+func (l *LifecycleObserver) Start() error {
+	return l.spout.Start()
 }
 
-// SeedRipen 记录成功事件并将状态晋升为 ripen。
-func (l *LifecycleInlet) SeedRipen(plot string, inputEventID int, parentEventID int, ripenEventID int, fruit any) {
-	now := time.Now().UnixMilli()
-	l.Send(LifecycleRecord{
-		Kind:           lifecycleRipen,
-		CurrentEventID: ripenEventID,
-		InputEventID:   inputEventID,
-		ParentIDs:      []int{parentEventID},
-		FruitJSON:      toLifecycleJSON(fruit),
-		PlotName:       plot,
-		TS:             float64(now) / 1000,
-	})
+// Stop 停止消费循环并关闭 sqlite 数据库。
+func (l *LifecycleObserver) Stop() error {
+	return l.spout.Stop()
 }
 
-// SeedWither 记录失败事件并将状态晋升为 wither。
-func (l *LifecycleInlet) SeedWither(plot string, inputEventID int, parentEventID int, witherEventID int, err error) {
-	now := time.Now().UnixMilli()
-	l.Send(LifecycleRecord{
-		Kind:           lifecycleWither,
-		CurrentEventID: witherEventID,
-		InputEventID:   inputEventID,
-		PlotName:       plot,
-		ParentIDs:      []int{parentEventID},
-		WitherType:     fmt.Sprintf("%T", err),
-		WitherMessage:  fmt.Sprintf("%v", err),
-		TS:             float64(now) / 1000,
-	})
+// OnEvent 将事件翻译为生命周期记录并投递到消费队列。
+func (l *LifecycleObserver) OnEvent(event observer.Event) error {
+	switch ev := event.(type) {
+	case observer.TaskInputEvent:
+		return l.inlet.Send(LifecycleRecord{
+			Kind:           lifecycleSeed,
+			InputEventID:   ev.SeedID,
+			CurrentEventID: ev.SeedID,
+			ParentIDs:      ev.Parents,
+			PlotName:       ev.Node,
+			SeedJSON:       toLifecycleJSON(ev.Seed),
+			TS:             unixSeconds(ev.Time),
+		})
+
+	case observer.TaskSuccessEvent:
+		return l.inlet.Send(LifecycleRecord{
+			Kind:           lifecycleRipen,
+			InputEventID:   ev.SeedID,
+			CurrentEventID: ev.FruitID,
+			ParentIDs:      []int{ev.SeedID},
+			PlotName:       ev.Node,
+			FruitJSON:      toLifecycleJSON(ev.Fruit),
+			TS:             unixSeconds(ev.Time),
+		})
+
+	case observer.TaskFailEvent:
+		return l.inlet.Send(LifecycleRecord{
+			Kind:           lifecycleWither,
+			InputEventID:   ev.SeedID,
+			CurrentEventID: ev.WeedID,
+			ParentIDs:      []int{ev.SeedID},
+			PlotName:       ev.Node,
+			WitherType:     fmt.Sprintf("%T", ev.Err),
+			WitherMessage:  fmt.Sprintf("%v", ev.Err),
+			TS:             unixSeconds(ev.Time),
+		})
+
+	case observer.TaskSkipEvent:
+		return l.inlet.Send(LifecycleRecord{
+			Kind:           lifecyclePrune,
+			InputEventID:   ev.SeedID,
+			CurrentEventID: ev.PruneID,
+			ParentIDs:      []int{ev.SeedID},
+			PlotName:       ev.Node,
+			TS:             unixSeconds(ev.Time),
+		})
+
+	case observer.GraphStartEvent, observer.GraphEndEvent,
+		observer.NodeStartEvent, observer.NodeEndEvent,
+		observer.TaskRetryEvent,
+		observer.TerminationInputEvent, observer.TerminationMergeEvent:
+		return nil
+	}
+
+	return nil
 }
 
-// SeedPrune 记录剪枝事件并将状态晋升为 prune。
-func (l *LifecycleInlet) SeedPrune(plot string, inputEventID int, parentEventID int, pruneEventID int) {
-	now := time.Now().UnixMilli()
-	l.Send(LifecycleRecord{
-		Kind:           lifecyclePrune,
-		CurrentEventID: pruneEventID,
-		InputEventID:   inputEventID,
-		PlotName:       plot,
-		ParentIDs:      []int{parentEventID},
-		TS:             float64(now) / 1000,
+// LoadStatuses 读取指定 plot 的全部种子状态快照。
+// 消费者停止后依然可用：处理器会按已记录的路径重新打开数据库。
+func (l *LifecycleObserver) LoadStatuses(plotName string) ([]LifecycleStatusRecord, error) {
+	handler, ok := l.spout.Handler().(interface {
+		LoadStatuses(plotName string) ([]LifecycleStatusRecord, error)
 	})
+	if !ok {
+		return nil, fmt.Errorf("lifecycle handler does not support status queries")
+	}
+	return handler.LoadStatuses(plotName)
+}
+
+// unixSeconds 将时间转换为 Unix 秒（保留毫秒精度）。
+func unixSeconds(t time.Time) float64 {
+	return float64(t.UnixMilli()) / 1000
 }
 
 // toLifecycleJSON 将任意值序列化为可写入 sqlite 的 JSON 文本。

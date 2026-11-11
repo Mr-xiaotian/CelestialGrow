@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
 
@@ -41,7 +42,6 @@ func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, e
 // 路由表中未连接的下游会被跳过，不影响其余路由项。
 func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[string]Y, startTime time.Time) {
 	p.AddFruitNum(1)
-	p.reportProgress()
 
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
@@ -49,9 +49,17 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	routesRepr := trunc(fmt.Sprintf("%+v", routes), 25)
-	useTime := time.Since(startTime).Seconds()
-	p.logInlet.SeedRipen(p.name, seedRepr, routesRepr, useTime, seedID, fruitID)
-	p.lifecycleInlet.SeedRipen(p.name, seedID, seedID, fruitID, routes)
+	p.emit(observer.TaskSuccessEvent{
+		Node:      p.name,
+		Seed:      seed,
+		SeedRepr:  seedRepr,
+		Fruit:     routes,
+		FruitRepr: routesRepr,
+		Elapsed:   time.Since(startTime),
+		SeedID:    seedID,
+		FruitID:   fruitID,
+		Time:      time.Now(),
+	})
 
 	for nextPlot, yield := range routes {
 		ch, ok := p.yieldChans[nextPlot]
@@ -63,8 +71,15 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		yieldRepr := trunc(fmt.Sprintf("%+v", yield), 50)
 
-		p.logInlet.SeedInput(nextPlot, yieldRepr, downstreamSeedID)
-		p.lifecycleInlet.SeedInput(nextPlot, downstreamSeedID, []int{fruitID}, yield)
+		p.emit(observer.TaskInputEvent{
+			Node:     nextPlot,
+			From:     p.name,
+			Seed:     yield,
+			SeedRepr: yieldRepr,
+			SeedID:   downstreamSeedID,
+			Parents:  []int{fruitID},
+			Time:     time.Now(),
+		})
 		yieldPayload := runtime.Payload[Y]{Value: yield, EventID: downstreamSeedID}
 		ch <- yieldPayload
 	}

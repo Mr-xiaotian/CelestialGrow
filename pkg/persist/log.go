@@ -3,9 +3,11 @@ package persist
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 )
 
 // ==== Constants ====
@@ -79,86 +81,181 @@ func (l *LogRecordHandler) AfterStop() error {
 	return nil
 }
 
-// ==== Inlet ====
+// ==== Observer ====
 
-// LogInlet 日志生产端。内嵌 funnel.Inlet 并提供级别过滤，
-// 低于 minLevel 的日志不会被发送到通道。
-type LogInlet struct {
-	funnel.Inlet[LogRecord]
+// LogObserver 将观察者事件转换为日志记录并异步写入日志文件。
+//
+// 事件经 funnel.Spout 异步落盘，观察者只负责翻译与投递。节点结束日志中的
+// 果实/杂草/剪枝数量由观察者根据任务结果事件累加，因此不依赖事件携带计数。
+// 事件可能来自多个并发协程，计数与投递均需并发安全。
+type LogObserver struct {
+	mu       sync.Mutex
+	counts   map[string]*nodeLogCounts
+	spout    *funnel.Spout[LogRecord]
+	inlet    *funnel.Inlet[LogRecord]
 	minLevel int
 }
 
-// NewLogInlet 创建 LogInlet。
-// level 指定最低日志级别（不存在则默认 INFO），timeout 为发送超时。
-func NewLogInlet(ch chan<- LogRecord, timeout time.Duration, level string) *LogInlet {
+// nodeLogCounts 记录单个节点已产生的任务结果数量。
+type nodeLogCounts struct {
+	fruit int
+	weed  int
+	prune int
+}
+
+// NewLogObserver 创建一个日志观察者，level 为最低日志级别（不存在则默认 INFO）。
+func NewLogObserver(level string) *LogObserver {
+	return newLogObserver(&LogRecordHandler{}, level)
+}
+
+// newLogObserver 使用指定处理器创建日志观察者，便于测试注入处理器。
+func newLogObserver(handler funnel.RecordHandler[LogRecord], level string) *LogObserver {
 	minLevel, ok := levelOrder[level]
 	if !ok {
 		minLevel = levelOrder["INFO"]
 	}
-	return &LogInlet{
-		Inlet:    *funnel.NewInlet(ch, timeout),
+
+	spout := funnel.NewSpout(handler, 100, time.Second)
+	return &LogObserver{
+		counts:   make(map[string]*nodeLogCounts),
+		spout:    spout,
+		inlet:    funnel.NewInlet(spout.GetQueue(), time.Second),
 		minLevel: minLevel,
 	}
 }
 
-// ==== Log Methods ====
+// Start 启动日志消费循环并打开日志文件。
+func (l *LogObserver) Start() error {
+	return l.spout.Start()
+}
+
+// Stop 停止日志消费循环并关闭日志文件。
+func (l *LogObserver) Stop() error {
+	return l.spout.Stop()
+}
+
+// OnEvent 将事件翻译为日志记录并投递到消费队列。
+func (l *LogObserver) OnEvent(event observer.Event) error {
+	switch ev := event.(type) {
+	case observer.GraphStartEvent:
+		if err := l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", ev.Farm), ev.StartTime); err != nil {
+			return err
+		}
+		for _, line := range ev.Structure {
+			if err := l.log("INFO", line, ev.StartTime); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case observer.GraphEndEvent:
+		return l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", ev.Farm, ev.Elapsed.Seconds()), ev.EndTime)
+
+	case observer.NodeStartEvent:
+		return l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", ev.Node, ev.Tenders), ev.StartTime)
+
+	case observer.NodeEndEvent:
+		counts := l.takeCounts(ev.Node)
+		return l.log(
+			"INFO",
+			fmt.Sprintf(
+				"Plot '%s' end. Use %.2fs. %d ripened, %d withered, %d pruned.",
+				ev.Node, ev.Elapsed.Seconds(), counts.fruit, counts.weed, counts.prune,
+			),
+			ev.EndTime,
+		)
+
+	case observer.TaskInputEvent:
+		return l.log(
+			"DEBUG",
+			fmt.Sprintf("In '%s', Seed %s input. [%d*]", ev.Node, ev.SeedRepr, ev.SeedID),
+			ev.Time,
+		)
+
+	case observer.TaskSuccessEvent:
+		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.fruit++ })
+		return l.log(
+			"SUCCESS",
+			fmt.Sprintf(
+				"In '%s', Seed %s ripened. Fruit is %s. Use %.2fs. [%d->%d*]",
+				ev.Node, ev.SeedRepr, ev.FruitRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.FruitID,
+			),
+			ev.Time,
+		)
+
+	case observer.TaskFailEvent:
+		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.weed++ })
+		return l.log(
+			"ERROR",
+			fmt.Sprintf(
+				"In '%s', Seed %s withered: %v. Use %.2fs. [%d->%d*]",
+				ev.Node, ev.SeedRepr, ev.Err, ev.Elapsed.Seconds(), ev.SeedID, ev.WeedID,
+			),
+			ev.Time,
+		)
+
+	case observer.TaskSkipEvent:
+		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.prune++ })
+		return l.log(
+			"INFO",
+			fmt.Sprintf(
+				"In '%s', Seed %s pruned. Use %.2fs. [%d->%d*]",
+				ev.Node, ev.SeedRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.PruneID,
+			),
+			ev.Time,
+		)
+
+	case observer.TaskRetryEvent:
+		return l.log(
+			"WARNING",
+			fmt.Sprintf(
+				"In '%s', Seed %s attempt %d withered: %v. Replanting. [%d*]",
+				ev.Node, ev.SeedRepr, ev.Attempt, ev.Err, ev.SeedID,
+			),
+			ev.Time,
+		)
+
+	case observer.TerminationInputEvent, observer.TerminationMergeEvent:
+		return nil
+	}
+
+	return nil
+}
 
 // log 发送一条指定级别的日志。低于 minLevel 的日志会被静默丢弃。
-func (l *LogInlet) log(level string, message string) {
+func (l *LogObserver) log(level string, message string, at time.Time) error {
 	if levelOrder[level] < l.minLevel {
-		return
+		return nil
 	}
-	l.Send(LogRecord{
-		FormatTime: time.Now().Format("2006-01-02 15:04:05"),
+	return l.inlet.Send(LogRecord{
+		FormatTime: at.Format("2006-01-02 15:04:05"),
 		Level:      level,
 		Message:    message,
 	})
 }
 
-// FarmStart 记录 Farm 启动，并逐行输出图结构。
-func (l *LogInlet) FarmStart(farmName string, structureList []string) {
-	l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", farmName))
-	for _, s := range structureList {
-		l.log("INFO", s)
+// addResult 累加节点的任务结果计数。
+func (l *LogObserver) addResult(node string, apply func(*nodeLogCounts)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	counts, ok := l.counts[node]
+	if !ok {
+		counts = &nodeLogCounts{}
+		l.counts[node] = counts
 	}
+	apply(counts)
 }
 
-// FarmEnd 记录 Farm 结束，包含总耗时。
-func (l *LogInlet) FarmEnd(farmName string, useTime float64) {
-	l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", farmName, useTime))
-}
+// takeCounts 取出并清除节点的结果计数，供节点结束日志使用。
+func (l *LogObserver) takeCounts(node string) nodeLogCounts {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-// PlotStart 记录 Plot 启动，包含 tender 数量。
-func (l *LogInlet) PlotStart(plotName string, numTenders int) {
-	l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", plotName, numTenders))
-}
-
-// PlotEnd 记录 Plot 结束，包含耗时、果实数、杂草数和剪枝数。
-func (l *LogInlet) PlotEnd(plotName string, useTime float64, fruitNum, weedNum, pruneNum int) {
-	l.log("INFO", fmt.Sprintf("Plot '%s' end. Use %.2fs. %d ripened, %d withered, %d pruned.", plotName, useTime, fruitNum, weedNum, pruneNum))
-}
-
-// SeedInput 记录种子输入，包含种子的字符串表示和唯一标识符。
-func (l *LogInlet) SeedInput(plotName string, seedRepr string, seedID int) {
-	l.log("DEBUG", fmt.Sprintf("In '%s', Seed %s input. [%d*]", plotName, seedRepr, seedID))
-}
-
-// SeedRipen 记录种子成熟（培育成功），包含种子和果实的字符串表示及耗时。
-func (l *LogInlet) SeedRipen(plotName string, seedRepr string, fruitRepr string, useTime float64, seedID int, fruitID int) {
-	l.log("SUCCESS", fmt.Sprintf("In '%s', Seed %s ripened. Fruit is %s. Use %.2fs. [%d->%d*]", plotName, seedRepr, fruitRepr, useTime, seedID, fruitID))
-}
-
-// SeedWither 记录种子枯萎（培育失败），包含错误信息和耗时。
-func (l *LogInlet) SeedWither(plotName string, seedRepr string, err error, useTime float64, seedID int, weedID int) {
-	l.log("ERROR", fmt.Sprintf("In '%s', Seed %s withered: %v. Use %.2fs. [%d->%d*]", plotName, seedRepr, err, useTime, seedID, weedID))
-}
-
-// SeedPrune 记录种子被修剪（跳过处理），包含耗时、种子 ID 和修剪事件 ID。
-func (l *LogInlet) SeedPrune(plotName string, seedRepr string, useTime float64, seedID int, pruneID int) {
-	l.log("INFO", fmt.Sprintf("In '%s', Seed %s pruned. Use %.2fs. [%d->%d*]", plotName, seedRepr, useTime, seedID, pruneID))
-}
-
-// SeedReplant 记录种子重新种植（重试），包含当前尝试次数和错误信息。
-func (l *LogInlet) SeedReplant(plotName string, seedRepr string, attempt int, err error, seedID int) {
-	l.log("WARNING", fmt.Sprintf("In '%s', Seed %s attempt %d withered: %v. Replanting. [%d*]", plotName, seedRepr, attempt, err, seedID))
+	counts, ok := l.counts[node]
+	if !ok {
+		return nodeLogCounts{}
+	}
+	delete(l.counts, node)
+	return *counts
 }

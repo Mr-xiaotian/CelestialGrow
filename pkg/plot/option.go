@@ -86,7 +86,8 @@ func WithPruneIf[S any](fn func(S) bool) Option {
 	}
 }
 
-// WithLogLevel 设置日志最低级别。默认为 "INFO"。
+// WithLogLevel 设置 standalone 模式下日志观察者的最低级别。默认为 "INFO"。
+// Farm 模式统一使用 NewFarm 的全局日志级别。
 func WithLogLevel(level string) Option {
 	return func(o *plotOptions) {
 		o.logLevel = level

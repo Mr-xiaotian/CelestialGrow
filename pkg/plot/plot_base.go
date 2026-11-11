@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
@@ -26,7 +25,7 @@ type PlotNode interface {
 
 	ConnectTo(next PlotNode) error
 	SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
-	BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord)
+	AddObserver(observer observer.Observer) error
 	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
@@ -49,12 +48,8 @@ type basePlot[S any, F any, Y any] struct {
 	yieldChans map[string]chan runtime.Payload[Y]
 
 	eventClient runtime.EventClient
-	observers   []observer.Observer
-
-	logSpout       *funnel.Spout[persist.LogRecord]
-	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
-	logInlet       *persist.LogInlet
-	lifecycleInlet *persist.LifecycleInlet
+	hub         *observer.Hub
+	lifecycle   *persist.LifecycleObserver
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -83,6 +78,7 @@ func newBasePlot[S any, F any, Y any](name string, cultivator func(S) (F, error)
 		yieldChans: make(map[string]chan runtime.Payload[Y]),
 
 		eventClient: runtime.NewLocalEventClient(),
+		hub:         observer.NewHub(),
 
 		ctx:     ctx,
 		cancel:  cancel,
@@ -92,32 +88,17 @@ func newBasePlot[S any, F any, Y any](name string, cultivator func(S) (F, error)
 
 // ==== Observer Registration ====
 
-// AddObserver 添加一个进度观察者。
-func (p *basePlot[S, F, Y]) AddObserver(observer observer.Observer) {
-	p.observers = append(p.observers, observer)
+// AddObserver 注册一个观察者。重复注册会重复收到事件。
+func (p *basePlot[S, F, Y]) AddObserver(observer observer.Observer) error {
+	return p.hub.AddObserver(observer)
+}
+
+// emit 将事件分发给所有观察者。观察者故障由 Hub 的错误处理器消费，不影响执行。
+func (p *basePlot[S, F, Y]) emit(event observer.Event) {
+	_ = p.hub.OnEvent(event)
 }
 
 // ==== Initialization ====
-
-// BindInlet 绑定日志和生命周期记录的写入通道。
-// standalone 模式由 Run 创建本地 spout 后调用；
-// Farm 模式由 Farm.Run 统一调用。
-func (p *basePlot[S, F, Y]) BindInlet(logChan chan<- persist.LogRecord, lifecycleChan chan<- persist.LifecycleRecord) {
-	p.logInlet = persist.NewLogInlet(logChan, time.Second, p.logLevel)
-	p.lifecycleInlet = persist.NewLifecycleInlet(lifecycleChan, time.Second)
-}
-
-// StartSpouts 启动本地日志/生命周期 spout。仅 standalone 模式使用。
-func (p *basePlot[S, F, Y]) StartSpouts() {
-	p.logSpout.Start()
-	p.lifecycleSpout.Start()
-}
-
-// StopSpouts 停止本地日志/生命周期 spout 并刷盘。仅 standalone 模式使用。
-func (p *basePlot[S, F, Y]) StopSpouts() {
-	p.logSpout.Stop()
-	p.lifecycleSpout.Stop()
-}
 
 // SetEventClient 设置 plot 的事件客户端。
 func (p *basePlot[S, F, Y]) SetEventClient(eventClient runtime.EventClient) {
@@ -161,64 +142,59 @@ func (p *basePlot[S, F, Y]) GetSeedChanAny() any {
 
 // ==== Observer Hooks ====
 
-// reportProgress 通知所有 Observer 当前进度。
-func (p *basePlot[S, F, Y]) reportProgress() {
-	completed := p.GetCompleted()
-	seedNum := p.GetSeedNum()
-	for _, observer := range p.observers {
-		observer.OnProgress(completed, seedNum)
-	}
-}
-
-// notifyStart 将状态设为 running 并通知所有 Observer。
-func (p *basePlot[S, F, Y]) notifyStart() {
+// notifyStart 将状态设为 running 并发出节点启动事件。
+func (p *basePlot[S, F, Y]) notifyStart(startTime time.Time) {
 	p.state.Store(1)
-	seedNum := p.GetSeedNum()
-	for _, observer := range p.observers {
-		observer.OnStart(seedNum)
-	}
+	p.emit(observer.NodeStartEvent{Node: p.name, Tenders: p.numTenders, StartTime: startTime})
 }
 
-// notifyFinish 将状态设为 done 并通知所有 Observer。
-func (p *basePlot[S, F, Y]) notifyFinish() {
+// notifyFinish 将状态设为 done 并发出节点结束事件。
+func (p *basePlot[S, F, Y]) notifyFinish(startTime time.Time) {
 	p.state.Store(2)
-	completed := p.GetCompleted()
-	seedNum := p.GetSeedNum()
-	for _, observer := range p.observers {
-		observer.OnFinish(completed, seedNum)
-	}
+	p.emit(observer.NodeEndEvent{Node: p.name, EndTime: time.Now(), Elapsed: time.Since(startTime)})
 }
 
 // ==== Result Handling ====
 
-// witherSeed 处理培育失败的种子：更新计数、记录日志并推进生命周期。
+// witherSeed 处理培育失败的种子：更新计数并发出任务失败事件。
 func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
 	p.AddWeedNum(1)
-	p.reportProgress()
 
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	weedID := p.eventClient.Emit("weed", []int{seedID})
 
-	useTime := time.Since(startTime).Seconds()
-	p.logInlet.SeedWither(p.name, seedRepr, err, useTime, seedID, weedID)
-	p.lifecycleInlet.SeedWither(p.name, seedID, seedID, weedID, err)
+	p.emit(observer.TaskFailEvent{
+		Node:     p.name,
+		Seed:     seed,
+		SeedRepr: seedRepr,
+		Err:      err,
+		Elapsed:  time.Since(startTime),
+		SeedID:   seedID,
+		WeedID:   weedID,
+		Time:     time.Now(),
+	})
 }
 
-// pruneSeed 处理剪枝种子：更新计数、记录日志并推进生命周期。
+// pruneSeed 处理剪枝种子：更新计数并发出任务跳过事件。
 func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime time.Time) {
 	p.AddPruneNum(1)
-	p.reportProgress()
 
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	pruneID := p.eventClient.Emit("prune", []int{seedID})
 
-	useTime := time.Since(startTime).Seconds()
-	p.logInlet.SeedPrune(p.name, seedRepr, useTime, seedID, pruneID)
-	p.lifecycleInlet.SeedPrune(p.name, seedID, seedID, pruneID)
+	p.emit(observer.TaskSkipEvent{
+		Node:     p.name,
+		Seed:     seed,
+		SeedRepr: seedRepr,
+		Elapsed:  time.Since(startTime),
+		SeedID:   seedID,
+		PruneID:  pruneID,
+		Time:     time.Now(),
+	})
 }
 
 // ==== Internal Pipeline ====
@@ -241,11 +217,17 @@ func (p *basePlot[S, F, Y]) sprout() {
 
 	for {
 		if shouldFinish() {
-			patents := make([]int, 0, len(p.upstreamYields))
+			parentIDs := make([]int, 0, len(p.upstreamYields))
 			for _, sealID := range sealedFrom {
-				patents = append(patents, sealID)
+				parentIDs = append(parentIDs, sealID)
 			}
-			sealID := p.eventClient.Emit("seal", patents)
+			sealID := p.eventClient.Emit("seal", parentIDs)
+			p.emit(observer.TerminationMergeEvent{
+				Node:      p.name,
+				ParentIDs: parentIDs,
+				SealID:    sealID,
+				Time:      time.Now(),
+			})
 			sealPayload := runtime.Payload[Y]{Signal: runtime.SignalSeal, Source: p.name, EventID: sealID}
 			for _, ch := range p.yieldChans {
 				ch <- sealPayload
@@ -322,7 +304,15 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 			break
 		}
 		if attempt <= p.maxRetries {
-			p.logInlet.SeedReplant(p.name, seedRepr, attempt, err, seedID)
+			p.emit(observer.TaskRetryEvent{
+				Node:     p.name,
+				Seed:     seed,
+				SeedRepr: seedRepr,
+				Err:      err,
+				Attempt:  attempt,
+				SeedID:   seedID,
+				Time:     time.Now(),
+			})
 		}
 		time.Sleep(p.retryDelay(attempt))
 	}
@@ -353,8 +343,13 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 
-	p.logInlet.SeedInput(p.name, seedRepr, seedID)
-	p.lifecycleInlet.SeedInput(p.name, seedID, nil, seed)
+	p.emit(observer.TaskInputEvent{
+		Node:     p.name,
+		Seed:     seed,
+		SeedRepr: seedRepr,
+		SeedID:   seedID,
+		Time:     time.Now(),
+	})
 	p.seedChan <- runtime.Payload[S]{Value: seed, EventID: seedID}
 
 	p.AddSeedNum(1)
@@ -365,23 +360,22 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 // plot，这同样会触发强终止，而不是继续等待剩余上游 seal。
 func (p *basePlot[S, F, Y]) Seal() {
 	sealID := p.eventClient.Emit("seal", []int{})
+	p.emit(observer.TerminationInputEvent{Node: p.name, SealID: sealID, Time: time.Now()})
 	p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
 }
 
 // StartAsync 异步启动 sprout 调度器。
-// 调用前需先完成 BindInlet 绑定通道。
+// 调用前可通过 AddObserver 注册观察者，运行事件由内部 Hub 分发。
 // standalone 模式下通常由外部通过 Seed/Seal 控制输入；
-// Farm 模式下则由 Farm 注入初始种子并接收上游转发的 yield。完成后需调用 WaitAsync 等待退出。
+// Farm 模式下则由 Farm 注入初始种子、接入 farm 级观察者并接收上游转发的 yield。
+// 完成后需调用 WaitAsync 等待退出。
 func (p *basePlot[S, F, Y]) StartAsync() {
 	p.wg.Go(func() {
-		p.logInlet.PlotStart(p.name, p.numTenders)
 		startTime := time.Now()
 
-		p.notifyStart()
+		p.notifyStart(startTime)
 		p.sprout()
-		p.notifyFinish()
-
-		p.logInlet.PlotEnd(p.name, time.Since(startTime).Seconds(), p.GetFruitNum(), p.GetWeedNum(), p.GetPruneNum())
+		p.notifyFinish(startTime)
 	})
 }
 
@@ -393,14 +387,28 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // ==== Standalone Execution & Harvest ====
 
 // Run 在 standalone 模式下启动 Plot 并处理所有种子。
-// 它会创建本地日志/生命周期 spout，绑定 inlet，并在所有输入完成后阻塞等待退出。
+// 它会自动挂载日志与生命周期观察者并启动本地消费循环，
+// 在所有输入完成后阻塞等待退出。
 func (p *basePlot[S, F, Y]) Run(seeds []S) {
-	p.logSpout = funnel.NewSpout(&persist.LogRecordHandler{}, 100, time.Second)
-	p.lifecycleSpout = funnel.NewSpout(&persist.LifecycleRecordHandler{}, 100, time.Second)
-	p.BindInlet(p.logSpout.GetQueue(), p.lifecycleSpout.GetQueue())
+	logObserver := persist.NewLogObserver(p.logLevel)
+	lifecycleObserver := persist.NewLifecycleObserver()
+	p.lifecycle = lifecycleObserver
 
-	p.StartSpouts()
-	defer p.StopSpouts()
+	if err := p.hub.AddObserver(logObserver); err != nil {
+		return
+	}
+	if err := p.hub.AddObserver(lifecycleObserver); err != nil {
+		return
+	}
+
+	if err := logObserver.Start(); err != nil {
+		return
+	}
+	defer func() { _ = logObserver.Stop() }()
+	if err := lifecycleObserver.Start(); err != nil {
+		return
+	}
+	defer func() { _ = lifecycleObserver.Stop() }()
 
 	p.StartAsync()
 	for _, seed := range seeds {
@@ -411,17 +419,10 @@ func (p *basePlot[S, F, Y]) Run(seeds []S) {
 }
 
 // Harvest 读取当前 plot 已持久化的全部任务状态快照。
+// 仅 standalone 模式的 Run 会挂载生命周期观察者，Farm 模式下调用会返回错误。
 func (p *basePlot[S, F, Y]) Harvest() ([]persist.LifecycleStatusRecord, error) {
-	if p.lifecycleSpout == nil {
-		return nil, fmt.Errorf("plot %q lifecycle spout is nil", p.name)
+	if p.lifecycle == nil {
+		return nil, fmt.Errorf("plot %q lifecycle observer is nil", p.name)
 	}
-
-	queryHandler, ok := p.lifecycleSpout.Handler().(interface {
-		LoadStatuses(plotName string) ([]persist.LifecycleStatusRecord, error)
-	})
-	if !ok {
-		return nil, fmt.Errorf("plot %q lifecycle handler does not support status queries", p.name)
-	}
-
-	return queryHandler.LoadStatuses(p.name)
+	return p.lifecycle.LoadStatuses(p.name)
 }

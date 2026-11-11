@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
 
@@ -37,7 +38,6 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 // ripenSeed 处理培育成功的种子：更新计数、记录日志、推进生命周期并发送果实。
 func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time) {
 	p.AddFruitNum(1)
-	p.reportProgress()
 
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
@@ -45,16 +45,31 @@ func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTim
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	fruitRepr := trunc(fmt.Sprintf("%+v", fruit), 25)
-	useTime := time.Since(startTime).Seconds()
-	p.logInlet.SeedRipen(p.name, seedRepr, fruitRepr, useTime, seedID, fruitID)
-	p.lifecycleInlet.SeedRipen(p.name, seedID, seedID, fruitID, fruit)
+	p.emit(observer.TaskSuccessEvent{
+		Node:      p.name,
+		Seed:      seed,
+		SeedRepr:  seedRepr,
+		Fruit:     fruit,
+		FruitRepr: fruitRepr,
+		Elapsed:   time.Since(startTime),
+		SeedID:    seedID,
+		FruitID:   fruitID,
+		Time:      time.Now(),
+	})
 
 	for nextPlot, ch := range p.yieldChans {
 		p.AddDownstreamYieldNum(nextPlot, 1)
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 
-		p.logInlet.SeedInput(nextPlot, fruitRepr, downstreamSeedID)
-		p.lifecycleInlet.SeedInput(nextPlot, downstreamSeedID, []int{fruitID}, fruit)
+		p.emit(observer.TaskInputEvent{
+			Node:     nextPlot,
+			From:     p.name,
+			Seed:     fruit,
+			SeedRepr: fruitRepr,
+			SeedID:   downstreamSeedID,
+			Parents:  []int{fruitID},
+			Time:     time.Now(),
+		})
 		yieldPayload := runtime.Payload[F]{Value: fruit, EventID: downstreamSeedID}
 		ch <- yieldPayload
 	}

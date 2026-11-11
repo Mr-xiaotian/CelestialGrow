@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
@@ -14,7 +14,8 @@ import (
 
 // Farm 管理多个 plot 节点（Plot/SplitPlot/RoutePlot）组成的静态有向图。
 // 负责节点注册、名称唯一性校验、超边式连接建立，
-// 以及统一的 spout 管理和生命周期调度。
+// 以及统一的观察者分发与生命周期调度。farm 级观察者会作为一个 Hub
+// 注册到每个 plot，从而同时接收节点事件与图事件。
 type Farm struct {
 	name        string
 	plots       map[string]plot.PlotNode
@@ -22,11 +23,10 @@ type Farm struct {
 	*OrderGraph
 
 	eventClient runtime.EventClient
+	hub         *observer.Hub
 
-	logSpout       *funnel.Spout[persist.LogRecord]
-	lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
-	logInlet       *persist.LogInlet
-	lifecycleInlet *persist.LifecycleInlet
+	logObserver       *persist.LogObserver
+	lifecycleObserver *persist.LifecycleObserver
 }
 
 // ==== Construction ====
@@ -34,10 +34,12 @@ type Farm struct {
 // NewFarm 创建一个 Farm 实例。
 // name 为 farm 名称（用于日志标识），logLevel 为全局日志级别。
 func NewFarm(name string, logLevel string) *Farm {
-	logSpout := funnel.NewSpout(&persist.LogRecordHandler{}, 100, time.Second)
-	lifecycleSpout := funnel.NewSpout(&persist.LifecycleRecordHandler{}, 100, time.Second)
-	logInlet := persist.NewLogInlet(logSpout.GetQueue(), time.Second, logLevel)
-	lifecycleInlet := persist.NewLifecycleInlet(lifecycleSpout.GetQueue(), time.Second)
+	logObserver := persist.NewLogObserver(logLevel)
+	lifecycleObserver := persist.NewLifecycleObserver()
+
+	hub := observer.NewHub()
+	_ = hub.AddObserver(logObserver)
+	_ = hub.AddObserver(lifecycleObserver)
 
 	return &Farm{
 		name:       name,
@@ -45,11 +47,10 @@ func NewFarm(name string, logLevel string) *Farm {
 		OrderGraph: NewOrderGraph(),
 
 		eventClient: runtime.NewLocalEventClient(),
+		hub:         hub,
 
-		logSpout:       logSpout,
-		lifecycleSpout: lifecycleSpout,
-		logInlet:       logInlet,
-		lifecycleInlet: lifecycleInlet,
+		logObserver:       logObserver,
+		lifecycleObserver: lifecycleObserver,
 	}
 }
 
@@ -185,10 +186,16 @@ func (f *Farm) validateRunInputs(inputs map[string][]any) error {
 	return nil
 }
 
+// emit 将事件分发给 farm 级观察者。观察者故障由 Hub 的错误处理器消费。
+func (f *Farm) emit(event observer.Event) {
+	_ = f.hub.OnEvent(event)
+}
+
 // Run 同步运行整张 farm 图。
 // inputs 按 plot 名称声明初始种子；这些种子会在各 plot 启动后被注入。
-// 流程：计算 source 节点 → 启动全局 spout → 绑定各 plot inlet → 启动所有 plot →
-// 注入种子 → 向所有 source 发送 seal → 等待所有 plot 完成 → 停止 spout。
+// 流程：计算 source 节点 → 启动持久化观察者 → 将 farm 观察者接入各 plot →
+// 启动所有 plot → 注入种子 → 向所有 source 发送 seal → 等待所有 plot 完成 →
+// 发出图结束事件 → 停止持久化观察者。
 func (f *Farm) Run(inputs map[string][]any) error {
 	if err := f.validateRunInputs(inputs); err != nil {
 		return err
@@ -197,32 +204,61 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	f.sourceNodes = SourceNodes(f.OrderGraph)
 	startTime := time.Now()
 
-	f.logSpout.Start()
-	f.lifecycleSpout.Start()
-	f.logInlet.FarmStart(f.name, f.getStructureList())
-	defer f.logSpout.Stop()
-	defer f.lifecycleSpout.Stop()
+	if err := f.logObserver.Start(); err != nil {
+		return err
+	}
+	if err := f.lifecycleObserver.Start(); err != nil {
+		_ = f.logObserver.Stop()
+		return err
+	}
 	defer func() {
-		f.logInlet.FarmEnd(f.name, time.Since(startTime).Seconds())
+		_ = f.lifecycleObserver.Stop()
+		_ = f.logObserver.Stop()
+	}()
+
+	f.emit(observer.GraphStartEvent{
+		Farm:      f.name,
+		IsDAG:     IsDAG(f.OrderGraph),
+		Nodes:     f.Nodes(),
+		Edges:     f.OutEdges(),
+		Sources:   f.sourceNodes,
+		Structure: f.getStructureList(),
+		StartTime: startTime,
+	})
+	defer func() {
+		f.emit(observer.GraphEndEvent{
+			Farm:    f.name,
+			EndTime: time.Now(),
+			Elapsed: time.Since(startTime),
+		})
 	}()
 
 	for _, plot := range f.plots {
-		plot.BindInlet(f.logSpout.GetQueue(), f.lifecycleSpout.GetQueue())
+		if err := plot.AddObserver(f.hub); err != nil {
+			return err
+		}
 	}
 
 	for _, plot := range f.plots {
 		plot.StartAsync()
 	}
 
+	var seedErr error
 	for name, seeds := range inputs {
 		plot := f.plots[name]
 		for _, seed := range seeds {
 			if err := plot.SeedAny(seed); err != nil {
-				return err
+				seedErr = err
+				break
 			}
+		}
+		if seedErr != nil {
+			break
 		}
 	}
 
+	// 即使播种失败也要发送 seal 并等待所有 plot 退出，
+	// 否则延迟执行的观察者停止会关闭队列，导致仍在运行的 plot 写入已关闭通道。
 	for _, name := range f.sourceNodes {
 		f.plots[name].Seal()
 	}
@@ -231,5 +267,5 @@ func (f *Farm) Run(inputs map[string][]any) error {
 		plot.WaitAsync()
 	}
 
-	return nil
+	return seedErr
 }

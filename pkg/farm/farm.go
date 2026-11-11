@@ -189,26 +189,30 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	f.sourceNodes = SourceNodes(f.OrderGraph)
 	startTime := time.Now()
 
-	return assembly.RunFarmResources(f.hub, logLevel, func(string) error {
-		f.emit(observer.GraphStartEvent{
-			Farm:      f.name,
-			IsDAG:     IsDAG(f.OrderGraph),
-			Nodes:     f.Nodes(),
-			Edges:     f.OutEdges(),
-			Sources:   f.sourceNodes,
-			Structure: f.getStructureList(),
-			StartTime: startTime,
-		})
-		defer func() {
-			f.emit(observer.GraphEndEvent{
-				Farm:    f.name,
-				EndTime: time.Now(),
-				Elapsed: time.Since(startTime),
-			})
-		}()
+	resources, err := assembly.StartFarmResources(f.hub, logLevel)
+	if err != nil {
+		return err
+	}
+	defer resources.Stop()
 
-		return f.run(inputs)
+	f.emit(observer.GraphStartEvent{
+		Farm:      f.name,
+		IsDAG:     IsDAG(f.OrderGraph),
+		Nodes:     f.Nodes(),
+		Edges:     f.OutEdges(),
+		Sources:   f.sourceNodes,
+		Structure: f.getStructureList(),
+		StartTime: startTime,
 	})
+	defer func() {
+		f.emit(observer.GraphEndEvent{
+			Farm:    f.name,
+			EndTime: time.Now(),
+			Elapsed: time.Since(startTime),
+		})
+	}()
+
+	return f.run(inputs)
 }
 
 // run 执行图调度：接入 farm 观察者、启动节点、注入种子并等待全部退出。

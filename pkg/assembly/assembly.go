@@ -6,57 +6,71 @@ package assembly
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
-// RunNodeResources 为单节点运行装配日志与生命周期观察者，执行 fn 后统一回收。
-//
-// 进入时把观察者注册到 hub，并依次启动生命周期与日志 spout；fn 返回后按相反
-// 顺序停止，保证运行期即使返回错误也能完成回收。fn 会收到生命周期数据库路径，
-// 调用方可据此在运行结束后读取状态快照。
-func RunNodeResources(hub *observer.Hub, logLevel string, fn func(lifecycleDBPath string) error) error {
-	return runResources(hub, logLevel, fn)
+// Resources 是一次运行的资源句柄，持有已启动的日志与生命周期观察者。
+type Resources struct {
+	lifecycle *persist.LifecycleObserver
+	log       *persist.LogObserver
+	stopOnce  sync.Once
 }
 
-// RunFarmResources 为整图运行装配日志与生命周期观察者，执行 fn 后统一回收。
+// Stop 停止并回收本次运行启动的资源，重复调用安全。
+func (r *Resources) Stop() {
+	r.stopOnce.Do(func() {
+		_ = r.log.Stop()
+		_ = r.lifecycle.Stop()
+	})
+}
+
+// StartNodeResources 为单节点运行装配日志与生命周期观察者。
+//
+// 进入时依次启动生命周期与日志 spout，再把观察者注册到 hub；返回的 Resources
+// 必须在运行结束后 Stop，以保证队列中的记录被刷盘。
+func StartNodeResources(hub *observer.Hub, logLevel string) (*Resources, error) {
+	return startResources(hub, logLevel)
+}
+
+// StartFarmResources 为整图运行装配日志与生命周期观察者。
 //
 // 目前与单节点装配内容一致；图级独有资源（如远程上报）后续在此追加，
 // 避免与节点级装配耦合。
-func RunFarmResources(hub *observer.Hub, logLevel string, fn func(lifecycleDBPath string) error) error {
-	return runResources(hub, logLevel, fn)
+func StartFarmResources(hub *observer.Hub, logLevel string) (*Resources, error) {
+	return startResources(hub, logLevel)
 }
 
-// runResources 是两类运行共用的资源装配流程。
-func runResources(hub *observer.Hub, logLevel string, fn func(lifecycleDBPath string) error) error {
+// startResources 是两类运行共用的资源装配流程。
+func startResources(hub *observer.Hub, logLevel string) (*Resources, error) {
 	if hub == nil {
-		return fmt.Errorf("assembly: observer hub is nil")
+		return nil, fmt.Errorf("assembly: observer hub is nil")
 	}
 
 	lifecycleObserver := persist.NewLifecycleObserver()
 	logObserver := persist.NewLogObserver(logLevel)
-	if err := hub.AddObserver(lifecycleObserver); err != nil {
-		return err
-	}
-	if err := hub.AddObserver(logObserver); err != nil {
-		return err
-	}
 
+	// 先启动再注册：启动失败时不会在 hub 中留下未启动的观察者。
 	if err := lifecycleObserver.Start(); err != nil {
-		return fmt.Errorf("assembly: start lifecycle observer: %w", err)
+		return nil, fmt.Errorf("assembly: start lifecycle observer: %w", err)
 	}
 	if err := logObserver.Start(); err != nil {
 		_ = lifecycleObserver.Stop()
-		return fmt.Errorf("assembly: start log observer: %w", err)
+		return nil, fmt.Errorf("assembly: start log observer: %w", err)
 	}
-	defer func() {
+
+	if err := hub.AddObserver(lifecycleObserver); err != nil {
 		_ = logObserver.Stop()
 		_ = lifecycleObserver.Stop()
-	}()
-
-	if fn == nil {
-		return nil
+		return nil, err
 	}
-	return fn(lifecycleObserver.DBPath())
+	if err := hub.AddObserver(logObserver); err != nil {
+		_ = logObserver.Stop()
+		_ = lifecycleObserver.Stop()
+		return nil, err
+	}
+
+	return &Resources{lifecycle: lifecycleObserver, log: logObserver}, nil
 }

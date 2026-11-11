@@ -48,9 +48,8 @@ type basePlot[S any, F any, Y any] struct {
 	seedChan   chan runtime.Payload[S]
 	yieldChans map[string]chan runtime.Payload[Y]
 
-	eventClient     runtime.EventClient
-	hub             *observer.Hub
-	lifecycleDBPath string
+	eventClient runtime.EventClient
+	hub         *observer.Hub
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -391,24 +390,31 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
 // 运行期资源由 assembly 统一装配，在所有输入完成后阻塞等待退出。
 func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
-	_ = assembly.RunNodeResources(p.hub, logLevel, func(lifecycleDBPath string) error {
-		p.lifecycleDBPath = lifecycleDBPath
+	resources, err := assembly.StartNodeResources(p.hub, logLevel)
+	if err != nil {
+		return
+	}
+	defer resources.Stop()
 
-		p.StartAsync()
-		for _, seed := range seeds {
-			p.Seed(seed)
-		}
-		p.Seal()
-		p.WaitAsync()
-		return nil
-	})
+	p.StartAsync()
+	for _, seed := range seeds {
+		p.Seed(seed)
+	}
+	p.Seal()
+	p.WaitAsync()
 }
 
 // Harvest 读取当前 plot 已持久化的全部任务状态快照。
-// 仅 standalone 模式的 Run 会装配生命周期资源，Farm 模式下调用会返回错误。
+// 生命周期观察者在调用时从 hub（含嵌套 hub）中查找，因此运行结束后可直接查询，
+// 不需要在 plot 上保存数据库路径。
 func (p *basePlot[S, F, Y]) Harvest() ([]persist.LifecycleStatusRecord, error) {
-	if p.lifecycleDBPath == "" {
+	lifecycle, ok := observer.Find[*persist.LifecycleObserver](p.hub)
+	if !ok {
+		return nil, fmt.Errorf("plot %q lifecycle observer is not registered", p.name)
+	}
+	dbPath := lifecycle.DBPath()
+	if dbPath == "" {
 		return nil, fmt.Errorf("plot %q lifecycle database is not ready", p.name)
 	}
-	return persist.LoadLifecycleStatusesFromPath(p.lifecycleDBPath, p.name)
+	return persist.LoadLifecycleStatusesFromPath(dbPath, p.name)
 }

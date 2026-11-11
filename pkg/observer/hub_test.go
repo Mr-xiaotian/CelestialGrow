@@ -257,6 +257,82 @@ func TestZeroValueHubIsUsable(t *testing.T) {
 	}
 }
 
+// ==== Lookup ====
+
+// markerObserver 用于类型查找测试。
+type markerObserver struct {
+	tag string
+}
+
+func (m *markerObserver) OnEvent(Event) error { return nil }
+
+func TestFindFindsDirectObserver(t *testing.T) {
+	hub := NewHub()
+	marker := &markerObserver{tag: "direct"}
+	if err := hub.AddObserver(marker); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+
+	found, ok := Find[*markerObserver](hub)
+	if !ok {
+		t.Fatal("Find() = false, want true")
+	}
+	if found != marker {
+		t.Fatalf("Find() = %#v, want %#v", found, marker)
+	}
+}
+
+func TestFindSearchesNestedHub(t *testing.T) {
+	child := NewHub()
+	marker := &markerObserver{tag: "nested"}
+	if err := child.AddObserver(marker); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+
+	parent := NewHub()
+	if err := parent.AddObserver(child); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+
+	found, ok := Find[*markerObserver](parent)
+	if !ok || found != marker {
+		t.Fatalf("Find() = (%#v, %v), want (%#v, true)", found, ok, marker)
+	}
+}
+
+func TestFindPrefersDirectObserver(t *testing.T) {
+	direct := &markerObserver{tag: "direct"}
+	nested := &markerObserver{tag: "nested"}
+
+	child := NewHub()
+	if err := child.AddObserver(nested); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+	parent := NewHub()
+	if err := parent.AddObserver(child); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+	if err := parent.AddObserver(direct); err != nil {
+		t.Fatalf("AddObserver() = %v", err)
+	}
+
+	found, ok := Find[*markerObserver](parent)
+	if !ok || found != direct {
+		t.Fatalf("Find() = (%#v, %v), want (%#v, true)", found, ok, direct)
+	}
+}
+
+func TestFindMissingObserver(t *testing.T) {
+	if _, ok := Find[*markerObserver](NewHub()); ok {
+		t.Fatal("Find() = true, want false")
+	}
+
+	var nilHub *Hub
+	if _, ok := Find[*markerObserver](nilHub); ok {
+		t.Fatal("Find(nil) = true, want false")
+	}
+}
+
 // ==== Concurrency ====
 
 func TestHubConcurrentAddAndEmit(t *testing.T) {

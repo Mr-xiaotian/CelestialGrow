@@ -147,6 +147,49 @@ func (h *Hub) deliver(observer Observer, event Event) (err error) {
 	return nil
 }
 
+// ==== Lookup ====
+
+// Find 在 hub 及其嵌套 hub 中查找第一个类型为 T 的观察者。
+//
+// 直属观察者优先于嵌套 hub，同级按注册顺序。hub 为 nil 或未找到时返回零值与
+// false。嵌套由 Hub 支持（Hub 本身也是 Observer），环在注册时已被拒绝，
+// 这里仍用 seen 集合兜底，避免异常拓扑导致递归不终止。
+func Find[T Observer](hub *Hub) (T, bool) {
+	var zero T
+
+	seen := make(map[*Hub]struct{})
+	var search func(*Hub) (T, bool)
+	search = func(current *Hub) (T, bool) {
+		if current == nil {
+			return zero, false
+		}
+		if _, ok := seen[current]; ok {
+			return zero, false
+		}
+		seen[current] = struct{}{}
+
+		current.mu.RLock()
+		observers := current.observers
+		current.mu.RUnlock()
+
+		for _, candidate := range observers {
+			if typed, ok := candidate.(T); ok {
+				return typed, true
+			}
+		}
+		for _, candidate := range observers {
+			if child, ok := candidate.(*Hub); ok {
+				if found, ok := search(child); ok {
+					return found, true
+				}
+			}
+		}
+		return zero, false
+	}
+
+	return search(hub)
+}
+
 // report 将错误交给 ErrorHandler；处理器自身 panic 时退化为默认输出。
 // 零值 Hub 未设置处理器时同样回退到默认输出。
 func (h *Hub) report(err error) {

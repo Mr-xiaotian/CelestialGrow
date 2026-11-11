@@ -1,7 +1,6 @@
 package assembly_test
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -10,42 +9,51 @@ import (
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 )
 
-// runFunc 描述一个运行期资源装配入口。
-type runFunc func(hub *observer.Hub, logLevel string, fn func(lifecycleDBPath string) error) error
+// startFunc 描述一个运行期资源装配入口。
+type startFunc func(hub *observer.Hub, logLevel string) (*assembly.Resources, error)
 
-// runners 覆盖节点级与图级两个入口，确保两者行为一致。
-var runners = []struct {
-	name string
-	run  runFunc
+// starters 覆盖节点级与图级两个入口，确保两者行为一致。
+var starters = []struct {
+	name  string
+	start startFunc
 }{
-	{"RunNodeResources", assembly.RunNodeResources},
-	{"RunFarmResources", assembly.RunFarmResources},
+	{"StartNodeResources", assembly.StartNodeResources},
+	{"StartFarmResources", assembly.StartFarmResources},
 }
 
-func TestRunResourcesAssembleLifecycle(t *testing.T) {
-	for _, runner := range runners {
-		t.Run(runner.name, func(t *testing.T) {
+func TestStartResourcesAssembleLifecycle(t *testing.T) {
+	for _, starter := range starters {
+		t.Run(starter.name, func(t *testing.T) {
 			hub := observer.NewHub(observer.WithErrorHandler(func(err error) {
 				t.Errorf("unexpected observer error: %v", err)
 			}))
 
-			now := time.Now()
-			var dbPath string
-			err := runner.run(hub, "DEBUG", func(lifecycleDBPath string) error {
-				dbPath = lifecycleDBPath
-				if lifecycleDBPath == "" {
-					t.Error("lifecycle database path is empty")
-				}
-				return hub.OnEvent(observer.TaskInputEvent{
-					Node:     "node",
-					Seed:     42,
-					SeedRepr: "42",
-					SeedID:   1,
-					Time:     now,
-				})
-			})
+			resources, err := starter.start(hub, "DEBUG")
 			if err != nil {
-				t.Fatalf("%s() = %v", runner.name, err)
+				t.Fatalf("%s() = %v", starter.name, err)
+			}
+
+			now := time.Now()
+			if err := hub.OnEvent(observer.TaskInputEvent{
+				Node:     "node",
+				Seed:     42,
+				SeedRepr: "42",
+				SeedID:   1,
+				Time:     now,
+			}); err != nil {
+				t.Fatalf("OnEvent() = %v", err)
+			}
+
+			resources.Stop()
+			resources.Stop() // 幂等
+
+			lifecycle, ok := observer.Find[*persist.LifecycleObserver](hub)
+			if !ok {
+				t.Fatal("lifecycle observer is not registered")
+			}
+			dbPath := lifecycle.DBPath()
+			if dbPath == "" {
+				t.Fatal("lifecycle database path is empty")
 			}
 
 			records, err := persist.LoadLifecycleStatusesFromPath(dbPath, "node")
@@ -62,36 +70,15 @@ func TestRunResourcesAssembleLifecycle(t *testing.T) {
 	}
 }
 
-func TestRunResourcesReturnCallbackError(t *testing.T) {
-	boom := errors.New("boom")
-
-	for _, runner := range runners {
-		t.Run(runner.name, func(t *testing.T) {
-			err := runner.run(observer.NewHub(), "INFO", func(string) error {
-				return boom
-			})
-			if !errors.Is(err, boom) {
-				t.Fatalf("%s() = %v, want boom", runner.name, err)
+func TestStartResourcesRejectNilHub(t *testing.T) {
+	for _, starter := range starters {
+		t.Run(starter.name, func(t *testing.T) {
+			resources, err := starter.start(nil, "INFO")
+			if err == nil {
+				t.Fatalf("%s(nil) = nil, want error", starter.name)
 			}
-		})
-	}
-}
-
-func TestRunResourcesRejectNilHub(t *testing.T) {
-	for _, runner := range runners {
-		t.Run(runner.name, func(t *testing.T) {
-			if err := runner.run(nil, "INFO", nil); err == nil {
-				t.Fatalf("%s(nil) = nil, want error", runner.name)
-			}
-		})
-	}
-}
-
-func TestRunResourcesAcceptNilCallback(t *testing.T) {
-	for _, runner := range runners {
-		t.Run(runner.name, func(t *testing.T) {
-			if err := runner.run(observer.NewHub(), "INFO", nil); err != nil {
-				t.Fatalf("%s() = %v", runner.name, err)
+			if resources != nil {
+				t.Fatalf("%s(nil) resources = %#v, want nil", starter.name, resources)
 			}
 		})
 	}

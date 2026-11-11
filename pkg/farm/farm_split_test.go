@@ -11,7 +11,7 @@ import (
 
 // SplitPlot 可以在 Farm 中将单个输入拆成多个下游 seed。
 func TestFarmRunSplitPlot(t *testing.T) {
-	f := farm.NewFarm("split_plot", "INFO")
+	f := farm.NewFarm("split_plot")
 	split := plot.NewSplitPlot("split", func(seed string) ([]int, error) {
 		if seed == "" {
 			return nil, nil
@@ -40,7 +40,7 @@ func TestFarmRunSplitPlot(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"split": {"1,2,3", "4,5"},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

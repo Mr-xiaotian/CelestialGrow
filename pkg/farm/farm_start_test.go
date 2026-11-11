@@ -23,7 +23,7 @@ func TestFarmRunLinear(t *testing.T) {
 		return seed, nil
 	}, plot.WithTenders(2))
 
-	farm := farm.NewFarm("start_linear", "INFO")
+	farm := farm.NewFarm("start_linear")
 	if err := farm.AddPlot(root, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -33,7 +33,7 @@ func TestFarmRunLinear(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

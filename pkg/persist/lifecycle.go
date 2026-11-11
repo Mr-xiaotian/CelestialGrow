@@ -114,25 +114,6 @@ func (l *LifecycleRecordHandler) AfterStop() error {
 	return nil
 }
 
-// LoadStatuses 读取指定 plot 的全部种子状态快照。
-func (l *LifecycleRecordHandler) LoadStatuses(plotName string) ([]LifecycleStatusRecord, error) {
-	if l.sqliteDB != nil {
-		return LoadLifecycleStatuses(l.sqliteDB, plotName)
-	}
-
-	if l.SQLitePath == "" {
-		return nil, fmt.Errorf("生命周期 sqlite 未初始化")
-	}
-
-	db, err := OpenLifecycleSQLite(l.SQLitePath)
-	if err != nil {
-		return nil, fmt.Errorf("重新打开生命周期 sqlite 失败: %w", err)
-	}
-	defer db.Close()
-
-	return LoadLifecycleStatuses(db, plotName)
-}
-
 // ==== Observer ====
 
 // LifecycleObserver 将观察者事件转换为生命周期记录并异步写入 sqlite。
@@ -166,6 +147,15 @@ func (l *LifecycleObserver) Start() error {
 // Stop 停止消费循环并关闭 sqlite 数据库。
 func (l *LifecycleObserver) Stop() error {
 	return l.spout.Stop()
+}
+
+// DBPath 返回生命周期数据库路径；消费循环尚未启动时返回空字符串。
+func (l *LifecycleObserver) DBPath() string {
+	handler, ok := l.spout.Handler().(*LifecycleRecordHandler)
+	if !ok {
+		return ""
+	}
+	return handler.SQLitePath
 }
 
 // OnEvent 将事件翻译为生命周期记录并投递到消费队列。
@@ -223,18 +213,6 @@ func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 	}
 
 	return nil
-}
-
-// LoadStatuses 读取指定 plot 的全部种子状态快照。
-// 消费者停止后依然可用：处理器会按已记录的路径重新打开数据库。
-func (l *LifecycleObserver) LoadStatuses(plotName string) ([]LifecycleStatusRecord, error) {
-	handler, ok := l.spout.Handler().(interface {
-		LoadStatuses(plotName string) ([]LifecycleStatusRecord, error)
-	})
-	if !ok {
-		return nil, fmt.Errorf("lifecycle handler does not support status queries")
-	}
-	return handler.LoadStatuses(plotName)
 }
 
 // unixSeconds 将时间转换为 Unix 秒（保留毫秒精度）。

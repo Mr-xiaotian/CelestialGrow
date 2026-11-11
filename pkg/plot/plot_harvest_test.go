@@ -42,7 +42,7 @@ func TestPlot_AllError(t *testing.T) {
 	plot := plot.NewPlot("test_all_error", cultivator, plot.WithTenders(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
-	plot.Run(seeds)
+	plot.Run(seeds, "INFO")
 	records := mustHarvest(t, plot)
 
 	if len(records) != len(seeds) {
@@ -77,7 +77,7 @@ func TestPlot_PartialError(t *testing.T) {
 	plot := plot.NewPlot("test_partial_error", cultivator, plot.WithTenders(2))
 	seeds := []int{1, 2, 3, 4, 5}
 
-	plot.Run(seeds)
+	plot.Run(seeds, "INFO")
 	records := mustHarvest(t, plot)
 	index := indexStatusesBySeed(records)
 
@@ -127,7 +127,7 @@ func TestPlot_AllSuccess(t *testing.T) {
 	plot := plot.NewPlot("test_all_success", cultivator, plot.WithTenders(3))
 	seeds := []int{1, 2, 3, 4, 5}
 
-	plot.Run(seeds)
+	plot.Run(seeds, "INFO")
 	records := mustHarvest(t, plot)
 	index := indexStatusesBySeed(records)
 

@@ -24,7 +24,7 @@ func TestPlot_RetrySuccess(t *testing.T) {
 		plot.WithTenders(1),
 		plot.WithMaxRetries(3),
 	)
-	plot.Run([]int{1})
+	plot.Run([]int{1}, "INFO")
 	records := mustHarvest(t, plot)
 
 	if len(records) != 1 {
@@ -50,7 +50,7 @@ func TestPlot_RetryExhausted(t *testing.T) {
 		plot.WithTenders(1),
 		plot.WithMaxRetries(2),
 	)
-	plot.Run([]int{1})
+	plot.Run([]int{1}, "INFO")
 	records := mustHarvest(t, plot)
 
 	if len(records) != 1 {
@@ -80,7 +80,7 @@ func TestPlot_RetryIf(t *testing.T) {
 			return !errors.Is(err, permanent)
 		}),
 	)
-	plot.Run([]int{1})
+	plot.Run([]int{1}, "INFO")
 	records := mustHarvest(t, plot)
 
 	if len(records) != 1 {
@@ -113,7 +113,7 @@ func TestPlot_RetryDelay(t *testing.T) {
 			return 100 * time.Millisecond
 		}),
 	)
-	plot.Run([]int{1})
+	plot.Run([]int{1}, "INFO")
 	elapsed := time.Since(start)
 	records := mustHarvest(t, plot)
 

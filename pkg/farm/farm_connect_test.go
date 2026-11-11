@@ -8,7 +8,7 @@ import (
 )
 
 func TestFarmAddPlot(t *testing.T) {
-	farm := farm.NewFarm("add_plot", "INFO")
+	farm := farm.NewFarm("add_plot")
 	plotA := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
 	plotB := plot.NewPlot("B", func(seed int) (int, error) { return seed, nil })
 
@@ -37,7 +37,7 @@ func TestFarmAddPlot(t *testing.T) {
 }
 
 func TestFarmAddPlotDuplicateName(t *testing.T) {
-	farm := farm.NewFarm("add_plot_duplicate_name", "INFO")
+	farm := farm.NewFarm("add_plot_duplicate_name")
 	plotA1 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
 	plotA2 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
 
@@ -50,7 +50,7 @@ func TestFarmAddPlotDuplicateName(t *testing.T) {
 }
 
 func TestFarmConnectHyperEdge(t *testing.T) {
-	farm := farm.NewFarm("connect_hyper_edge", "INFO")
+	farm := farm.NewFarm("connect_hyper_edge")
 	source := plot.NewPlot("source", func(seed int) (int, error) { return seed * 2, nil })
 	targetA := plot.NewPlot("targetA", func(seed int) (int, error) { return seed, nil })
 	targetB := plot.NewPlot("targetB", func(seed int) (int, error) { return seed, nil })
@@ -75,7 +75,7 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"source": {1},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 }
 
 func TestFarmConnectTypeMismatch(t *testing.T) {
-	farm := farm.NewFarm("connect_type_mismatch", "INFO")
+	farm := farm.NewFarm("connect_type_mismatch")
 	source := plot.NewPlot("source", func(seed int) (int, error) { return seed, nil })
 	target := plot.NewPlot("target", func(seed string) (string, error) { return seed, nil })
 

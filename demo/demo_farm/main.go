@@ -17,7 +17,7 @@ func main() {
 	root := grow.NewPlot("root", double, grow.WithTenders(2))
 	head := grow.NewPlot("head", addOne, grow.WithTenders(2))
 
-	farm := grow.NewFarm("demo_farm", "INFO")
+	farm := grow.NewFarm("demo_farm")
 	if err := farm.AddPlot(root, head); err != nil {
 		panic(err)
 	}
@@ -26,7 +26,7 @@ func main() {
 	}
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		panic(err)
 	}
 }

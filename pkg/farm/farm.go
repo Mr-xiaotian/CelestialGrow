@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 )
@@ -24,33 +24,19 @@ type Farm struct {
 
 	eventClient runtime.EventClient
 	hub         *observer.Hub
-
-	logObserver       *persist.LogObserver
-	lifecycleObserver *persist.LifecycleObserver
 }
 
 // ==== Construction ====
 
-// NewFarm 创建一个 Farm 实例。
-// name 为 farm 名称（用于日志标识），logLevel 为全局日志级别。
-func NewFarm(name string, logLevel string) *Farm {
-	logObserver := persist.NewLogObserver(logLevel)
-	lifecycleObserver := persist.NewLifecycleObserver()
-
-	hub := observer.NewHub()
-	_ = hub.AddObserver(logObserver)
-	_ = hub.AddObserver(lifecycleObserver)
-
+// NewFarm 创建一个 Farm 实例。name 为 farm 名称（用于日志标识）。
+func NewFarm(name string) *Farm {
 	return &Farm{
 		name:       name,
 		plots:      make(map[string]plot.PlotNode),
 		OrderGraph: NewOrderGraph(),
 
 		eventClient: runtime.NewLocalEventClient(),
-		hub:         hub,
-
-		logObserver:       logObserver,
-		lifecycleObserver: lifecycleObserver,
+		hub:         observer.NewHub(),
 	}
 }
 
@@ -193,10 +179,9 @@ func (f *Farm) emit(event observer.Event) {
 
 // Run 同步运行整张 farm 图。
 // inputs 按 plot 名称声明初始种子；这些种子会在各 plot 启动后被注入。
-// 流程：计算 source 节点 → 启动持久化观察者 → 将 farm 观察者接入各 plot →
-// 启动所有 plot → 注入种子 → 向所有 source 发送 seal → 等待所有 plot 完成 →
-// 发出图结束事件 → 停止持久化观察者。
-func (f *Farm) Run(inputs map[string][]any) error {
+// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
+// 运行期资源由 assembly 统一装配，图事件与节点事件都经 farm hub 分发。
+func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	if err := f.validateRunInputs(inputs); err != nil {
 		return err
 	}
@@ -204,35 +189,30 @@ func (f *Farm) Run(inputs map[string][]any) error {
 	f.sourceNodes = SourceNodes(f.OrderGraph)
 	startTime := time.Now()
 
-	if err := f.logObserver.Start(); err != nil {
-		return err
-	}
-	if err := f.lifecycleObserver.Start(); err != nil {
-		_ = f.logObserver.Stop()
-		return err
-	}
-	defer func() {
-		_ = f.lifecycleObserver.Stop()
-		_ = f.logObserver.Stop()
-	}()
-
-	f.emit(observer.GraphStartEvent{
-		Farm:      f.name,
-		IsDAG:     IsDAG(f.OrderGraph),
-		Nodes:     f.Nodes(),
-		Edges:     f.OutEdges(),
-		Sources:   f.sourceNodes,
-		Structure: f.getStructureList(),
-		StartTime: startTime,
-	})
-	defer func() {
-		f.emit(observer.GraphEndEvent{
-			Farm:    f.name,
-			EndTime: time.Now(),
-			Elapsed: time.Since(startTime),
+	return assembly.RunFarmResources(f.hub, logLevel, func(string) error {
+		f.emit(observer.GraphStartEvent{
+			Farm:      f.name,
+			IsDAG:     IsDAG(f.OrderGraph),
+			Nodes:     f.Nodes(),
+			Edges:     f.OutEdges(),
+			Sources:   f.sourceNodes,
+			Structure: f.getStructureList(),
+			StartTime: startTime,
 		})
-	}()
+		defer func() {
+			f.emit(observer.GraphEndEvent{
+				Farm:    f.name,
+				EndTime: time.Now(),
+				Elapsed: time.Since(startTime),
+			})
+		}()
 
+		return f.run(inputs)
+	})
+}
+
+// run 执行图调度：接入 farm 观察者、启动节点、注入种子并等待全部退出。
+func (f *Farm) run(inputs map[string][]any) error {
 	for _, plot := range f.plots {
 		if err := plot.AddObserver(f.hub); err != nil {
 			return err

@@ -48,7 +48,7 @@ func singlePlotDedup() {
 		grow.WithTenders(3),
 		grow.WithPruneIf(newDeduplicator().pruneIf),
 	)
-	p.Run(seeds)
+	p.Run(seeds, "INFO")
 
 	fmt.Printf("[single plot] input=%v\n", seeds)
 	fmt.Printf("[single plot] fruit=%d (去重后翻倍), prune=%d (重复被修剪), weed=%d\n",
@@ -63,7 +63,7 @@ func farmDedup() {
 		grow.WithPruneIf(newDeduplicator().pruneIf),
 	)
 
-	farm := grow.NewFarm("farm_dedup", "INFO")
+	farm := grow.NewFarm("farm_dedup")
 	if err := farm.AddPlot(root, head); err != nil {
 		panic(err)
 	}
@@ -72,7 +72,7 @@ func farmDedup() {
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		panic(err)
 	}
 

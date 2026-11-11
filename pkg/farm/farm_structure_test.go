@@ -37,7 +37,7 @@ func TestFarmStructure121(t *testing.T) {
 		return seed, nil
 	}, plot.WithTenders(8))
 
-	farm := farm.NewFarm("structure_121", "INFO")
+	farm := farm.NewFarm("structure_121")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestFarmStructure121(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": inputs,
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		return seed, nil
 	}, plot.WithTenders(4))
 
-	farm := farm.NewFarm("structure_121_partial_failure", "INFO")
+	farm := farm.NewFarm("structure_121_partial_failure")
 	if err := farm.AddPlot(root, midA, midB, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": inputs,
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -249,7 +249,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		return seed, nil
 	}, plot.WithTenders(4))
 
-	farm := farm.NewFarm("disconnected_components", "INFO")
+	farm := farm.NewFarm("disconnected_components")
 	if err := farm.AddPlot(rootA, midA1, midA2, rootB1, rootB2, headB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		"rootA":  inputsA,
 		"rootB1": inputsB1,
 		"rootB2": inputsB2,
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -317,12 +317,12 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 
 	rootFast := plot.NewPlot("rootFast", func(seed int) (int, error) {
 		return seed*10 + 1, nil
-	}, plot.WithTenders(4), plot.WithChanSize(50), plot.WithLogLevel("SUCCESS"))
+	}, plot.WithTenders(4), plot.WithChanSize(50))
 
 	rootSlow := plot.NewPlot("rootSlow", func(seed int) (int, error) {
 		time.Sleep(10 * time.Millisecond)
 		return seed*10 + 2, nil
-	}, plot.WithTenders(4), plot.WithChanSize(50), plot.WithLogLevel("SUCCESS"))
+	}, plot.WithTenders(4), plot.WithChanSize(50))
 
 	var (
 		mu      sync.Mutex
@@ -336,9 +336,9 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 		visited++
 		mu.Unlock()
 		return seed, nil
-	}, plot.WithTenders(8), plot.WithChanSize(100), plot.WithLogLevel("SUCCESS"))
+	}, plot.WithTenders(8), plot.WithChanSize(100))
 
-	farm := farm.NewFarm("structure_21_fanin_different_speed", "INFO")
+	farm := farm.NewFarm("structure_21_fanin_different_speed")
 	if err := farm.AddPlot(rootFast, rootSlow, head); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -356,7 +356,7 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 	if err := farm.Run(map[string][]any{
 		"rootFast": fastInputs,
 		"rootSlow": slowInputs,
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

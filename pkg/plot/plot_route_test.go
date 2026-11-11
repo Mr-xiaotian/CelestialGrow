@@ -16,7 +16,7 @@ func TestRoutePlot_RunHarvest(t *testing.T) {
 		}, nil
 	}, plot.WithTenders(2))
 
-	route.Run([]int{1, 2})
+	route.Run([]int{1, 2}, "INFO")
 	records := mustHarvest(t, route)
 	if len(records) != 2 {
 		t.Fatalf("expected 2 statuses, got %d", len(records))

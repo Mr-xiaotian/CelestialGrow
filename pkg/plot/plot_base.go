@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
@@ -47,9 +48,9 @@ type basePlot[S any, F any, Y any] struct {
 	seedChan   chan runtime.Payload[S]
 	yieldChans map[string]chan runtime.Payload[Y]
 
-	eventClient runtime.EventClient
-	hub         *observer.Hub
-	lifecycle   *persist.LifecycleObserver
+	eventClient     runtime.EventClient
+	hub             *observer.Hub
+	lifecycleDBPath string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -387,42 +388,27 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // ==== Standalone Execution & Harvest ====
 
 // Run 在 standalone 模式下启动 Plot 并处理所有种子。
-// 它会自动挂载日志与生命周期观察者并启动本地消费循环，
-// 在所有输入完成后阻塞等待退出。
-func (p *basePlot[S, F, Y]) Run(seeds []S) {
-	logObserver := persist.NewLogObserver(p.logLevel)
-	lifecycleObserver := persist.NewLifecycleObserver()
-	p.lifecycle = lifecycleObserver
+// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
+// 运行期资源由 assembly 统一装配，在所有输入完成后阻塞等待退出。
+func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
+	_ = assembly.RunNodeResources(p.hub, logLevel, func(lifecycleDBPath string) error {
+		p.lifecycleDBPath = lifecycleDBPath
 
-	if err := p.hub.AddObserver(logObserver); err != nil {
-		return
-	}
-	if err := p.hub.AddObserver(lifecycleObserver); err != nil {
-		return
-	}
-
-	if err := logObserver.Start(); err != nil {
-		return
-	}
-	defer func() { _ = logObserver.Stop() }()
-	if err := lifecycleObserver.Start(); err != nil {
-		return
-	}
-	defer func() { _ = lifecycleObserver.Stop() }()
-
-	p.StartAsync()
-	for _, seed := range seeds {
-		p.Seed(seed)
-	}
-	p.Seal()
-	p.WaitAsync()
+		p.StartAsync()
+		for _, seed := range seeds {
+			p.Seed(seed)
+		}
+		p.Seal()
+		p.WaitAsync()
+		return nil
+	})
 }
 
 // Harvest 读取当前 plot 已持久化的全部任务状态快照。
-// 仅 standalone 模式的 Run 会挂载生命周期观察者，Farm 模式下调用会返回错误。
+// 仅 standalone 模式的 Run 会装配生命周期资源，Farm 模式下调用会返回错误。
 func (p *basePlot[S, F, Y]) Harvest() ([]persist.LifecycleStatusRecord, error) {
-	if p.lifecycle == nil {
-		return nil, fmt.Errorf("plot %q lifecycle observer is nil", p.name)
+	if p.lifecycleDBPath == "" {
+		return nil, fmt.Errorf("plot %q lifecycle database is not ready", p.name)
 	}
-	return p.lifecycle.LoadStatuses(p.name)
+	return persist.LoadLifecycleStatusesFromPath(p.lifecycleDBPath, p.name)
 }

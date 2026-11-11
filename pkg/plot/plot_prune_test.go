@@ -21,7 +21,7 @@ func TestPlot_PruneSkipsCultivator(t *testing.T) {
 		plot.WithTenders(1),
 		plot.WithPruneIf(func(seed int) bool { return true }),
 	)
-	plot.Run([]int{1, 2, 3})
+	plot.Run([]int{1, 2, 3}, "INFO")
 	records := mustHarvest(t, plot)
 
 	if cultivations.Load() != 0 {
@@ -54,7 +54,7 @@ func TestPlot_PruneMiss(t *testing.T) {
 		plot.WithPruneIf(func(seed int) bool { return false }),
 	)
 	seeds := []int{1, 2, 3}
-	plot.Run(seeds)
+	plot.Run(seeds, "INFO")
 	records := mustHarvest(t, plot)
 
 	for _, seed := range seeds {
@@ -88,7 +88,7 @@ func TestPlot_PruneMixed(t *testing.T) {
 		plot.WithPruneIf(func(seed int) bool { return seed > 3 }),
 	)
 	seeds := []int{1, 2, 3, 4, 5}
-	plot.Run(seeds)
+	plot.Run(seeds, "INFO")
 	records := mustHarvest(t, plot)
 	index := indexStatusesBySeed(records)
 

@@ -17,7 +17,7 @@ func TestSplitPlot_RunHarvest(t *testing.T) {
 		return fruits, nil
 	}, plot.WithTenders(2))
 
-	split.Run([]int{0, 2})
+	split.Run([]int{0, 2}, "INFO")
 	records := mustHarvest(t, split)
 	if len(records) != 2 {
 		t.Fatalf("expected 2 statuses, got %d", len(records))

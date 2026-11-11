@@ -26,8 +26,8 @@ type PlotNode = plot.PlotNode
 type Option = plot.Option
 
 // NewFarm 创建一个 Farm。
-func NewFarm(name string, logLevel string) *Farm {
-	return farm.NewFarm(name, logLevel)
+func NewFarm(name string) *Farm {
+	return farm.NewFarm(name)
 }
 
 // NewPlot 创建一个 Plot。
@@ -52,8 +52,7 @@ var (
 	WithRetryDelay = func(fn func(int) time.Duration) Option {
 		return plot.WithRetryDelay(fn)
 	}
-	WithRetryIf  = plot.WithRetryIf
-	WithLogLevel = plot.WithLogLevel
+	WithRetryIf = plot.WithRetryIf
 )
 
 // WithPruneIf 设置修剪谓词：返回 true 的种子不经过培育直接终结为 prune。

@@ -305,6 +305,22 @@ func LoadLifecycleStatuses(db *sql.DB, plotName string) ([]LifecycleStatusRecord
 	return records, nil
 }
 
+// LoadLifecycleStatusesFromPath 打开指定生命周期数据库并读取 plot 的状态快照。
+// 用于运行结束、写入端已关闭后的离线查询。
+func LoadLifecycleStatusesFromPath(dbPath string, plotName string) ([]LifecycleStatusRecord, error) {
+	if dbPath == "" {
+		return nil, fmt.Errorf("lifecycle database path is empty")
+	}
+
+	db, err := OpenLifecycleSQLite(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open lifecycle sqlite %q: %w", dbPath, err)
+	}
+	defer db.Close()
+
+	return LoadLifecycleStatuses(db, plotName)
+}
+
 // ==== sqlite 配置与事务工具函数 ====
 
 // OpenLifecycleSQLite 打开 sqlite 数据库并确保表结构存在。

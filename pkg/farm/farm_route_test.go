@@ -33,7 +33,7 @@ func TestFarmRunRoutePlot(t *testing.T) {
 		return map[string]string{"right": fmt.Sprintf("odd-%d", seed)}, nil
 	}, plot.WithTenders(2))
 
-	f := farm.NewFarm("route_plot", "INFO")
+	f := farm.NewFarm("route_plot")
 	if err := f.AddPlot(route, left, right); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestFarmRunRoutePlot(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"route": {1, 2, 3, 4},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestFarmRunRoutePlotSkipsUnconnectedTarget(t *testing.T) {
 		}, nil
 	}, plot.WithTenders(1))
 
-	f := farm.NewFarm("route_skip", "INFO")
+	f := farm.NewFarm("route_skip")
 	if err := f.AddPlot(route, left); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestFarmRunRoutePlotSkipsUnconnectedTarget(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"route": {1},
-	}); err != nil {
+	}, "INFO"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

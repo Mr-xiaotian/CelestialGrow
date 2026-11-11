@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 )
 
@@ -44,11 +43,6 @@ func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts
 // NewRoutePlot 创建一个 RoutePlot。
 func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y] {
 	return plot.NewRoutePlot(name, cultivator, opts...)
-}
-
-// NewProgressBar 创建一个进度条。
-func NewProgressBar(description string) *observer.ProgressBar {
-	return observer.NewProgressBar(description)
 }
 
 var (

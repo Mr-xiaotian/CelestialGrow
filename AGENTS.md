@@ -22,3 +22,15 @@
 
 - 可以查看 git 区内容
 - 但任何情况下不要修改我的 git 区
+
+## 与其他项目的关联
+
+### celestialflow
+
+- 位于: ..\celestialflow
+- 关系: 为celestialgrow的python版, 也是该项目各个功能结构的先行版
+
+### celestialflow-web
+
+- 位于: ..\celestialflow-web
+- 关系: 为celestialflow提供可视化的web界面

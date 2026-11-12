@@ -159,13 +159,20 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 	return nil
 }
 
+// ==== Watcher Registration ====
+
+// AddWatcher 注册一个 Farm 级 watcher，可接收 Farm 事件与所有 Plot 事件。
+// 可在 Run/Start 前注册；Hub 支持运行期追加，之后的事件才会送达新 watcher。
+func (f *Farm) AddWatcher(watcher scarecrow.Watcher) error {
+	return f.hub.AddWatcher(watcher)
+}
+
 // ==== Execution ====
 
 // validateRunInputs 校验输入参数中的 plot 均已注册到 farm。
 func (f *Farm) validateRunInputs(inputs map[string][]any) error {
 	for name := range inputs {
-		_, ok := f.plots[name]
-		if !ok {
+		if _, ok := f.plots[name]; !ok {
 			return fmt.Errorf("plot %q is not registered in farm", name)
 		}
 	}
@@ -177,16 +184,71 @@ func (f *Farm) emit(event scarecrow.Event) {
 	_ = f.hub.OnEvent(event)
 }
 
-// Run 同步运行整张 farm 图。
-// inputs 按 plot 名称声明初始种子；这些种子会在各 plot 启动后被注入。
+// Run 同步运行整张 Farm：先启动所有 Plot，再注入初始种子，并向源 Plot
+// 发送终止信号，最后等待全部 Plot 退出。
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
-// 运行期资源由 assembly 统一装配，Farm 事件与 Plot 事件都经 farm hub 分发。
 func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	if err := f.validateRunInputs(inputs); err != nil {
 		return err
 	}
 
 	f.sourceNodes = SourceNodes(f.OrderGraph)
+	return f.start(logLevel, func() error {
+		if err := f.InjectTasks(inputs); err != nil {
+			return err
+		}
+		return f.InjectTerminations(f.sourceNodes)
+	})
+}
+
+// Start 装配运行期资源并启动所有 Plot，阻塞到全部 Plot 退出。
+//
+// 与 Run 不同，Start 不注入任何初始种子或终止信号，适合外部驱动场景
+// （如 reporter）：调用方可在 Start 阻塞期间通过 InjectTasks /
+// InjectTerminations 动态控制任务流。若没有外部注入终止信号，Start 不会返回。
+// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
+func (f *Farm) Start(logLevel string) error {
+	f.sourceNodes = SourceNodes(f.OrderGraph)
+	return f.start(logLevel, nil)
+}
+
+// InjectTasks 向指定 Plot 注入种子。可在 Start/Run 运行期间调用。
+// 所有目标 Plot 必须已注册，否则返回错误且不注入任何种子。
+func (f *Farm) InjectTasks(tasks map[string][]any) error {
+	if err := f.validateRunInputs(tasks); err != nil {
+		return err
+	}
+
+	for name, seeds := range tasks {
+		plot := f.plots[name]
+		for _, seed := range seeds {
+			if err := plot.SeedAny(seed); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// InjectTerminations 向指定 Plot 注入终止信号。可在 Start/Run 运行期间调用。
+// 所有目标 Plot 必须已注册，否则返回错误且不注入任何终止信号。
+// 向某个 Plot 注入终止信号后，再向它注入种子将不会被处理。
+func (f *Farm) InjectTerminations(nodes []string) error {
+	for _, name := range nodes {
+		if _, ok := f.plots[name]; !ok {
+			return fmt.Errorf("plot %q is not registered in farm", name)
+		}
+	}
+
+	for _, name := range nodes {
+		f.plots[name].Seal()
+	}
+	return nil
+}
+
+// start 是 Run 与 Start 共用的执行流程。
+// prepare 在 Plot 启动后、等待退出前调用，用于注入初始任务与终止信号。
+func (f *Farm) start(logLevel string, prepare func() error) error {
 	startTime := time.Now()
 
 	resources, err := assembly.StartFarmResources(f.hub, logLevel)
@@ -212,11 +274,6 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 		})
 	}()
 
-	return f.run(inputs)
-}
-
-// run 执行图调度：接入 farm 观察者、启动 plot、注入种子并等待全部退出。
-func (f *Farm) run(inputs map[string][]any) error {
 	for _, plot := range f.plots {
 		if err := plot.AddWatcher(f.hub); err != nil {
 			return err
@@ -227,29 +284,18 @@ func (f *Farm) run(inputs map[string][]any) error {
 		plot.StartAsync()
 	}
 
-	var seedErr error
-	for name, seeds := range inputs {
-		plot := f.plots[name]
-		for _, seed := range seeds {
-			if err := plot.SeedAny(seed); err != nil {
-				seedErr = err
-				break
-			}
-		}
-		if seedErr != nil {
-			break
-		}
+	var prepareErr error
+	if prepare != nil {
+		prepareErr = prepare()
 	}
-
-	// 即使播种失败也要发送 seal 并等待所有 plot 退出，
-	// 否则延迟执行的观察者停止会关闭队列，导致仍在运行的 plot 写入已关闭通道。
-	for _, name := range f.sourceNodes {
-		f.plots[name].Seal()
+	if prepareErr != nil {
+		// 注入失败时仍需终止源 Plot，避免等待未注入终止信号的图。
+		_ = f.InjectTerminations(f.sourceNodes)
 	}
 
 	for _, plot := range f.plots {
 		plot.WaitAsync()
 	}
 
-	return seedErr
+	return prepareErr
 }

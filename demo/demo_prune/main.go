@@ -44,7 +44,7 @@ func addOne(num int) (int, error) {
 func singlePlotDedup() {
 	seeds := []int{1, 2, 3, 2, 1, 4, 4, 5}
 
-	p := grow.NewPlot("single_dedup", double,
+	p := grow.NewSinglePlot("single_dedup", double,
 		grow.WithTenders(3),
 		grow.WithPruneIf(newDeduplicator().pruneIf),
 	)
@@ -57,8 +57,8 @@ func singlePlotDedup() {
 
 // farmDedup 多 plot 场景：root 翻倍产生重复值，head 去重后加一。
 func farmDedup() {
-	root := grow.NewPlot("double", double, grow.WithTenders(3))
-	head := grow.NewPlot("dedup_add", addOne,
+	root := grow.NewSinglePlot("double", double, grow.WithTenders(3))
+	head := grow.NewSinglePlot("dedup_add", addOne,
 		grow.WithTenders(3),
 		grow.WithPruneIf(newDeduplicator().pruneIf),
 	)

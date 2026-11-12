@@ -10,8 +10,8 @@ import (
 // Farm 是对外暴露的农场类型。
 type Farm = farm.Farm
 
-// Plot 是对外暴露的泛型节点类型。
-type Plot[S any, F any] = plot.Plot[S, F]
+// SinglePlot 是对外暴露的单进单出节点类型。
+type SinglePlot[S any, F any] = plot.SinglePlot[S, F]
 
 // SplitPlot 是对外暴露的拆分节点类型。
 type SplitPlot[S any, F any] = plot.SplitPlot[S, F]
@@ -22,7 +22,7 @@ type RoutePlot[S any, Y any] = plot.RoutePlot[S, Y]
 // PlotNode 是 Farm 连接 plot 时使用的统一接口。
 type PlotNode = plot.PlotNode
 
-// Option 是 Plot 的可选配置。
+// Option 是 Plot 节点的可选配置。
 type Option = plot.Option
 
 // NewFarm 创建一个 Farm。
@@ -30,9 +30,9 @@ func NewFarm(name string) *Farm {
 	return farm.NewFarm(name)
 }
 
-// NewPlot 创建一个 Plot。
-func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *Plot[S, F] {
-	return plot.NewPlot(name, cultivator, opts...)
+// NewSinglePlot 创建一个 SinglePlot。
+func NewSinglePlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F] {
+	return plot.NewSinglePlot(name, cultivator, opts...)
 }
 
 // NewSplitPlot 创建一个 SplitPlot。

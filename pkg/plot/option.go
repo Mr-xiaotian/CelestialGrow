@@ -7,7 +7,7 @@ import (
 
 // ==== Types ====
 
-// Option 配置 Plot 的可选参数函数。
+// Option 配置 Plot 节点的可选参数函数。
 type Option func(*plotOptions)
 
 // plotOptions 存储所有可选参数的内部结构体。
@@ -83,4 +83,3 @@ func WithPruneIf[S any](fn func(S) bool) Option {
 		}
 	}
 }
-

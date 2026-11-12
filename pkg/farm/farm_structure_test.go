@@ -13,15 +13,15 @@ import (
 func TestFarmStructure121(t *testing.T) {
 	const seedCount = 50
 
-	root := plot.NewPlot("root", func(seed int) (int, error) {
+	root := plot.NewSinglePlot("root", func(seed int) (int, error) {
 		return seed, nil
 	}, plot.WithTenders(8))
 
-	midA := plot.NewPlot("midA", func(seed int) (int, error) {
+	midA := plot.NewSinglePlot("midA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
 	}, plot.WithTenders(8))
 
-	midB := plot.NewPlot("midB", func(seed int) (int, error) {
+	midB := plot.NewSinglePlot("midB", func(seed int) (int, error) {
 		return seed*10 + 2, nil
 	}, plot.WithTenders(8))
 
@@ -30,7 +30,7 @@ func TestFarmStructure121(t *testing.T) {
 		counts = make(map[int]int, seedCount*2)
 	)
 
-	head := plot.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		counts[seed]++
 		mu.Unlock()
@@ -94,7 +94,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 	const seedCount = 20
 
 	// root: 偶数失败，10 个成功
-	root := plot.NewPlot("root", func(seed int) (int, error) {
+	root := plot.NewSinglePlot("root", func(seed int) (int, error) {
 		if seed%2 == 0 {
 			return 0, fmt.Errorf("even seed %d", seed)
 		}
@@ -102,14 +102,14 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 	}, plot.WithTenders(4))
 
 	// midA: 全部成功
-	midA := plot.NewPlot("midA", func(seed int) (int, error) {
+	midA := plot.NewSinglePlot("midA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
 	}, plot.WithTenders(4))
 
 	// midB: 能被 3 整除的失败，10 个输入中失败 seed=3,9 共 5 个（seed=1,3,5,7,9,11,13,15,17,19 中 3,9,15 能被3整除）
 	// 修正：输入是 1,3,5,7,9,11,13,15,17,19（10个奇数），其中能被3整除的是 3,9,15 共 3 个，成功 7 个
 	// 为了让 midB 恰好失败 5 个，改用 seed > 10 失败：失败 11,13,15,17,19 共 5 个，成功 1,3,5,7,9 共 5 个
-	midB := plot.NewPlot("midB", func(seed int) (int, error) {
+	midB := plot.NewSinglePlot("midB", func(seed int) (int, error) {
 		if seed > 10 {
 			return 0, fmt.Errorf("seed %d too large", seed)
 		}
@@ -121,7 +121,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 		counts = make(map[int]int, 15)
 	)
 
-	head := plot.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		counts[seed]++
 		mu.Unlock()
@@ -209,7 +209,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 	const seedCount = 50
 
 	// 第一组: 1→2 (rootA → midA1, midA2)
-	rootA := plot.NewPlot("rootA", func(seed int) (int, error) {
+	rootA := plot.NewSinglePlot("rootA", func(seed int) (int, error) {
 		return seed*10 + 1, nil
 	}, plot.WithTenders(4))
 
@@ -217,13 +217,13 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		muA      sync.Mutex
 		resultsA = make(map[int]int, seedCount*2)
 	)
-	midA1 := plot.NewPlot("midA1", func(seed int) (int, error) {
+	midA1 := plot.NewSinglePlot("midA1", func(seed int) (int, error) {
 		muA.Lock()
 		resultsA[seed]++
 		muA.Unlock()
 		return seed, nil
 	}, plot.WithTenders(4))
-	midA2 := plot.NewPlot("midA2", func(seed int) (int, error) {
+	midA2 := plot.NewSinglePlot("midA2", func(seed int) (int, error) {
 		muA.Lock()
 		resultsA[seed]++
 		muA.Unlock()
@@ -231,10 +231,10 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 	}, plot.WithTenders(4))
 
 	// 第二组: 2→1 (rootB1, rootB2 → headB)
-	rootB1 := plot.NewPlot("rootB1", func(seed int) (int, error) {
+	rootB1 := plot.NewSinglePlot("rootB1", func(seed int) (int, error) {
 		return seed*10 + 3, nil
 	}, plot.WithTenders(4))
-	rootB2 := plot.NewPlot("rootB2", func(seed int) (int, error) {
+	rootB2 := plot.NewSinglePlot("rootB2", func(seed int) (int, error) {
 		return seed*10 + 4, nil
 	}, plot.WithTenders(4))
 
@@ -242,7 +242,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		muB      sync.Mutex
 		resultsB = make(map[int]int, seedCount*2)
 	)
-	headB := plot.NewPlot("headB", func(seed int) (int, error) {
+	headB := plot.NewSinglePlot("headB", func(seed int) (int, error) {
 		muB.Lock()
 		resultsB[seed]++
 		muB.Unlock()
@@ -315,11 +315,11 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 	const seedCount = 50
 
-	rootFast := plot.NewPlot("rootFast", func(seed int) (int, error) {
+	rootFast := plot.NewSinglePlot("rootFast", func(seed int) (int, error) {
 		return seed*10 + 1, nil
 	}, plot.WithTenders(4), plot.WithChanSize(50))
 
-	rootSlow := plot.NewPlot("rootSlow", func(seed int) (int, error) {
+	rootSlow := plot.NewSinglePlot("rootSlow", func(seed int) (int, error) {
 		time.Sleep(10 * time.Millisecond)
 		return seed*10 + 2, nil
 	}, plot.WithTenders(4), plot.WithChanSize(50))
@@ -330,7 +330,7 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 		visited int
 	)
 
-	head := plot.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		counts[seed]++
 		visited++

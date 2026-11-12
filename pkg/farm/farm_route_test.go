@@ -24,8 +24,8 @@ func TestFarmRunRoutePlot(t *testing.T) {
 		}
 	}
 
-	left := plot.NewPlot("left", recorder("left"), plot.WithTenders(2))
-	right := plot.NewPlot("right", recorder("right"), plot.WithTenders(2))
+	left := plot.NewSinglePlot("left", recorder("left"), plot.WithTenders(2))
+	right := plot.NewSinglePlot("right", recorder("right"), plot.WithTenders(2))
 	route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 		if seed%2 == 0 {
 			return map[string]string{"left": fmt.Sprintf("even-%d", seed)}, nil
@@ -67,7 +67,7 @@ func TestFarmRunRoutePlotSkipsUnconnectedTarget(t *testing.T) {
 	var mu sync.Mutex
 	var received []string
 
-	left := plot.NewPlot("left", func(seed string) (string, error) {
+	left := plot.NewSinglePlot("left", func(seed string) (string, error) {
 		mu.Lock()
 		received = append(received, seed)
 		mu.Unlock()

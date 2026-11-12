@@ -17,7 +17,7 @@ func TestPlot_PruneSkipsCultivator(t *testing.T) {
 		return 0, errors.New("cultivator should never be called")
 	}
 
-	plot := plot.NewPlot("test_prune_all", cultivator,
+	plot := plot.NewSinglePlot("test_prune_all", cultivator,
 		plot.WithTenders(1),
 		plot.WithPruneIf(func(seed int) bool { return true }),
 	)
@@ -49,7 +49,7 @@ func TestPlot_PruneMiss(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := plot.NewPlot("test_prune_miss", cultivator,
+	plot := plot.NewSinglePlot("test_prune_miss", cultivator,
 		plot.WithTenders(2),
 		plot.WithPruneIf(func(seed int) bool { return false }),
 	)
@@ -83,7 +83,7 @@ func TestPlot_PruneMixed(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := plot.NewPlot("test_prune_mixed", cultivator,
+	plot := plot.NewSinglePlot("test_prune_mixed", cultivator,
 		plot.WithTenders(2),
 		plot.WithPruneIf(func(seed int) bool { return seed > 3 }),
 	)

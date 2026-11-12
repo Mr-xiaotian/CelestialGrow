@@ -9,8 +9,8 @@ import (
 
 func TestFarmAddPlot(t *testing.T) {
 	farm := farm.NewFarm("add_plot")
-	plotA := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
-	plotB := plot.NewPlot("B", func(seed int) (int, error) { return seed, nil })
+	plotA := plot.NewSinglePlot("A", func(seed int) (int, error) { return seed, nil })
+	plotB := plot.NewSinglePlot("B", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(plotA, plotB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
@@ -38,8 +38,8 @@ func TestFarmAddPlot(t *testing.T) {
 
 func TestFarmAddPlotDuplicateName(t *testing.T) {
 	farm := farm.NewFarm("add_plot_duplicate_name")
-	plotA1 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
-	plotA2 := plot.NewPlot("A", func(seed int) (int, error) { return seed, nil })
+	plotA1 := plot.NewSinglePlot("A", func(seed int) (int, error) { return seed, nil })
+	plotA2 := plot.NewSinglePlot("A", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(plotA1); err != nil {
 		t.Fatalf("AddPlot(first) error = %v", err)
@@ -51,9 +51,9 @@ func TestFarmAddPlotDuplicateName(t *testing.T) {
 
 func TestFarmConnectHyperEdge(t *testing.T) {
 	farm := farm.NewFarm("connect_hyper_edge")
-	source := plot.NewPlot("source", func(seed int) (int, error) { return seed * 2, nil })
-	targetA := plot.NewPlot("targetA", func(seed int) (int, error) { return seed, nil })
-	targetB := plot.NewPlot("targetB", func(seed int) (int, error) { return seed, nil })
+	source := plot.NewSinglePlot("source", func(seed int) (int, error) { return seed * 2, nil })
+	targetA := plot.NewSinglePlot("targetA", func(seed int) (int, error) { return seed, nil })
+	targetB := plot.NewSinglePlot("targetB", func(seed int) (int, error) { return seed, nil })
 
 	if err := farm.AddPlot(source, targetA, targetB); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)
@@ -95,8 +95,8 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 
 func TestFarmConnectTypeMismatch(t *testing.T) {
 	farm := farm.NewFarm("connect_type_mismatch")
-	source := plot.NewPlot("source", func(seed int) (int, error) { return seed, nil })
-	target := plot.NewPlot("target", func(seed string) (string, error) { return seed, nil })
+	source := plot.NewSinglePlot("source", func(seed int) (int, error) { return seed, nil })
+	target := plot.NewSinglePlot("target", func(seed string) (string, error) { return seed, nil })
 
 	if err := farm.AddPlot(source, target); err != nil {
 		t.Fatalf("AddPlot() error = %v", err)

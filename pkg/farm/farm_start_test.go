@@ -10,13 +10,13 @@ import (
 )
 
 func TestFarmRunLinear(t *testing.T) {
-	root := plot.NewPlot("root", func(seed int) (int, error) { return seed * 2, nil }, plot.WithTenders(2))
+	root := plot.NewSinglePlot("root", func(seed int) (int, error) { return seed * 2, nil }, plot.WithTenders(2))
 
 	var (
 		mu      sync.Mutex
 		results []int
 	)
-	head := plot.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 		mu.Lock()
 		results = append(results, seed)
 		mu.Unlock()

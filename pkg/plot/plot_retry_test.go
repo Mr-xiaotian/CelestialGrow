@@ -20,7 +20,7 @@ func TestPlot_RetrySuccess(t *testing.T) {
 		return seed * 10, nil
 	}
 
-	plot := plot.NewPlot("test_retry_success", cultivator,
+	plot := plot.NewSinglePlot("test_retry_success", cultivator,
 		plot.WithTenders(1),
 		plot.WithMaxRetries(3),
 	)
@@ -46,7 +46,7 @@ func TestPlot_RetryExhausted(t *testing.T) {
 		return 0, errors.New("permanent error")
 	}
 
-	plot := plot.NewPlot("test_retry_exhausted", cultivator,
+	plot := plot.NewSinglePlot("test_retry_exhausted", cultivator,
 		plot.WithTenders(1),
 		plot.WithMaxRetries(2),
 	)
@@ -73,7 +73,7 @@ func TestPlot_RetryIf(t *testing.T) {
 		return 0, permanent
 	}
 
-	plot := plot.NewPlot("test_retry_if", cultivator,
+	plot := plot.NewSinglePlot("test_retry_if", cultivator,
 		plot.WithTenders(1),
 		plot.WithMaxRetries(3),
 		plot.WithRetryIf(func(err error) bool {
@@ -106,7 +106,7 @@ func TestPlot_RetryDelay(t *testing.T) {
 	}
 
 	start := time.Now()
-	plot := plot.NewPlot("test_retry_delay", cultivator,
+	plot := plot.NewSinglePlot("test_retry_delay", cultivator,
 		plot.WithTenders(1),
 		plot.WithMaxRetries(2),
 		plot.WithRetryDelay(func(attempt int) time.Duration {

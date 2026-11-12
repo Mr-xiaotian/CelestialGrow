@@ -28,7 +28,7 @@ func TestFarmRunSplitPlot(t *testing.T) {
 		}
 		return values, nil
 	})
-	head := plot.NewPlot("head", func(seed int) (int, error) {
+	head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 		return seed * 10, nil
 	}, plot.WithTenders(2))
 

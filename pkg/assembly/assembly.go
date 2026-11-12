@@ -49,8 +49,14 @@ func startResources(hub *observer.Hub, logLevel string) (*Resources, error) {
 		return nil, fmt.Errorf("assembly: observer hub is nil")
 	}
 
+	metricsObserver := observer.NewMetricsObserver()
 	lifecycleObserver := persist.NewLifecycleObserver()
-	logObserver := persist.NewLogObserver(logLevel)
+	logObserver := persist.NewLogObserver(metricsObserver, logLevel)
+
+	// 指标观察者没有消费循环，先注册；日志在节点结束时读取其计数。
+	if err := hub.AddObserver(metricsObserver); err != nil {
+		return nil, err
+	}
 
 	// 先启动再注册：启动失败时不会在 hub 中留下未启动的观察者。
 	if err := lifecycleObserver.Start(); err != nil {

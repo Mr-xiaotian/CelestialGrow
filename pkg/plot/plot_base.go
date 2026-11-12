@@ -25,7 +25,7 @@ type PlotNode interface {
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
-	SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)
+	AddUpstream(name string)
 	AddObserver(observer observer.Observer) error
 	SetEventClient(eventClient runtime.EventClient)
 
@@ -47,6 +47,7 @@ type basePlot[S any, F any, Y any] struct {
 
 	seedChan   chan runtime.Payload[S]
 	yieldChans map[string]chan runtime.Payload[Y]
+	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
 	hub         *observer.Hub
@@ -55,7 +56,6 @@ type basePlot[S any, F any, Y any] struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	state  atomic.Int32 // 0=idle, 1=running, 2=done
-	*Counter
 }
 
 // ==== Construction ====
@@ -76,13 +76,13 @@ func newBasePlot[S any, F any, Y any](name string, cultivator func(S) (F, error)
 
 		seedChan:   make(chan runtime.Payload[S], o.chanSize),
 		yieldChans: make(map[string]chan runtime.Payload[Y]),
+		upstreams:  make(map[string]struct{}),
 
 		eventClient: runtime.NewLocalEventClient(),
 		hub:         observer.NewHub(),
 
-		ctx:     ctx,
-		cancel:  cancel,
-		Counter: NewCounter(),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 }
 
@@ -116,11 +116,14 @@ func (p *basePlot[S, F, Y]) ConnectTo(next PlotNode) error {
 	}
 
 	p.yieldChans[next.GetName()] = seedChan
-
-	downstreamYield := &atomic.Int64{}
-	p.SetDownstreamYieldCounter(next.GetName(), downstreamYield)
-	next.SetUpstreamYieldCounter(p.GetName(), downstreamYield)
+	next.AddUpstream(p.name)
 	return nil
+}
+
+// AddUpstream 登记一个上游节点，用于 seal 聚合。
+// 由上游在 ConnectTo 中调用，连接建立后不再变更。
+func (p *basePlot[S, F, Y]) AddUpstream(name string) {
+	p.upstreams[name] = struct{}{}
 }
 
 // ==== Getters ====
@@ -140,6 +143,72 @@ func (p *basePlot[S, F, Y]) GetSeedChanAny() any {
 	return p.seedChan
 }
 
+// ==== Metrics ====
+
+// nodeMetrics 返回当前 plot 的指标快照；未装配指标观察者时 ok 为 false。
+func (p *basePlot[S, F, Y]) nodeMetrics() (observer.NodeMetrics, bool) {
+	metrics, ok := observer.Find[*observer.MetricsObserver](p.hub)
+	if !ok {
+		return observer.NodeMetrics{}, false
+	}
+	return metrics.GetNode(p.name)
+}
+
+// GetSeedNum 返回当前 plot 的输入总数，包括本地播种与上游投递。
+func (p *basePlot[S, F, Y]) GetSeedNum() int {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return 0
+	}
+	return metrics.InputTotal
+}
+
+// GetFruitNum 返回成功数（果实）。
+func (p *basePlot[S, F, Y]) GetFruitNum() int {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return 0
+	}
+	return metrics.Succeeded
+}
+
+// GetWeedNum 返回失败数（杂草）。
+func (p *basePlot[S, F, Y]) GetWeedNum() int {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return 0
+	}
+	return metrics.Failed
+}
+
+// GetPruneNum 返回剪枝数（跳过）。
+func (p *basePlot[S, F, Y]) GetPruneNum() int {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return 0
+	}
+	return metrics.Skipped
+}
+
+// GetCompleted 返回已完成数（果实 + 杂草 + 剪枝）。
+func (p *basePlot[S, F, Y]) GetCompleted() int {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return 0
+	}
+	return metrics.Processed
+}
+
+// IsFinish 判断所有已输入任务是否都已得出结果。
+// 未装配指标观察者时返回 false。
+func (p *basePlot[S, F, Y]) IsFinish() bool {
+	metrics, ok := p.nodeMetrics()
+	if !ok {
+		return false
+	}
+	return metrics.Processed == metrics.InputTotal
+}
+
 // ==== Observer Hooks ====
 
 // notifyStart 将状态设为 running 并发出节点启动事件。
@@ -156,10 +225,8 @@ func (p *basePlot[S, F, Y]) notifyFinish(startTime time.Time) {
 
 // ==== Result Handling ====
 
-// witherSeed 处理培育失败的种子：更新计数并发出任务失败事件。
+// witherSeed 处理培育失败的种子：发出任务失败事件。
 func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
-	p.AddWeedNum(1)
-
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
@@ -177,10 +244,8 @@ func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error
 	})
 }
 
-// pruneSeed 处理剪枝种子：更新计数并发出任务跳过事件。
+// pruneSeed 处理剪枝种子：发出任务跳过事件。
 func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime time.Time) {
-	p.AddPruneNum(1)
-
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
@@ -206,7 +271,7 @@ func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime 
 func (p *basePlot[S, F, Y]) sprout() {
 	sem := make(chan struct{}, p.numTenders)
 	done := make(chan struct{}, p.numTenders)
-	sealedFrom := make(map[string]int, len(p.upstreamYields))
+	sealedFrom := make(map[string]int, len(p.upstreams))
 
 	ctxCancel := false
 	inputClosed := false
@@ -217,7 +282,7 @@ func (p *basePlot[S, F, Y]) sprout() {
 
 	for {
 		if shouldFinish() {
-			parentIDs := make([]int, 0, len(p.upstreamYields))
+			parentIDs := make([]int, 0, len(p.upstreams))
 			for _, sealID := range sealedFrom {
 				parentIDs = append(parentIDs, sealID)
 			}
@@ -264,11 +329,11 @@ func (p *basePlot[S, F, Y]) markSealed(source string, sealID int, sealedFrom map
 	if source == "" {
 		return false
 	}
-	if _, ok := p.upstreamYields[source]; !ok {
+	if _, ok := p.upstreams[source]; !ok {
 		return false
 	}
 	sealedFrom[source] = sealID
-	return len(sealedFrom) == len(p.upstreamYields)
+	return len(sealedFrom) == len(p.upstreams)
 }
 
 // tend 照料单颗种子：执行 cultivator 并在失败时按策略重试。
@@ -351,8 +416,6 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 		Time:     time.Now(),
 	})
 	p.seedChan <- runtime.Payload[S]{Value: seed, EventID: seedID}
-
-	p.AddSeedNum(1)
 }
 
 // Seal 向 seedChan 发送来自外部 input 的 SignalSeal。

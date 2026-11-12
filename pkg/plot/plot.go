@@ -35,10 +35,8 @@ func NewPlot[S any, F any](name string, cultivator func(S) (F, error), opts ...O
 
 // ==== Result Handling ====
 
-// ripenSeed 处理培育成功的种子：更新计数、记录日志、推进生命周期并发送果实。
+// ripenSeed 处理培育成功的种子：发出任务成功事件，并逐颗向下游投递果实。
 func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time) {
-	p.AddFruitNum(1)
-
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	fruitID := p.eventClient.Emit("fruit", []int{seedID})
@@ -58,7 +56,6 @@ func (p *Plot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruit F, startTim
 	})
 
 	for nextPlot, ch := range p.yieldChans {
-		p.AddDownstreamYieldNum(nextPlot, 1)
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 
 		p.emit(observer.TaskInputEvent{

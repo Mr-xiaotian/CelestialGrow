@@ -35,7 +35,8 @@ func (h *captureLogHandler) snapshot() []LogRecord {
 
 func TestLogObserverTranslatesEvents(t *testing.T) {
 	handler := &captureLogHandler{}
-	obs := newLogObserver(handler, "DEBUG")
+	metrics := observer.NewMetricsObserver()
+	obs := newLogObserver(handler, metrics, "DEBUG")
 	if err := obs.Start(); err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -53,6 +54,9 @@ func TestLogObserverTranslatesEvents(t *testing.T) {
 		observer.GraphEndEvent{Farm: "farm", EndTime: now, Elapsed: 3 * time.Second},
 	}
 	for _, event := range events {
+		if err := metrics.OnEvent(event); err != nil {
+			t.Fatalf("metrics.OnEvent(%T) = %v", event, err)
+		}
 		if err := obs.OnEvent(event); err != nil {
 			t.Fatalf("OnEvent(%T) = %v", event, err)
 		}
@@ -93,7 +97,7 @@ func TestLogObserverTranslatesEvents(t *testing.T) {
 
 func TestLogObserverFiltersLevels(t *testing.T) {
 	handler := &captureLogHandler{}
-	obs := newLogObserver(handler, "ERROR")
+	obs := newLogObserver(handler, observer.NewMetricsObserver(), "ERROR")
 	if err := obs.Start(); err != nil {
 		t.Fatalf("Start() = %v", err)
 	}

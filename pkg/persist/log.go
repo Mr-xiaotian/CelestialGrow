@@ -3,7 +3,6 @@ package persist
 import (
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
@@ -86,30 +85,23 @@ func (l *LogRecordHandler) AfterStop() error {
 // LogObserver 将观察者事件转换为日志记录并异步写入日志文件。
 //
 // 事件经 funnel.Spout 异步落盘，观察者只负责翻译与投递。节点结束日志中的
-// 果实/杂草/剪枝数量由观察者根据任务结果事件累加，因此不依赖事件携带计数。
-// 事件可能来自多个并发协程，计数与投递均需并发安全。
+// 果实/杂草/剪枝数量直接读取 metrics 快照，不再自行计数。
+// 事件可能来自多个并发协程，观察者本身无状态，投递依赖 funnel.Inlet 的并发安全。
 type LogObserver struct {
-	mu       sync.Mutex
-	counts   map[string]*nodeLogCounts
 	spout    *funnel.Spout[LogRecord]
 	inlet    *funnel.Inlet[LogRecord]
+	metrics  *observer.MetricsObserver
 	minLevel int
 }
 
-// nodeLogCounts 记录单个节点已产生的任务结果数量。
-type nodeLogCounts struct {
-	fruit int
-	weed  int
-	prune int
-}
-
-// NewLogObserver 创建一个日志观察者，level 为最低日志级别（不存在则默认 INFO）。
-func NewLogObserver(level string) *LogObserver {
-	return newLogObserver(&LogRecordHandler{}, level)
+// NewLogObserver 创建一个日志观察者。
+// metrics 提供节点结束时的结果计数；level 为最低日志级别（不存在则默认 INFO）。
+func NewLogObserver(metrics *observer.MetricsObserver, level string) *LogObserver {
+	return newLogObserver(&LogRecordHandler{}, metrics, level)
 }
 
 // newLogObserver 使用指定处理器创建日志观察者，便于测试注入处理器。
-func newLogObserver(handler funnel.RecordHandler[LogRecord], level string) *LogObserver {
+func newLogObserver(handler funnel.RecordHandler[LogRecord], metrics *observer.MetricsObserver, level string) *LogObserver {
 	minLevel, ok := levelOrder[level]
 	if !ok {
 		minLevel = levelOrder["INFO"]
@@ -117,9 +109,9 @@ func newLogObserver(handler funnel.RecordHandler[LogRecord], level string) *LogO
 
 	spout := funnel.NewSpout(handler, 100, time.Second)
 	return &LogObserver{
-		counts:   make(map[string]*nodeLogCounts),
 		spout:    spout,
 		inlet:    funnel.NewInlet(spout.GetQueue(), time.Second),
+		metrics:  metrics,
 		minLevel: minLevel,
 	}
 }
@@ -155,12 +147,15 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		return l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", ev.Node, ev.Tenders), ev.StartTime)
 
 	case observer.NodeEndEvent:
-		counts := l.takeCounts(ev.Node)
+		var counts observer.NodeMetrics
+		if l.metrics != nil {
+			counts, _ = l.metrics.GetNode(ev.Node)
+		}
 		return l.log(
 			"INFO",
 			fmt.Sprintf(
 				"Plot '%s' end. Use %.2fs. %d ripened, %d withered, %d pruned.",
-				ev.Node, ev.Elapsed.Seconds(), counts.fruit, counts.weed, counts.prune,
+				ev.Node, ev.Elapsed.Seconds(), counts.Succeeded, counts.Failed, counts.Skipped,
 			),
 			ev.EndTime,
 		)
@@ -173,7 +168,6 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		)
 
 	case observer.TaskSuccessEvent:
-		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.fruit++ })
 		return l.log(
 			"SUCCESS",
 			fmt.Sprintf(
@@ -184,7 +178,6 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		)
 
 	case observer.TaskFailEvent:
-		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.weed++ })
 		return l.log(
 			"ERROR",
 			fmt.Sprintf(
@@ -195,7 +188,6 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		)
 
 	case observer.TaskSkipEvent:
-		l.addResult(ev.Node, func(counts *nodeLogCounts) { counts.prune++ })
 		return l.log(
 			"INFO",
 			fmt.Sprintf(
@@ -232,30 +224,4 @@ func (l *LogObserver) log(level string, message string, at time.Time) error {
 		Level:      level,
 		Message:    message,
 	})
-}
-
-// addResult 累加节点的任务结果计数。
-func (l *LogObserver) addResult(node string, apply func(*nodeLogCounts)) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	counts, ok := l.counts[node]
-	if !ok {
-		counts = &nodeLogCounts{}
-		l.counts[node] = counts
-	}
-	apply(counts)
-}
-
-// takeCounts 取出并清除节点的结果计数，供节点结束日志使用。
-func (l *LogObserver) takeCounts(node string) nodeLogCounts {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	counts, ok := l.counts[node]
-	if !ok {
-		return nodeLogCounts{}
-	}
-	delete(l.counts, node)
-	return *counts
 }

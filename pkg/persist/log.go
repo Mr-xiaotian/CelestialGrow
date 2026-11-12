@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // ==== Constants ====
@@ -80,35 +80,35 @@ func (l *LogRecordHandler) AfterStop() error {
 	return nil
 }
 
-// ==== Observer ====
+// ==== Watcher ====
 
-// LogObserver 将观察者事件转换为日志记录并异步写入日志文件。
+// LogWatcher 将观察者事件转换为日志记录并异步写入日志文件。
 //
 // 事件经 funnel.Spout 异步落盘，观察者只负责翻译与投递。Plot 结束日志中的
 // 果实/杂草/剪枝数量直接读取 metrics 快照，不再自行计数。
 // 事件可能来自多个并发协程，观察者本身无状态，投递依赖 funnel.Inlet 的并发安全。
-type LogObserver struct {
+type LogWatcher struct {
 	spout    *funnel.Spout[LogRecord]
 	inlet    *funnel.Inlet[LogRecord]
-	metrics  *observer.MetricsObserver
+	metrics  *scarecrow.MetricsWatcher
 	minLevel int
 }
 
-// NewLogObserver 创建一个日志观察者。
+// NewLogWatcher 创建一个日志观察者。
 // metrics 提供 Plot 结束时的结果计数；level 为最低日志级别（不存在则默认 INFO）。
-func NewLogObserver(metrics *observer.MetricsObserver, level string) *LogObserver {
-	return newLogObserver(&LogRecordHandler{}, metrics, level)
+func NewLogWatcher(metrics *scarecrow.MetricsWatcher, level string) *LogWatcher {
+	return newLogWatcher(&LogRecordHandler{}, metrics, level)
 }
 
-// newLogObserver 使用指定处理器创建日志观察者，便于测试注入处理器。
-func newLogObserver(handler funnel.RecordHandler[LogRecord], metrics *observer.MetricsObserver, level string) *LogObserver {
+// newLogWatcher 使用指定处理器创建日志观察者，便于测试注入处理器。
+func newLogWatcher(handler funnel.RecordHandler[LogRecord], metrics *scarecrow.MetricsWatcher, level string) *LogWatcher {
 	minLevel, ok := levelOrder[level]
 	if !ok {
 		minLevel = levelOrder["INFO"]
 	}
 
 	spout := funnel.NewSpout(handler, 100, time.Second)
-	return &LogObserver{
+	return &LogWatcher{
 		spout:    spout,
 		inlet:    funnel.NewInlet(spout.GetQueue(), time.Second),
 		metrics:  metrics,
@@ -117,19 +117,19 @@ func newLogObserver(handler funnel.RecordHandler[LogRecord], metrics *observer.M
 }
 
 // Start 启动日志消费循环并打开日志文件。
-func (l *LogObserver) Start() error {
+func (l *LogWatcher) Start() error {
 	return l.spout.Start()
 }
 
 // Stop 停止日志消费循环并关闭日志文件。
-func (l *LogObserver) Stop() error {
+func (l *LogWatcher) Stop() error {
 	return l.spout.Stop()
 }
 
 // OnEvent 将事件翻译为日志记录并投递到消费队列。
-func (l *LogObserver) OnEvent(event observer.Event) error {
+func (l *LogWatcher) OnEvent(event scarecrow.Event) error {
 	switch ev := event.(type) {
-	case observer.FarmStartEvent:
+	case scarecrow.FarmStartEvent:
 		if err := l.log("INFO", fmt.Sprintf("Farm '%s' start. Structure:", ev.Farm), ev.StartTime); err != nil {
 			return err
 		}
@@ -140,14 +140,14 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		}
 		return nil
 
-	case observer.FarmEndEvent:
+	case scarecrow.FarmEndEvent:
 		return l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", ev.Farm, ev.Elapsed.Seconds()), ev.EndTime)
 
-	case observer.PlotStartEvent:
+	case scarecrow.PlotStartEvent:
 		return l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", ev.Plot, ev.Tenders), ev.StartTime)
 
-	case observer.PlotEndEvent:
-		var counts observer.PlotMetrics
+	case scarecrow.PlotEndEvent:
+		var counts scarecrow.PlotMetrics
 		if l.metrics != nil {
 			counts, _ = l.metrics.GetPlot(ev.Plot)
 		}
@@ -160,14 +160,14 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 			ev.EndTime,
 		)
 
-	case observer.SeedInputEvent:
+	case scarecrow.SeedInputEvent:
 		return l.log(
 			"DEBUG",
 			fmt.Sprintf("In '%s', Seed %s input. [%d*]", ev.Plot, ev.SeedRepr, ev.SeedID),
 			ev.Time,
 		)
 
-	case observer.SeedRipenEvent:
+	case scarecrow.SeedRipenEvent:
 		return l.log(
 			"SUCCESS",
 			fmt.Sprintf(
@@ -177,7 +177,7 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 			ev.Time,
 		)
 
-	case observer.SeedWitherEvent:
+	case scarecrow.SeedWitherEvent:
 		return l.log(
 			"ERROR",
 			fmt.Sprintf(
@@ -187,7 +187,7 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 			ev.Time,
 		)
 
-	case observer.SeedPruneEvent:
+	case scarecrow.SeedPruneEvent:
 		return l.log(
 			"INFO",
 			fmt.Sprintf(
@@ -197,7 +197,7 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 			ev.Time,
 		)
 
-	case observer.SeedReplantEvent:
+	case scarecrow.SeedReplantEvent:
 		return l.log(
 			"WARNING",
 			fmt.Sprintf(
@@ -207,7 +207,7 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 			ev.Time,
 		)
 
-	case observer.SealInputEvent, observer.SealMergeEvent:
+	case scarecrow.SealInputEvent, scarecrow.SealMergeEvent:
 		return nil
 	}
 
@@ -215,7 +215,7 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 }
 
 // log 发送一条指定级别的日志。低于 minLevel 的日志会被静默丢弃。
-func (l *LogObserver) log(level string, message string, at time.Time) error {
+func (l *LogWatcher) log(level string, message string, at time.Time) error {
 	if levelOrder[level] < l.minLevel {
 		return nil
 	}

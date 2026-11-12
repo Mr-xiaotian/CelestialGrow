@@ -5,12 +5,12 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // startFunc 描述一个运行期资源装配入口。
-type startFunc func(hub *observer.Hub, logLevel string) (*assembly.Resources, error)
+type startFunc func(hub *scarecrow.Hub, logLevel string) (*assembly.Resources, error)
 
 // starters 覆盖 Plot 级与 Farm 级两个入口，确保两者行为一致。
 var starters = []struct {
@@ -24,8 +24,8 @@ var starters = []struct {
 func TestStartResourcesAssembleLifecycle(t *testing.T) {
 	for _, starter := range starters {
 		t.Run(starter.name, func(t *testing.T) {
-			hub := observer.NewHub(observer.WithErrorHandler(func(err error) {
-				t.Errorf("unexpected observer error: %v", err)
+			hub := scarecrow.NewHub(scarecrow.WithErrorHandler(func(err error) {
+				t.Errorf("unexpected watcher error: %v", err)
 			}))
 
 			resources, err := starter.start(hub, "DEBUG")
@@ -34,7 +34,7 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 			}
 
 			now := time.Now()
-			if err := hub.OnEvent(observer.SeedInputEvent{
+			if err := hub.OnEvent(scarecrow.SeedInputEvent{
 				Plot:     "node",
 				Seed:     42,
 				SeedRepr: "42",
@@ -47,9 +47,9 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 			resources.Stop()
 			resources.Stop() // 幂等
 
-			lifecycle, ok := observer.Find[*persist.LifecycleObserver](hub)
+			lifecycle, ok := scarecrow.Find[*persist.LifecycleWatcher](hub)
 			if !ok {
-				t.Fatal("lifecycle observer is not registered")
+				t.Fatal("lifecycle watcher is not registered")
 			}
 			dbPath := lifecycle.DBPath()
 			if dbPath == "" {

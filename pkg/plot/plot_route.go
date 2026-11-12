@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // ==== Struct ====
@@ -47,7 +47,7 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	routesRepr := trunc(fmt.Sprintf("%+v", routes), 25)
-	p.emit(observer.SeedRipenEvent{
+	p.emit(scarecrow.SeedRipenEvent{
 		Plot:      p.name,
 		Seed:      seed,
 		SeedRepr:  seedRepr,
@@ -68,7 +68,7 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		yieldRepr := trunc(fmt.Sprintf("%+v", yield), 50)
 
-		p.emit(observer.SeedInputEvent{
+		p.emit(scarecrow.SeedInputEvent{
 			Plot:     nextPlot,
 			From:     p.name,
 			Seed:     yield,

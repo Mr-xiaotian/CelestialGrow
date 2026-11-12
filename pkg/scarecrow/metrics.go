@@ -1,4 +1,4 @@
-package observer
+package scarecrow
 
 import (
 	"sync"
@@ -50,15 +50,15 @@ type PlotMetrics struct {
 	DownstreamCounts map[string]int // 目标 Plot -> 产出数量
 }
 
-// ==== Observer ====
+// ==== Watcher ====
 
-// MetricsObserver 从事件流重建 Plot 指标。
+// MetricsWatcher 从事件流重建 Plot 指标。
 //
 // 存储格随首个事件按需建立：Plot 生命周期事件维护状态与起止时间，种子事件累加
 // 输入与结果计数；上游投递会同时写入接收方的上游计数与来源方的下游计数。
 // 读取返回不可变的 PlotMetrics 快照。事件可能来自多个并发协程，读取与写入
 // 均受同一把读写锁保护。
-type MetricsObserver struct {
+type MetricsWatcher struct {
 	mu    sync.RWMutex
 	plots map[string]*plotMetrics
 }
@@ -78,13 +78,13 @@ type plotMetrics struct {
 	downstream map[string]int
 }
 
-// NewMetricsObserver 创建一个指标观察者。
-func NewMetricsObserver() *MetricsObserver {
-	return &MetricsObserver{plots: make(map[string]*plotMetrics)}
+// NewMetricsWatcher 创建一个指标观察者。
+func NewMetricsWatcher() *MetricsWatcher {
+	return &MetricsWatcher{plots: make(map[string]*plotMetrics)}
 }
 
 // plot 按需建立 Plot 存储格（幂等）。调用方需自行持有写锁。
-func (m *MetricsObserver) plot(name string) *plotMetrics {
+func (m *MetricsWatcher) plot(name string) *plotMetrics {
 	if m.plots == nil {
 		m.plots = make(map[string]*plotMetrics)
 	}
@@ -139,7 +139,7 @@ func (p *plotMetrics) snapshot(name string) PlotMetrics {
 }
 
 // OnEvent 根据事件更新 Plot 指标。
-func (m *MetricsObserver) OnEvent(event Event) error {
+func (m *MetricsWatcher) OnEvent(event Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -183,7 +183,7 @@ func (m *MetricsObserver) OnEvent(event Event) error {
 // ==== Views ====
 
 // GetPlot 获取单个 Plot 的指标快照；未登记时 ok 为 false。
-func (m *MetricsObserver) GetPlot(name string) (PlotMetrics, bool) {
+func (m *MetricsWatcher) GetPlot(name string) (PlotMetrics, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -195,7 +195,7 @@ func (m *MetricsObserver) GetPlot(name string) (PlotMetrics, bool) {
 }
 
 // GetPlots 获取全部已登记 Plot 的指标快照。
-func (m *MetricsObserver) GetPlots() map[string]PlotMetrics {
+func (m *MetricsWatcher) GetPlots() map[string]PlotMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

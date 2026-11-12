@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 const (
@@ -114,43 +114,43 @@ func (l *LifecycleRecordHandler) AfterStop() error {
 	return nil
 }
 
-// ==== Observer ====
+// ==== Watcher ====
 
-// LifecycleObserver 将观察者事件转换为生命周期记录并异步写入 sqlite。
+// LifecycleWatcher 将观察者事件转换为生命周期记录并异步写入 sqlite。
 //
 // 种子输入、成熟、枯萎与剪枝事件分别映射为 seed / ripen / wither / prune 记录；
 // 事件携带的事件 ID 与父事件 ID 直接用于重建生命周期图。
-type LifecycleObserver struct {
+type LifecycleWatcher struct {
 	spout *funnel.Spout[LifecycleRecord]
 	inlet *funnel.Inlet[LifecycleRecord]
 }
 
-// NewLifecycleObserver 创建一个生命周期观察者。
-func NewLifecycleObserver() *LifecycleObserver {
-	return newLifecycleObserver(&LifecycleRecordHandler{})
+// NewLifecycleWatcher 创建一个生命周期观察者。
+func NewLifecycleWatcher() *LifecycleWatcher {
+	return newLifecycleWatcher(&LifecycleRecordHandler{})
 }
 
-// newLifecycleObserver 使用指定处理器创建观察者，便于测试注入处理器。
-func newLifecycleObserver(handler funnel.RecordHandler[LifecycleRecord]) *LifecycleObserver {
+// newLifecycleWatcher 使用指定处理器创建观察者，便于测试注入处理器。
+func newLifecycleWatcher(handler funnel.RecordHandler[LifecycleRecord]) *LifecycleWatcher {
 	spout := funnel.NewSpout(handler, 100, time.Second)
-	return &LifecycleObserver{
+	return &LifecycleWatcher{
 		spout: spout,
 		inlet: funnel.NewInlet(spout.GetQueue(), time.Second),
 	}
 }
 
 // Start 启动生命周期消费循环并打开 sqlite 数据库。
-func (l *LifecycleObserver) Start() error {
+func (l *LifecycleWatcher) Start() error {
 	return l.spout.Start()
 }
 
 // Stop 停止消费循环并关闭 sqlite 数据库。
-func (l *LifecycleObserver) Stop() error {
+func (l *LifecycleWatcher) Stop() error {
 	return l.spout.Stop()
 }
 
 // DBPath 返回生命周期数据库路径；消费循环尚未启动时返回空字符串。
-func (l *LifecycleObserver) DBPath() string {
+func (l *LifecycleWatcher) DBPath() string {
 	handler, ok := l.spout.Handler().(*LifecycleRecordHandler)
 	if !ok {
 		return ""
@@ -159,9 +159,9 @@ func (l *LifecycleObserver) DBPath() string {
 }
 
 // OnEvent 将事件翻译为生命周期记录并投递到消费队列。
-func (l *LifecycleObserver) OnEvent(event observer.Event) error {
+func (l *LifecycleWatcher) OnEvent(event scarecrow.Event) error {
 	switch ev := event.(type) {
-	case observer.SeedInputEvent:
+	case scarecrow.SeedInputEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleSeed,
 			InputEventID:   ev.SeedID,
@@ -172,7 +172,7 @@ func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.SeedRipenEvent:
+	case scarecrow.SeedRipenEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleRipen,
 			InputEventID:   ev.SeedID,
@@ -183,7 +183,7 @@ func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.SeedWitherEvent:
+	case scarecrow.SeedWitherEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleWither,
 			InputEventID:   ev.SeedID,
@@ -195,7 +195,7 @@ func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.SeedPruneEvent:
+	case scarecrow.SeedPruneEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecyclePrune,
 			InputEventID:   ev.SeedID,
@@ -205,10 +205,10 @@ func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.FarmStartEvent, observer.FarmEndEvent,
-		observer.PlotStartEvent, observer.PlotEndEvent,
-		observer.SeedReplantEvent,
-		observer.SealInputEvent, observer.SealMergeEvent:
+	case scarecrow.FarmStartEvent, scarecrow.FarmEndEvent,
+		scarecrow.PlotStartEvent, scarecrow.PlotEndEvent,
+		scarecrow.SeedReplantEvent,
+		scarecrow.SealInputEvent, scarecrow.SealMergeEvent:
 		return nil
 	}
 

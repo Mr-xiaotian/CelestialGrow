@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // ==== Struct ====
@@ -23,7 +23,7 @@ type Farm struct {
 	*OrderGraph
 
 	eventClient runtime.EventClient
-	hub         *observer.Hub
+	hub         *scarecrow.Hub
 }
 
 // ==== Construction ====
@@ -36,7 +36,7 @@ func NewFarm(name string) *Farm {
 		OrderGraph: NewOrderGraph(),
 
 		eventClient: runtime.NewLocalEventClient(),
-		hub:         observer.NewHub(),
+		hub:         scarecrow.NewHub(),
 	}
 }
 
@@ -173,7 +173,7 @@ func (f *Farm) validateRunInputs(inputs map[string][]any) error {
 }
 
 // emit 将事件分发给 farm 级观察者。观察者故障由 Hub 的错误处理器消费。
-func (f *Farm) emit(event observer.Event) {
+func (f *Farm) emit(event scarecrow.Event) {
 	_ = f.hub.OnEvent(event)
 }
 
@@ -195,7 +195,7 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	}
 	defer resources.Stop()
 
-	f.emit(observer.FarmStartEvent{
+	f.emit(scarecrow.FarmStartEvent{
 		Farm:        f.name,
 		IsDAG:       IsDAG(f.OrderGraph),
 		Plots:       f.Nodes(),
@@ -205,7 +205,7 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 		StartTime:   startTime,
 	})
 	defer func() {
-		f.emit(observer.FarmEndEvent{
+		f.emit(scarecrow.FarmEndEvent{
 			Farm:    f.name,
 			EndTime: time.Now(),
 			Elapsed: time.Since(startTime),
@@ -218,7 +218,7 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 // run 执行图调度：接入 farm 观察者、启动 plot、注入种子并等待全部退出。
 func (f *Farm) run(inputs map[string][]any) error {
 	for _, plot := range f.plots {
-		if err := plot.AddObserver(f.hub); err != nil {
+		if err := plot.AddWatcher(f.hub); err != nil {
 			return err
 		}
 	}

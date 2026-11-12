@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // captureLifecycleHandler 记录所有收到的生命周期记录，供观察者翻译测试使用。
@@ -33,22 +33,22 @@ func (h *captureLifecycleHandler) snapshot() []LifecycleRecord {
 	return append([]LifecycleRecord{}, h.records...)
 }
 
-func TestLifecycleObserverTranslatesEvents(t *testing.T) {
+func TestLifecycleWatcherTranslatesEvents(t *testing.T) {
 	handler := &captureLifecycleHandler{}
-	obs := newLifecycleObserver(handler)
+	obs := newLifecycleWatcher(handler)
 	if err := obs.Start(); err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
 
 	now := time.UnixMilli(1_700_000_000_123)
-	events := []observer.Event{
-		observer.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now},
-		observer.SeedRipenEvent{Plot: "a", Seed: 1, Fruit: 2, SeedID: 1, FruitID: 2, Time: now},
-		observer.SeedInputEvent{Plot: "b", From: "a", Seed: 2, SeedID: 3, Parents: []int{2}, Time: now},
-		observer.SeedWitherEvent{Plot: "b", Seed: 2, Err: errors.New("boom"), SeedID: 3, WeedID: 4, Time: now},
-		observer.SeedPruneEvent{Plot: "b", Seed: 9, SeedID: 5, PruneID: 6, Time: now},
-		observer.PlotStartEvent{Plot: "b", StartTime: now},
-		observer.SealMergeEvent{Plot: "b", ParentIDs: []int{7}, SealID: 8, Time: now},
+	events := []scarecrow.Event{
+		scarecrow.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now},
+		scarecrow.SeedRipenEvent{Plot: "a", Seed: 1, Fruit: 2, SeedID: 1, FruitID: 2, Time: now},
+		scarecrow.SeedInputEvent{Plot: "b", From: "a", Seed: 2, SeedID: 3, Parents: []int{2}, Time: now},
+		scarecrow.SeedWitherEvent{Plot: "b", Seed: 2, Err: errors.New("boom"), SeedID: 3, WeedID: 4, Time: now},
+		scarecrow.SeedPruneEvent{Plot: "b", Seed: 9, SeedID: 5, PruneID: 6, Time: now},
+		scarecrow.PlotStartEvent{Plot: "b", StartTime: now},
+		scarecrow.SealMergeEvent{Plot: "b", ParentIDs: []int{7}, SealID: 8, Time: now},
 	}
 	for _, event := range events {
 		if err := obs.OnEvent(event); err != nil {

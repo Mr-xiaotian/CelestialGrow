@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mr-xiaotian/CelestialGrow/pkg/observer"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // captureLogHandler 记录所有收到的日志记录，供观察者翻译测试使用。
@@ -33,25 +33,25 @@ func (h *captureLogHandler) snapshot() []LogRecord {
 	return append([]LogRecord{}, h.records...)
 }
 
-func TestLogObserverTranslatesEvents(t *testing.T) {
+func TestLogWatcherTranslatesEvents(t *testing.T) {
 	handler := &captureLogHandler{}
-	metrics := observer.NewMetricsObserver()
-	obs := newLogObserver(handler, metrics, "DEBUG")
+	metrics := scarecrow.NewMetricsWatcher()
+	obs := newLogWatcher(handler, metrics, "DEBUG")
 	if err := obs.Start(); err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
 
 	now := time.Now()
-	events := []observer.Event{
-		observer.FarmStartEvent{Farm: "farm", Structure: []string{"a -> b"}, StartTime: now},
-		observer.PlotStartEvent{Plot: "a", Tenders: 2, StartTime: now},
-		observer.SeedInputEvent{Plot: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
-		observer.SeedReplantEvent{Plot: "a", Seed: 1, SeedRepr: "1", Err: errors.New("transient"), Attempt: 1, SeedID: 1, Time: now},
-		observer.SeedRipenEvent{Plot: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 2, Elapsed: time.Second, Time: now},
-		observer.SeedWitherEvent{Plot: "a", Seed: 2, SeedRepr: "2", Err: errors.New("boom"), SeedID: 3, WeedID: 4, Elapsed: time.Second, Time: now},
-		observer.SeedPruneEvent{Plot: "a", Seed: 3, SeedRepr: "3", SeedID: 5, PruneID: 6, Time: now},
-		observer.PlotEndEvent{Plot: "a", EndTime: now, Elapsed: 2 * time.Second},
-		observer.FarmEndEvent{Farm: "farm", EndTime: now, Elapsed: 3 * time.Second},
+	events := []scarecrow.Event{
+		scarecrow.FarmStartEvent{Farm: "farm", Structure: []string{"a -> b"}, StartTime: now},
+		scarecrow.PlotStartEvent{Plot: "a", Tenders: 2, StartTime: now},
+		scarecrow.SeedInputEvent{Plot: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
+		scarecrow.SeedReplantEvent{Plot: "a", Seed: 1, SeedRepr: "1", Err: errors.New("transient"), Attempt: 1, SeedID: 1, Time: now},
+		scarecrow.SeedRipenEvent{Plot: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 2, Elapsed: time.Second, Time: now},
+		scarecrow.SeedWitherEvent{Plot: "a", Seed: 2, SeedRepr: "2", Err: errors.New("boom"), SeedID: 3, WeedID: 4, Elapsed: time.Second, Time: now},
+		scarecrow.SeedPruneEvent{Plot: "a", Seed: 3, SeedRepr: "3", SeedID: 5, PruneID: 6, Time: now},
+		scarecrow.PlotEndEvent{Plot: "a", EndTime: now, Elapsed: 2 * time.Second},
+		scarecrow.FarmEndEvent{Farm: "farm", EndTime: now, Elapsed: 3 * time.Second},
 	}
 	for _, event := range events {
 		if err := metrics.OnEvent(event); err != nil {
@@ -95,18 +95,18 @@ func TestLogObserverTranslatesEvents(t *testing.T) {
 	}
 }
 
-func TestLogObserverFiltersLevels(t *testing.T) {
+func TestLogWatcherFiltersLevels(t *testing.T) {
 	handler := &captureLogHandler{}
-	obs := newLogObserver(handler, observer.NewMetricsObserver(), "ERROR")
+	obs := newLogWatcher(handler, scarecrow.NewMetricsWatcher(), "ERROR")
 	if err := obs.Start(); err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
 
 	now := time.Now()
-	if err := obs.OnEvent(observer.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now}); err != nil {
+	if err := obs.OnEvent(scarecrow.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now}); err != nil {
 		t.Fatalf("OnEvent(input) = %v", err)
 	}
-	if err := obs.OnEvent(observer.SeedWitherEvent{Plot: "a", Seed: 1, SeedID: 1, WeedID: 2, Time: now}); err != nil {
+	if err := obs.OnEvent(scarecrow.SeedWitherEvent{Plot: "a", Seed: 1, SeedID: 1, WeedID: 2, Time: now}); err != nil {
 		t.Fatalf("OnEvent(fail) = %v", err)
 	}
 

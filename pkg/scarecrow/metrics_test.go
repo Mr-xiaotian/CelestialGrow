@@ -1,12 +1,12 @@
-package observer
+package scarecrow
 
 import (
 	"testing"
 	"time"
 )
 
-func TestMetricsObserverCountsInputs(t *testing.T) {
-	metrics := NewMetricsObserver()
+func TestMetricsWatcherCountsInputs(t *testing.T) {
+	metrics := NewMetricsWatcher()
 	now := time.Now()
 
 	if err := metrics.OnEvent(SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now}); err != nil {
@@ -39,8 +39,8 @@ func TestMetricsObserverCountsInputs(t *testing.T) {
 	}
 }
 
-func TestMetricsObserverCountsResults(t *testing.T) {
-	metrics := NewMetricsObserver()
+func TestMetricsWatcherCountsResults(t *testing.T) {
+	metrics := NewMetricsWatcher()
 	now := time.Now()
 
 	for id := 1; id <= 4; id++ {
@@ -67,8 +67,8 @@ func TestMetricsObserverCountsResults(t *testing.T) {
 	}
 }
 
-func TestMetricsObserverTracksStatus(t *testing.T) {
-	metrics := NewMetricsObserver()
+func TestMetricsWatcherTracksStatus(t *testing.T) {
+	metrics := NewMetricsWatcher()
 	start := time.Now()
 	end := start.Add(time.Second)
 
@@ -98,8 +98,8 @@ func TestMetricsObserverTracksStatus(t *testing.T) {
 	}
 }
 
-func TestMetricsObserverFarmView(t *testing.T) {
-	metrics := NewMetricsObserver()
+func TestMetricsWatcherFarmView(t *testing.T) {
+	metrics := NewMetricsWatcher()
 	now := time.Now()
 	_ = metrics.OnEvent(PlotStartEvent{Plot: "a", StartTime: now})
 	_ = metrics.OnEvent(PlotStartEvent{Plot: "b", StartTime: now})
@@ -116,8 +116,8 @@ func TestMetricsObserverFarmView(t *testing.T) {
 	}
 }
 
-func TestMetricsObserverZeroValue(t *testing.T) {
-	var metrics MetricsObserver
+func TestMetricsWatcherZeroValue(t *testing.T) {
+	var metrics MetricsWatcher
 	if err := metrics.OnEvent(SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1}); err != nil {
 		t.Fatalf("OnEvent() = %v", err)
 	}

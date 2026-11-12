@@ -1,10 +1,10 @@
-package observer
+package scarecrow
 
 import "time"
 
 // ==== Interface ====
 
-// Event 是 Observer 收到的事件。
+// Event 是 Watcher 收到的事件。
 //
 // 事件集合由本包封闭定义，包外无法新增事件类型，因此 Hub 的 type switch
 // 可以覆盖全部事件。事件以值传递，其内部的切片与映射由发送方持有，

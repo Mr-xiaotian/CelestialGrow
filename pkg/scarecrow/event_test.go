@@ -1,4 +1,4 @@
-package observer
+package scarecrow
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 
 // ==== Probe ====
 
-// nodeProbe 按 MetricsObserver 所需口径记录单个节点的事件状态。
+// nodeProbe 按 MetricsWatcher 所需口径记录单个节点的事件状态。
 type nodeProbe struct {
 	started bool
 	ended   bool
@@ -98,10 +98,10 @@ func TestSyntheticLifecycleFeedsMetrics(t *testing.T) {
 	now := time.Now()
 	probe := newMetricsProbe()
 	hub := NewHub(WithErrorHandler(func(err error) {
-		t.Errorf("unexpected observer error: %v", err)
+		t.Errorf("unexpected watcher error: %v", err)
 	}))
-	if err := hub.AddObserver(probe); err != nil {
-		t.Fatalf("AddObserver() = %v", err)
+	if err := hub.AddWatcher(probe); err != nil {
+		t.Fatalf("AddWatcher() = %v", err)
 	}
 
 	events := []Event{
@@ -182,11 +182,11 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 
 	var got []Event
 	hub := NewHub()
-	if err := hub.AddObserver(ObserverFunc(func(event Event) error {
+	if err := hub.AddWatcher(WatcherFunc(func(event Event) error {
 		got = append(got, event)
 		return nil
 	})); err != nil {
-		t.Fatalf("AddObserver() = %v", err)
+		t.Fatalf("AddWatcher() = %v", err)
 	}
 
 	events := []Event{

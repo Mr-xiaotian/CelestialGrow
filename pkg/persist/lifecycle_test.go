@@ -42,13 +42,13 @@ func TestLifecycleObserverTranslatesEvents(t *testing.T) {
 
 	now := time.UnixMilli(1_700_000_000_123)
 	events := []observer.Event{
-		observer.TaskInputEvent{Node: "a", Seed: 1, SeedID: 1, Time: now},
-		observer.TaskSuccessEvent{Node: "a", Seed: 1, Fruit: 2, SeedID: 1, FruitID: 2, Time: now},
-		observer.TaskInputEvent{Node: "b", From: "a", Seed: 2, SeedID: 3, Parents: []int{2}, Time: now},
-		observer.TaskFailEvent{Node: "b", Seed: 2, Err: errors.New("boom"), SeedID: 3, WeedID: 4, Time: now},
-		observer.TaskSkipEvent{Node: "b", Seed: 9, SeedID: 5, PruneID: 6, Time: now},
-		observer.NodeStartEvent{Node: "b", StartTime: now},
-		observer.TerminationMergeEvent{Node: "b", ParentIDs: []int{7}, SealID: 8, Time: now},
+		observer.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now},
+		observer.SeedRipenEvent{Plot: "a", Seed: 1, Fruit: 2, SeedID: 1, FruitID: 2, Time: now},
+		observer.SeedInputEvent{Plot: "b", From: "a", Seed: 2, SeedID: 3, Parents: []int{2}, Time: now},
+		observer.SeedWitherEvent{Plot: "b", Seed: 2, Err: errors.New("boom"), SeedID: 3, WeedID: 4, Time: now},
+		observer.SeedPruneEvent{Plot: "b", Seed: 9, SeedID: 5, PruneID: 6, Time: now},
+		observer.PlotStartEvent{Plot: "b", StartTime: now},
+		observer.SealMergeEvent{Plot: "b", ParentIDs: []int{7}, SealID: 8, Time: now},
 	}
 	for _, event := range events {
 		if err := obs.OnEvent(event); err != nil {

@@ -31,7 +31,7 @@ func TestHubFansOutInRegistrationOrder(t *testing.T) {
 		}
 	}
 
-	if err := hub.OnEvent(NodeStartEvent{Node: "only"}); err != nil {
+	if err := hub.OnEvent(PlotStartEvent{Plot: "only"}); err != nil {
 		t.Fatalf("OnEvent() = %v, want nil", err)
 	}
 
@@ -56,7 +56,7 @@ func TestHubAllowsDuplicateRegistration(t *testing.T) {
 		t.Fatalf("AddObserver() = %v", err)
 	}
 
-	_ = hub.OnEvent(NodeStartEvent{})
+	_ = hub.OnEvent(PlotStartEvent{})
 
 	if calls != 2 {
 		t.Fatalf("calls = %d, want 2", calls)
@@ -64,7 +64,7 @@ func TestHubAllowsDuplicateRegistration(t *testing.T) {
 }
 
 func TestHubWithoutObservers(t *testing.T) {
-	if err := NewHub().OnEvent(NodeStartEvent{}); err != nil {
+	if err := NewHub().OnEvent(PlotStartEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v, want nil", err)
 	}
 }
@@ -109,7 +109,7 @@ func TestHubNestsChildHub(t *testing.T) {
 	if err := parent.AddObserver(child); err != nil {
 		t.Fatalf("AddObserver(child) = %v", err)
 	}
-	if err := parent.OnEvent(NodeStartEvent{}); err != nil {
+	if err := parent.OnEvent(PlotStartEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestHubIsolatesObserverError(t *testing.T) {
 		t.Fatalf("AddObserver() = %v", err)
 	}
 
-	if err := hub.OnEvent(TaskSuccessEvent{}); err != nil {
+	if err := hub.OnEvent(SeedRipenEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v, want nil", err)
 	}
 	if calls != 1 {
@@ -190,7 +190,7 @@ func TestHubRecoversObserverPanic(t *testing.T) {
 		t.Fatalf("AddObserver() = %v", err)
 	}
 
-	if err := hub.OnEvent(NodeEndEvent{}); err != nil {
+	if err := hub.OnEvent(PlotEndEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v, want nil", err)
 	}
 	if calls != 1 {
@@ -222,7 +222,7 @@ func TestHubSurvivesErrorHandlerPanic(t *testing.T) {
 		t.Fatalf("AddObserver() = %v", err)
 	}
 
-	if err := hub.OnEvent(NodeStartEvent{}); err != nil {
+	if err := hub.OnEvent(PlotStartEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v, want nil", err)
 	}
 	if calls != 1 {
@@ -249,7 +249,7 @@ func TestZeroValueHubIsUsable(t *testing.T) {
 		t.Fatalf("AddObserver() = %v", err)
 	}
 
-	if err := hub.OnEvent(NodeStartEvent{}); err != nil {
+	if err := hub.OnEvent(PlotStartEvent{}); err != nil {
 		t.Fatalf("OnEvent() = %v", err)
 	}
 	if calls != 1 {
@@ -362,7 +362,7 @@ func TestHubConcurrentAddAndEmit(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := hub.OnEvent(NodeStartEvent{Node: "only"}); err != nil {
+			if err := hub.OnEvent(PlotStartEvent{Plot: "only"}); err != nil {
 				t.Errorf("OnEvent() = %v", err)
 			}
 		}()
@@ -377,7 +377,7 @@ func TestHubConcurrentAddAndEmit(t *testing.T) {
 	}
 
 	calls.Store(0)
-	if err := hub.OnEvent(NodeStartEvent{Node: "only"}); err != nil {
+	if err := hub.OnEvent(PlotStartEvent{Plot: "only"}); err != nil {
 		t.Fatalf("OnEvent() = %v", err)
 	}
 	if got := calls.Load(); got != observerCount {

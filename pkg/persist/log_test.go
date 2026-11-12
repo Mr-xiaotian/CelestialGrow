@@ -43,15 +43,15 @@ func TestLogObserverTranslatesEvents(t *testing.T) {
 
 	now := time.Now()
 	events := []observer.Event{
-		observer.GraphStartEvent{Farm: "farm", Structure: []string{"a -> b"}, StartTime: now},
-		observer.NodeStartEvent{Node: "a", Tenders: 2, StartTime: now},
-		observer.TaskInputEvent{Node: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
-		observer.TaskRetryEvent{Node: "a", Seed: 1, SeedRepr: "1", Err: errors.New("transient"), Attempt: 1, SeedID: 1, Time: now},
-		observer.TaskSuccessEvent{Node: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 2, Elapsed: time.Second, Time: now},
-		observer.TaskFailEvent{Node: "a", Seed: 2, SeedRepr: "2", Err: errors.New("boom"), SeedID: 3, WeedID: 4, Elapsed: time.Second, Time: now},
-		observer.TaskSkipEvent{Node: "a", Seed: 3, SeedRepr: "3", SeedID: 5, PruneID: 6, Time: now},
-		observer.NodeEndEvent{Node: "a", EndTime: now, Elapsed: 2 * time.Second},
-		observer.GraphEndEvent{Farm: "farm", EndTime: now, Elapsed: 3 * time.Second},
+		observer.FarmStartEvent{Farm: "farm", Structure: []string{"a -> b"}, StartTime: now},
+		observer.PlotStartEvent{Plot: "a", Tenders: 2, StartTime: now},
+		observer.SeedInputEvent{Plot: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
+		observer.SeedReplantEvent{Plot: "a", Seed: 1, SeedRepr: "1", Err: errors.New("transient"), Attempt: 1, SeedID: 1, Time: now},
+		observer.SeedRipenEvent{Plot: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 2, Elapsed: time.Second, Time: now},
+		observer.SeedWitherEvent{Plot: "a", Seed: 2, SeedRepr: "2", Err: errors.New("boom"), SeedID: 3, WeedID: 4, Elapsed: time.Second, Time: now},
+		observer.SeedPruneEvent{Plot: "a", Seed: 3, SeedRepr: "3", SeedID: 5, PruneID: 6, Time: now},
+		observer.PlotEndEvent{Plot: "a", EndTime: now, Elapsed: 2 * time.Second},
+		observer.FarmEndEvent{Farm: "farm", EndTime: now, Elapsed: 3 * time.Second},
 	}
 	for _, event := range events {
 		if err := metrics.OnEvent(event); err != nil {
@@ -71,7 +71,7 @@ func TestLogObserverTranslatesEvents(t *testing.T) {
 		level   string
 		contain string
 	}{
-		{"INFO", "Farm 'farm' start. Graph structure:"},
+		{"INFO", "Farm 'farm' start. Structure:"},
 		{"INFO", "a -> b"},
 		{"INFO", "Plot 'a' start with 2 tenders."},
 		{"DEBUG", "In 'a', Seed 1 input. [1*]"},
@@ -103,10 +103,10 @@ func TestLogObserverFiltersLevels(t *testing.T) {
 	}
 
 	now := time.Now()
-	if err := obs.OnEvent(observer.TaskInputEvent{Node: "a", Seed: 1, SeedID: 1, Time: now}); err != nil {
+	if err := obs.OnEvent(observer.SeedInputEvent{Plot: "a", Seed: 1, SeedID: 1, Time: now}); err != nil {
 		t.Fatalf("OnEvent(input) = %v", err)
 	}
-	if err := obs.OnEvent(observer.TaskFailEvent{Node: "a", Seed: 1, SeedID: 1, WeedID: 2, Time: now}); err != nil {
+	if err := obs.OnEvent(observer.SeedWitherEvent{Plot: "a", Seed: 1, SeedID: 1, WeedID: 2, Time: now}); err != nil {
 		t.Fatalf("OnEvent(fail) = %v", err)
 	}
 

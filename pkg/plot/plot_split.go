@@ -36,7 +36,7 @@ func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts
 
 // ==== Result Handling ====
 
-// ripenSeed 处理拆分成功的种子：发出任务成功事件，并逐项向下游投递产出。
+// ripenSeed 处理拆分成功的种子：发出种子成熟事件，并逐项向下游投递产出。
 func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, startTime time.Time) {
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
@@ -44,8 +44,8 @@ func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, 
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	fruitRepr := trunc(fmt.Sprintf("%+v", fruits), 25)
-	p.emit(observer.TaskSuccessEvent{
-		Node:      p.name,
+	p.emit(observer.SeedRipenEvent{
+		Plot:      p.name,
 		Seed:      seed,
 		SeedRepr:  seedRepr,
 		Fruit:     fruits,
@@ -61,8 +61,8 @@ func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, 
 			downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 			yieldRepr := trunc(fmt.Sprintf("%+v", fruit), 50)
 
-			p.emit(observer.TaskInputEvent{
-				Node:     nextPlot,
+			p.emit(observer.SeedInputEvent{
+				Plot:     nextPlot,
 				From:     p.name,
 				Seed:     fruit,
 				SeedRepr: yieldRepr,

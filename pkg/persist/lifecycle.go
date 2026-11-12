@@ -161,54 +161,54 @@ func (l *LifecycleObserver) DBPath() string {
 // OnEvent 将事件翻译为生命周期记录并投递到消费队列。
 func (l *LifecycleObserver) OnEvent(event observer.Event) error {
 	switch ev := event.(type) {
-	case observer.TaskInputEvent:
+	case observer.SeedInputEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleSeed,
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.SeedID,
 			ParentIDs:      ev.Parents,
-			PlotName:       ev.Node,
+			PlotName:       ev.Plot,
 			SeedJSON:       toLifecycleJSON(ev.Seed),
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.TaskSuccessEvent:
+	case observer.SeedRipenEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleRipen,
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.FruitID,
 			ParentIDs:      []int{ev.SeedID},
-			PlotName:       ev.Node,
+			PlotName:       ev.Plot,
 			FruitJSON:      toLifecycleJSON(ev.Fruit),
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.TaskFailEvent:
+	case observer.SeedWitherEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecycleWither,
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.WeedID,
 			ParentIDs:      []int{ev.SeedID},
-			PlotName:       ev.Node,
+			PlotName:       ev.Plot,
 			WitherType:     fmt.Sprintf("%T", ev.Err),
 			WitherMessage:  fmt.Sprintf("%v", ev.Err),
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.TaskSkipEvent:
+	case observer.SeedPruneEvent:
 		return l.inlet.Send(LifecycleRecord{
 			Kind:           lifecyclePrune,
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.PruneID,
 			ParentIDs:      []int{ev.SeedID},
-			PlotName:       ev.Node,
+			PlotName:       ev.Plot,
 			TS:             unixSeconds(ev.Time),
 		})
 
-	case observer.GraphStartEvent, observer.GraphEndEvent,
-		observer.NodeStartEvent, observer.NodeEndEvent,
-		observer.TaskRetryEvent,
-		observer.TerminationInputEvent, observer.TerminationMergeEvent:
+	case observer.FarmStartEvent, observer.FarmEndEvent,
+		observer.PlotStartEvent, observer.PlotEndEvent,
+		observer.SeedReplantEvent,
+		observer.SealInputEvent, observer.SealMergeEvent:
 		return nil
 	}
 

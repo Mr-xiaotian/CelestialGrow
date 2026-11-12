@@ -120,7 +120,7 @@ func (p *basePlot[S, F, Y]) ConnectTo(next PlotNode) error {
 	return nil
 }
 
-// AddUpstream 登记一个上游节点，用于 seal 聚合。
+// AddUpstream 登记一个上游 Plot，用于 seal 聚合。
 // 由上游在 ConnectTo 中调用，连接建立后不再变更。
 func (p *basePlot[S, F, Y]) AddUpstream(name string) {
 	p.upstreams[name] = struct{}{}
@@ -145,18 +145,18 @@ func (p *basePlot[S, F, Y]) GetSeedChanAny() any {
 
 // ==== Metrics ====
 
-// nodeMetrics 返回当前 plot 的指标快照；未装配指标观察者时 ok 为 false。
-func (p *basePlot[S, F, Y]) nodeMetrics() (observer.NodeMetrics, bool) {
+// currentMetrics 返回当前 plot 的指标快照；未装配指标观察者时 ok 为 false。
+func (p *basePlot[S, F, Y]) currentMetrics() (observer.PlotMetrics, bool) {
 	metrics, ok := observer.Find[*observer.MetricsObserver](p.hub)
 	if !ok {
-		return observer.NodeMetrics{}, false
+		return observer.PlotMetrics{}, false
 	}
-	return metrics.GetNode(p.name)
+	return metrics.GetPlot(p.name)
 }
 
 // GetSeedNum 返回当前 plot 的输入总数，包括本地播种与上游投递。
 func (p *basePlot[S, F, Y]) GetSeedNum() int {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return 0
 	}
@@ -165,7 +165,7 @@ func (p *basePlot[S, F, Y]) GetSeedNum() int {
 
 // GetFruitNum 返回成功数（果实）。
 func (p *basePlot[S, F, Y]) GetFruitNum() int {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return 0
 	}
@@ -174,7 +174,7 @@ func (p *basePlot[S, F, Y]) GetFruitNum() int {
 
 // GetWeedNum 返回失败数（杂草）。
 func (p *basePlot[S, F, Y]) GetWeedNum() int {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return 0
 	}
@@ -183,7 +183,7 @@ func (p *basePlot[S, F, Y]) GetWeedNum() int {
 
 // GetPruneNum 返回剪枝数（跳过）。
 func (p *basePlot[S, F, Y]) GetPruneNum() int {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return 0
 	}
@@ -192,17 +192,17 @@ func (p *basePlot[S, F, Y]) GetPruneNum() int {
 
 // GetCompleted 返回已完成数（果实 + 杂草 + 剪枝）。
 func (p *basePlot[S, F, Y]) GetCompleted() int {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return 0
 	}
 	return metrics.Processed
 }
 
-// IsFinish 判断所有已输入任务是否都已得出结果。
+// IsFinish 判断所有已输入种子是否都已得出结果。
 // 未装配指标观察者时返回 false。
 func (p *basePlot[S, F, Y]) IsFinish() bool {
-	metrics, ok := p.nodeMetrics()
+	metrics, ok := p.currentMetrics()
 	if !ok {
 		return false
 	}
@@ -211,29 +211,29 @@ func (p *basePlot[S, F, Y]) IsFinish() bool {
 
 // ==== Observer Hooks ====
 
-// notifyStart 将状态设为 running 并发出节点启动事件。
+// notifyStart 将状态设为 running 并发出 Plot 启动事件。
 func (p *basePlot[S, F, Y]) notifyStart(startTime time.Time) {
 	p.state.Store(1)
-	p.emit(observer.NodeStartEvent{Node: p.name, Tenders: p.numTenders, StartTime: startTime})
+	p.emit(observer.PlotStartEvent{Plot: p.name, Tenders: p.numTenders, StartTime: startTime})
 }
 
-// notifyFinish 将状态设为 done 并发出节点结束事件。
+// notifyFinish 将状态设为 done 并发出 Plot 结束事件。
 func (p *basePlot[S, F, Y]) notifyFinish(startTime time.Time) {
 	p.state.Store(2)
-	p.emit(observer.NodeEndEvent{Node: p.name, EndTime: time.Now(), Elapsed: time.Since(startTime)})
+	p.emit(observer.PlotEndEvent{Plot: p.name, EndTime: time.Now(), Elapsed: time.Since(startTime)})
 }
 
 // ==== Result Handling ====
 
-// witherSeed 处理培育失败的种子：发出任务失败事件。
+// witherSeed 处理培育失败的种子：发出种子枯萎事件。
 func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error, startTime time.Time) {
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	weedID := p.eventClient.Emit("weed", []int{seedID})
 
-	p.emit(observer.TaskFailEvent{
-		Node:     p.name,
+	p.emit(observer.SeedWitherEvent{
+		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
 		Err:      err,
@@ -244,15 +244,15 @@ func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error
 	})
 }
 
-// pruneSeed 处理剪枝种子：发出任务跳过事件。
+// pruneSeed 处理剪枝种子：发出种子剪枝事件。
 func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime time.Time) {
 	seed := seedPayload.Value
 	seedID := seedPayload.EventID
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	pruneID := p.eventClient.Emit("prune", []int{seedID})
 
-	p.emit(observer.TaskSkipEvent{
-		Node:     p.name,
+	p.emit(observer.SeedPruneEvent{
+		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
 		Elapsed:  time.Since(startTime),
@@ -287,8 +287,8 @@ func (p *basePlot[S, F, Y]) sprout() {
 				parentIDs = append(parentIDs, sealID)
 			}
 			sealID := p.eventClient.Emit("seal", parentIDs)
-			p.emit(observer.TerminationMergeEvent{
-				Node:      p.name,
+			p.emit(observer.SealMergeEvent{
+				Plot:      p.name,
 				ParentIDs: parentIDs,
 				SealID:    sealID,
 				Time:      time.Now(),
@@ -369,8 +369,8 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 			break
 		}
 		if attempt <= p.maxRetries {
-			p.emit(observer.TaskRetryEvent{
-				Node:     p.name,
+			p.emit(observer.SeedReplantEvent{
+				Plot:     p.name,
 				Seed:     seed,
 				SeedRepr: seedRepr,
 				Err:      err,
@@ -392,7 +392,7 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 // ==== Input & Async Execution ====
 
 // SeedAny 以 any 类型播入单颗种子，内部做类型断言。
-// 供 Farm 统一注入初始任务时使用。
+// 供 Farm 统一注入初始种子时使用。
 func (p *basePlot[S, F, Y]) SeedAny(seed any) error {
 	typedSeed, ok := seed.(S)
 	if !ok {
@@ -408,8 +408,8 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 
-	p.emit(observer.TaskInputEvent{
-		Node:     p.name,
+	p.emit(observer.SeedInputEvent{
+		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
 		SeedID:   seedID,
@@ -423,7 +423,7 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 // plot，这同样会触发强终止，而不是继续等待剩余上游 seal。
 func (p *basePlot[S, F, Y]) Seal() {
 	sealID := p.eventClient.Emit("seal", []int{})
-	p.emit(observer.TerminationInputEvent{Node: p.name, SealID: sealID, Time: time.Now()})
+	p.emit(observer.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
 	p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
 }
 
@@ -453,7 +453,7 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
 // 运行期资源由 assembly 统一装配，在所有输入完成后阻塞等待退出。
 func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
-	resources, err := assembly.StartNodeResources(p.hub, logLevel)
+	resources, err := assembly.StartPlotResources(p.hub, logLevel)
 	if err != nil {
 		return
 	}
@@ -467,7 +467,7 @@ func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
 	p.WaitAsync()
 }
 
-// Harvest 读取当前 plot 已持久化的全部任务状态快照。
+// Harvest 读取当前 plot 已持久化的全部种子状态快照。
 // 生命周期观察者在调用时从 hub（含嵌套 hub）中查找，因此运行结束后可直接查询，
 // 不需要在 plot 上保存数据库路径。
 func (p *basePlot[S, F, Y]) Harvest() ([]persist.LifecycleStatusRecord, error) {

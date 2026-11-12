@@ -12,12 +12,12 @@ import (
 // startFunc 描述一个运行期资源装配入口。
 type startFunc func(hub *observer.Hub, logLevel string) (*assembly.Resources, error)
 
-// starters 覆盖节点级与图级两个入口，确保两者行为一致。
+// starters 覆盖 Plot 级与 Farm 级两个入口，确保两者行为一致。
 var starters = []struct {
 	name  string
 	start startFunc
 }{
-	{"StartNodeResources", assembly.StartNodeResources},
+	{"StartPlotResources", assembly.StartPlotResources},
 	{"StartFarmResources", assembly.StartFarmResources},
 }
 
@@ -34,8 +34,8 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 			}
 
 			now := time.Now()
-			if err := hub.OnEvent(observer.TaskInputEvent{
-				Node:     "node",
+			if err := hub.OnEvent(observer.SeedInputEvent{
+				Plot:     "node",
 				Seed:     42,
 				SeedRepr: "42",
 				SeedID:   1,

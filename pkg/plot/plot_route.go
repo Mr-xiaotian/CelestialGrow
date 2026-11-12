@@ -37,7 +37,7 @@ func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, e
 
 // ==== Result Handling ====
 
-// ripenSeed 处理路由成功的种子：发出任务成功事件，
+// ripenSeed 处理路由成功的种子：发出种子成熟事件，
 // 并按路由表将 yield 定向发送给对应下游。
 // 路由表中未连接的下游会被跳过，不影响其余路由项。
 func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[string]Y, startTime time.Time) {
@@ -47,8 +47,8 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	routesRepr := trunc(fmt.Sprintf("%+v", routes), 25)
-	p.emit(observer.TaskSuccessEvent{
-		Node:      p.name,
+	p.emit(observer.SeedRipenEvent{
+		Plot:      p.name,
 		Seed:      seed,
 		SeedRepr:  seedRepr,
 		Fruit:     routes,
@@ -68,8 +68,8 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		yieldRepr := trunc(fmt.Sprintf("%+v", yield), 50)
 
-		p.emit(observer.TaskInputEvent{
-			Node:     nextPlot,
+		p.emit(observer.SeedInputEvent{
+			Plot:     nextPlot,
 			From:     p.name,
 			Seed:     yield,
 			SeedRepr: yieldRepr,

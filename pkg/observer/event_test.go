@@ -49,35 +49,35 @@ func (m *metricsProbe) node(name string) *nodeProbe {
 
 func (m *metricsProbe) OnEvent(event Event) error {
 	switch ev := event.(type) {
-	case GraphStartEvent:
+	case FarmStartEvent:
 		m.graphStarted = true
-	case GraphEndEvent:
+	case FarmEndEvent:
 		m.graphEnded = true
-	case NodeStartEvent:
-		probe := m.node(ev.Node)
+	case PlotStartEvent:
+		probe := m.node(ev.Plot)
 		probe.started = true
 		probe.start = ev.StartTime
-	case NodeEndEvent:
-		probe := m.node(ev.Node)
+	case PlotEndEvent:
+		probe := m.node(ev.Plot)
 		probe.ended = true
 		probe.end = ev.EndTime
-	case TaskInputEvent:
-		probe := m.node(ev.Node)
+	case SeedInputEvent:
+		probe := m.node(ev.Plot)
 		if ev.From == "" {
 			probe.external++
 			break
 		}
 		probe.upstream[ev.From]++
-		m.node(ev.From).downstream[ev.Node]++
-	case TaskSuccessEvent:
-		m.node(ev.Node).succeeded++
-	case TaskFailEvent:
-		m.node(ev.Node).failed++
-	case TaskSkipEvent:
-		m.node(ev.Node).skipped++
-	case TaskRetryEvent:
+		m.node(ev.From).downstream[ev.Plot]++
+	case SeedRipenEvent:
+		m.node(ev.Plot).succeeded++
+	case SeedWitherEvent:
+		m.node(ev.Plot).failed++
+	case SeedPruneEvent:
+		m.node(ev.Plot).skipped++
+	case SeedReplantEvent:
 		// 重试不改变完成数，指标侧只统计最终结果。
-	case TerminationInputEvent, TerminationMergeEvent:
+	case SealInputEvent, SealMergeEvent:
 		// 终止信号不影响节点指标。
 	}
 	return nil
@@ -105,31 +105,31 @@ func TestSyntheticLifecycleFeedsMetrics(t *testing.T) {
 	}
 
 	events := []Event{
-		GraphStartEvent{
-			Farm:      "farm",
-			IsDAG:     true,
-			Nodes:     []string{"a", "b"},
-			Edges:     map[string][]string{"a": {"b"}},
-			Sources:   []string{"a"},
-			Structure: []string{"a -> b"},
-			StartTime: now,
+		FarmStartEvent{
+			Farm:        "farm",
+			IsDAG:       true,
+			Plots:       []string{"a", "b"},
+			Edges:       map[string][]string{"a": {"b"}},
+			SourcePlots: []string{"a"},
+			Structure:   []string{"a -> b"},
+			StartTime:   now,
 		},
-		NodeStartEvent{Node: "a", Tenders: 2, StartTime: now},
-		NodeStartEvent{Node: "b", Tenders: 1, StartTime: now},
-		TaskInputEvent{Node: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
-		TaskInputEvent{Node: "a", Seed: 2, SeedRepr: "2", SeedID: 2, Time: now},
-		TaskRetryEvent{Node: "a", Seed: 1, SeedRepr: "1", Err: errors.New("retry"), Attempt: 1, SeedID: 1, Time: now},
-		TaskSuccessEvent{Node: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 3, Time: now},
-		TaskSkipEvent{Node: "a", Seed: 2, SeedRepr: "2", SeedID: 2, PruneID: 4, Time: now},
-		TaskInputEvent{Node: "b", From: "a", Seed: 10, SeedRepr: "10", SeedID: 5, Parents: []int{3}, Time: now},
-		TaskSuccessEvent{Node: "b", Seed: 10, SeedRepr: "10", Fruit: 20, FruitRepr: "20", SeedID: 5, FruitID: 6, Time: now},
-		TaskInputEvent{Node: "b", Seed: 11, SeedRepr: "11", SeedID: 7, Time: now},
-		TaskFailEvent{Node: "b", Seed: 11, SeedRepr: "11", Err: errors.New("boom"), SeedID: 7, WeedID: 8, Time: now},
-		TerminationInputEvent{Node: "a", SealID: 9, Time: now},
-		TerminationMergeEvent{Node: "b", ParentIDs: []int{9}, SealID: 10, Time: now},
-		NodeEndEvent{Node: "a", EndTime: now, Elapsed: time.Second},
-		NodeEndEvent{Node: "b", EndTime: now, Elapsed: time.Second},
-		GraphEndEvent{Farm: "farm", EndTime: now, Elapsed: time.Second},
+		PlotStartEvent{Plot: "a", Tenders: 2, StartTime: now},
+		PlotStartEvent{Plot: "b", Tenders: 1, StartTime: now},
+		SeedInputEvent{Plot: "a", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
+		SeedInputEvent{Plot: "a", Seed: 2, SeedRepr: "2", SeedID: 2, Time: now},
+		SeedReplantEvent{Plot: "a", Seed: 1, SeedRepr: "1", Err: errors.New("retry"), Attempt: 1, SeedID: 1, Time: now},
+		SeedRipenEvent{Plot: "a", Seed: 1, SeedRepr: "1", Fruit: 10, FruitRepr: "10", SeedID: 1, FruitID: 3, Time: now},
+		SeedPruneEvent{Plot: "a", Seed: 2, SeedRepr: "2", SeedID: 2, PruneID: 4, Time: now},
+		SeedInputEvent{Plot: "b", From: "a", Seed: 10, SeedRepr: "10", SeedID: 5, Parents: []int{3}, Time: now},
+		SeedRipenEvent{Plot: "b", Seed: 10, SeedRepr: "10", Fruit: 20, FruitRepr: "20", SeedID: 5, FruitID: 6, Time: now},
+		SeedInputEvent{Plot: "b", Seed: 11, SeedRepr: "11", SeedID: 7, Time: now},
+		SeedWitherEvent{Plot: "b", Seed: 11, SeedRepr: "11", Err: errors.New("boom"), SeedID: 7, WeedID: 8, Time: now},
+		SealInputEvent{Plot: "a", SealID: 9, Time: now},
+		SealMergeEvent{Plot: "b", ParentIDs: []int{9}, SealID: 10, Time: now},
+		PlotEndEvent{Plot: "a", EndTime: now, Elapsed: time.Second},
+		PlotEndEvent{Plot: "b", EndTime: now, Elapsed: time.Second},
+		FarmEndEvent{Farm: "farm", EndTime: now, Elapsed: time.Second},
 	}
 	for _, event := range events {
 		if err := hub.OnEvent(event); err != nil {
@@ -190,8 +190,8 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 	}
 
 	events := []Event{
-		TaskSuccessEvent{
-			Node:     "a",
+		SeedRipenEvent{
+			Plot:     "a",
 			Seed:     seed,
 			SeedRepr: "seed",
 			Fruit:    "fruit",
@@ -200,8 +200,8 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 			Elapsed:  time.Second,
 			Time:     time.Unix(100, 0),
 		},
-		TaskFailEvent{
-			Node:     "a",
+		SeedWitherEvent{
+			Plot:     "a",
 			Seed:     seed,
 			SeedRepr: "seed",
 			Err:      boom,
@@ -210,8 +210,8 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 			Elapsed:  time.Second,
 			Time:     time.Unix(101, 0),
 		},
-		TaskRetryEvent{
-			Node:     "a",
+		SeedReplantEvent{
+			Plot:     "a",
 			Seed:     seed,
 			SeedRepr: "seed",
 			Err:      boom,
@@ -219,8 +219,8 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 			SeedID:   1,
 			Time:     time.Unix(102, 0),
 		},
-		TaskInputEvent{
-			Node:     "b",
+		SeedInputEvent{
+			Plot:     "b",
 			From:     "a",
 			Seed:     "fruit",
 			SeedRepr: "fruit",
@@ -235,9 +235,9 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 		}
 	}
 
-	success, ok := got[0].(TaskSuccessEvent)
+	success, ok := got[0].(SeedRipenEvent)
 	if !ok {
-		t.Fatalf("got[0] = %T, want TaskSuccessEvent", got[0])
+		t.Fatalf("got[0] = %T, want SeedRipenEvent", got[0])
 	}
 	if success.Seed != seed || success.Fruit != "fruit" {
 		t.Fatalf("success payload = (%v, %v)", success.Seed, success.Fruit)
@@ -249,9 +249,9 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 		t.Fatalf("success time = %v", success.Time)
 	}
 
-	fail, ok := got[1].(TaskFailEvent)
+	fail, ok := got[1].(SeedWitherEvent)
 	if !ok {
-		t.Fatalf("got[1] = %T, want TaskFailEvent", got[1])
+		t.Fatalf("got[1] = %T, want SeedWitherEvent", got[1])
 	}
 	if !errors.Is(fail.Err, boom) {
 		t.Fatalf("fail error = %v, want boom", fail.Err)
@@ -260,9 +260,9 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 		t.Fatalf("fail IDs must differ: seed=%d weed=%d", fail.SeedID, fail.WeedID)
 	}
 
-	retry, ok := got[2].(TaskRetryEvent)
+	retry, ok := got[2].(SeedReplantEvent)
 	if !ok {
-		t.Fatalf("got[2] = %T, want TaskRetryEvent", got[2])
+		t.Fatalf("got[2] = %T, want SeedReplantEvent", got[2])
 	}
 	if retry.Attempt != 2 {
 		t.Fatalf("retry attempt = %d, want 2", retry.Attempt)
@@ -271,12 +271,12 @@ func TestEventsCarryPayloadAndIDs(t *testing.T) {
 		t.Fatalf("retry error = %v, want boom", retry.Err)
 	}
 
-	input, ok := got[3].(TaskInputEvent)
+	input, ok := got[3].(SeedInputEvent)
 	if !ok {
-		t.Fatalf("got[3] = %T, want TaskInputEvent", got[3])
+		t.Fatalf("got[3] = %T, want SeedInputEvent", got[3])
 	}
-	if input.Node != "b" || input.From != "a" {
-		t.Fatalf("input endpoints = (%q, %q), want (b, a)", input.Node, input.From)
+	if input.Plot != "b" || input.From != "a" {
+		t.Fatalf("input endpoints = (%q, %q), want (b, a)", input.Plot, input.From)
 	}
 	if len(input.Parents) != 1 || input.Parents[0] != 2 {
 		t.Fatalf("input parents = %v, want [2]", input.Parents)

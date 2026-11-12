@@ -84,7 +84,7 @@ func (l *LogRecordHandler) AfterStop() error {
 
 // LogObserver 将观察者事件转换为日志记录并异步写入日志文件。
 //
-// 事件经 funnel.Spout 异步落盘，观察者只负责翻译与投递。节点结束日志中的
+// 事件经 funnel.Spout 异步落盘，观察者只负责翻译与投递。Plot 结束日志中的
 // 果实/杂草/剪枝数量直接读取 metrics 快照，不再自行计数。
 // 事件可能来自多个并发协程，观察者本身无状态，投递依赖 funnel.Inlet 的并发安全。
 type LogObserver struct {
@@ -95,7 +95,7 @@ type LogObserver struct {
 }
 
 // NewLogObserver 创建一个日志观察者。
-// metrics 提供节点结束时的结果计数；level 为最低日志级别（不存在则默认 INFO）。
+// metrics 提供 Plot 结束时的结果计数；level 为最低日志级别（不存在则默认 INFO）。
 func NewLogObserver(metrics *observer.MetricsObserver, level string) *LogObserver {
 	return newLogObserver(&LogRecordHandler{}, metrics, level)
 }
@@ -129,8 +129,8 @@ func (l *LogObserver) Stop() error {
 // OnEvent 将事件翻译为日志记录并投递到消费队列。
 func (l *LogObserver) OnEvent(event observer.Event) error {
 	switch ev := event.(type) {
-	case observer.GraphStartEvent:
-		if err := l.log("INFO", fmt.Sprintf("Farm '%s' start. Graph structure:", ev.Farm), ev.StartTime); err != nil {
+	case observer.FarmStartEvent:
+		if err := l.log("INFO", fmt.Sprintf("Farm '%s' start. Structure:", ev.Farm), ev.StartTime); err != nil {
 			return err
 		}
 		for _, line := range ev.Structure {
@@ -140,74 +140,74 @@ func (l *LogObserver) OnEvent(event observer.Event) error {
 		}
 		return nil
 
-	case observer.GraphEndEvent:
+	case observer.FarmEndEvent:
 		return l.log("INFO", fmt.Sprintf("Farm '%s' end. Use %.2fs.", ev.Farm, ev.Elapsed.Seconds()), ev.EndTime)
 
-	case observer.NodeStartEvent:
-		return l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", ev.Node, ev.Tenders), ev.StartTime)
+	case observer.PlotStartEvent:
+		return l.log("INFO", fmt.Sprintf("Plot '%s' start with %d tenders.", ev.Plot, ev.Tenders), ev.StartTime)
 
-	case observer.NodeEndEvent:
-		var counts observer.NodeMetrics
+	case observer.PlotEndEvent:
+		var counts observer.PlotMetrics
 		if l.metrics != nil {
-			counts, _ = l.metrics.GetNode(ev.Node)
+			counts, _ = l.metrics.GetPlot(ev.Plot)
 		}
 		return l.log(
 			"INFO",
 			fmt.Sprintf(
 				"Plot '%s' end. Use %.2fs. %d ripened, %d withered, %d pruned.",
-				ev.Node, ev.Elapsed.Seconds(), counts.Succeeded, counts.Failed, counts.Skipped,
+				ev.Plot, ev.Elapsed.Seconds(), counts.Succeeded, counts.Failed, counts.Skipped,
 			),
 			ev.EndTime,
 		)
 
-	case observer.TaskInputEvent:
+	case observer.SeedInputEvent:
 		return l.log(
 			"DEBUG",
-			fmt.Sprintf("In '%s', Seed %s input. [%d*]", ev.Node, ev.SeedRepr, ev.SeedID),
+			fmt.Sprintf("In '%s', Seed %s input. [%d*]", ev.Plot, ev.SeedRepr, ev.SeedID),
 			ev.Time,
 		)
 
-	case observer.TaskSuccessEvent:
+	case observer.SeedRipenEvent:
 		return l.log(
 			"SUCCESS",
 			fmt.Sprintf(
 				"In '%s', Seed %s ripened. Fruit is %s. Use %.2fs. [%d->%d*]",
-				ev.Node, ev.SeedRepr, ev.FruitRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.FruitID,
+				ev.Plot, ev.SeedRepr, ev.FruitRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.FruitID,
 			),
 			ev.Time,
 		)
 
-	case observer.TaskFailEvent:
+	case observer.SeedWitherEvent:
 		return l.log(
 			"ERROR",
 			fmt.Sprintf(
 				"In '%s', Seed %s withered: %v. Use %.2fs. [%d->%d*]",
-				ev.Node, ev.SeedRepr, ev.Err, ev.Elapsed.Seconds(), ev.SeedID, ev.WeedID,
+				ev.Plot, ev.SeedRepr, ev.Err, ev.Elapsed.Seconds(), ev.SeedID, ev.WeedID,
 			),
 			ev.Time,
 		)
 
-	case observer.TaskSkipEvent:
+	case observer.SeedPruneEvent:
 		return l.log(
 			"INFO",
 			fmt.Sprintf(
 				"In '%s', Seed %s pruned. Use %.2fs. [%d->%d*]",
-				ev.Node, ev.SeedRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.PruneID,
+				ev.Plot, ev.SeedRepr, ev.Elapsed.Seconds(), ev.SeedID, ev.PruneID,
 			),
 			ev.Time,
 		)
 
-	case observer.TaskRetryEvent:
+	case observer.SeedReplantEvent:
 		return l.log(
 			"WARNING",
 			fmt.Sprintf(
 				"In '%s', Seed %s attempt %d withered: %v. Replanting. [%d*]",
-				ev.Node, ev.SeedRepr, ev.Attempt, ev.Err, ev.SeedID,
+				ev.Plot, ev.SeedRepr, ev.Attempt, ev.Err, ev.SeedID,
 			),
 			ev.Time,
 		)
 
-	case observer.TerminationInputEvent, observer.TerminationMergeEvent:
+	case observer.SealInputEvent, observer.SealMergeEvent:
 		return nil
 	}
 

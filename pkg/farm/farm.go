@@ -12,10 +12,10 @@ import (
 
 // ==== Struct ====
 
-// Farm 管理多个 plot 节点（Plot/SplitPlot/RoutePlot）组成的静态有向图。
-// 负责节点注册、名称唯一性校验、超边式连接建立，
-// 以及统一的观察者分发与生命周期调度。farm 级观察者会作为一个 Hub
-// 注册到每个 plot，从而同时接收节点事件与图事件。
+// Farm 管理多个 plot（Plot/SplitPlot/RoutePlot）组成的静态有向图。
+// 负责 plot 注册、名称唯一性校验、超边式连接建立，
+// 以及统一的观察者分发与生命周期调度。Farm 级观察者会作为一个 Hub
+// 注册到每个 plot，从而同时接收 Plot 事件与 Farm 事件。
 type Farm struct {
 	name        string
 	plots       map[string]plot.PlotNode
@@ -180,7 +180,7 @@ func (f *Farm) emit(event observer.Event) {
 // Run 同步运行整张 farm 图。
 // inputs 按 plot 名称声明初始种子；这些种子会在各 plot 启动后被注入。
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
-// 运行期资源由 assembly 统一装配，图事件与节点事件都经 farm hub 分发。
+// 运行期资源由 assembly 统一装配，Farm 事件与 Plot 事件都经 farm hub 分发。
 func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	if err := f.validateRunInputs(inputs); err != nil {
 		return err
@@ -195,17 +195,17 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	}
 	defer resources.Stop()
 
-	f.emit(observer.GraphStartEvent{
-		Farm:      f.name,
-		IsDAG:     IsDAG(f.OrderGraph),
-		Nodes:     f.Nodes(),
-		Edges:     f.OutEdges(),
-		Sources:   f.sourceNodes,
-		Structure: f.getStructureList(),
-		StartTime: startTime,
+	f.emit(observer.FarmStartEvent{
+		Farm:        f.name,
+		IsDAG:       IsDAG(f.OrderGraph),
+		Plots:       f.Nodes(),
+		Edges:       f.OutEdges(),
+		SourcePlots: f.sourceNodes,
+		Structure:   f.getStructureList(),
+		StartTime:   startTime,
 	})
 	defer func() {
-		f.emit(observer.GraphEndEvent{
+		f.emit(observer.FarmEndEvent{
 			Farm:    f.name,
 			EndTime: time.Now(),
 			Elapsed: time.Since(startTime),
@@ -215,7 +215,7 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 	return f.run(inputs)
 }
 
-// run 执行图调度：接入 farm 观察者、启动节点、注入种子并等待全部退出。
+// run 执行图调度：接入 farm 观察者、启动 plot、注入种子并等待全部退出。
 func (f *Farm) run(inputs map[string][]any) error {
 	for _, plot := range f.plots {
 		if err := plot.AddObserver(f.hub); err != nil {

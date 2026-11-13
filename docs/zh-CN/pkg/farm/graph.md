@@ -1,6 +1,6 @@
 # pkg/farm/graph.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/11/13
 
 ## 作用
 
@@ -98,7 +98,7 @@ flowchart LR
     C -->|SourceNodes| SN[SourceNodes:<br/>a]
 ```
 
-`SourceNodes` 在 `Farm.Run` 中用于决定哪些 plot 需要 `Seal()`。每个 Source SCC 只取一个代表，避免在强连通环上重复 seal。
+`SourceNodes` 在 `Farm.Run` / `Farm.Start` 启动前被调用，结果存入 `Farm.sourceNodes`，用于决定 `Run` 自动终止、以及注入失败兜底时向哪些 plot 发送终止信号。每个 Source SCC 只取一个代表，避免在强连通环上重复 seal。
 
 ### 节点层级计算
 
@@ -157,6 +157,6 @@ fmt.Println(farm.SourceSCCs(g)) // [[a b]]
 
 ## 注意事项
 
-- **仅做图分析，不做调度**：`OrderGraph` 不感知任何运行时状态（如 `Plot` 的 `GetState`），所有调度由 `Farm.Run` 主导。
+- **仅做图分析，不做调度**：`OrderGraph` 不感知任何运行时状态（如 `PlotNode` 的 `GetState`），所有调度由 `Farm.Run` / `Farm.Start` 主导。
 - **测试覆盖**：`pkg/farm/graph_test.go` 覆盖了基础 CRUD、邻接顺序稳定性、TopoSort、ComputeNodeLevels、Tarjan SCC 与凝聚图命名。详见 `graph_test.md`。
 - **不是线程安全**：如需在多协程中读取图，请在外部加锁或先 `OutEdges` / `InEdges` 拿到深拷贝后再并发使用。

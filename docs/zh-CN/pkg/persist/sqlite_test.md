@@ -1,12 +1,12 @@
 # pkg/persist/sqlite_test.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/11/13
 
 ## 作用
 
-`pkg/persist/sqlite_test.go` 是 `pkg/persist` 包中**唯一**的测试文件，它只针对 [`sqlite.md`](./sqlite.md) 中描述的 SQLite 存储层做端到端验证，不涉及 [`lifecycle.md`](./lifecycle.md) 的 `LifecycleRecordHandler` / `LifecycleInlet` 与 [`log.md`](./log.md) 的日志落盘。四个测试函数都使用 `t.TempDir()` 拿到独立的临时文件作为 `OpenLifecycleSQLite` 的入口，确保测试之间互不影响且无副作用。
+`pkg/persist/sqlite_test.go` 只针对 [`sqlite.md`](./sqlite.md) 中描述的 SQLite 存储层做端到端验证，不涉及 [`lifecycle.md`](./lifecycle.md) 的 `LifecycleWatcher` / `LifecycleRecordHandler`（对应 [`lifecycle_test.md`](./lifecycle_test.md)）与 [`log.md`](./log.md) 的日志观察者（对应 [`log_test.md`](./log_test.md)）。四个测试函数都使用 `t.TempDir()` 拿到独立的临时文件作为 `OpenLifecycleSQLite` 的入口，确保测试之间互不影响且无副作用。
 
-> 当前文件**没有**针对 `LifecycleRecordHandler.HandleRecord` 路由（`seed` / `ripen` / `wither` / `prune`）与 `LogInlet` / `LogRecordHandler` 的单元测试；如后续追加，按 `pkg/funnel` Spout 单 goroutine 调度的特性，应当用内存 channel + 同步收口的方式驱动。
+> 同包的 `lifecycle_test.go` / `log_test.go` 通过注入捕获型 handler 验证事件翻译，不触碰真实文件；本文件是唯一实际打开 SQLite 并校验 schema 的测试。
 
 ## 测试覆盖点
 
@@ -115,7 +115,7 @@ go test ./pkg/persist -run 'TestLifecycleSQLite' -v
 
 ## 注意事项
 
-- **未覆盖的路径**：当前测试**不**直接覆盖 `HandleRecord` 的 `seed` / `ripen` / `wither` 路由，也不验证 `LoadStatuses` 在 `sqliteDB == nil` 时的「按 `SQLitePath` 重新打开」分支。补充测试时可使用 `pkg/funnel.NewSpout` + `chan LifecycleRecord` 来驱动。
+- **未覆盖的路径**：本文件**不**直接驱动 `LifecycleRecordHandler.HandleRecord` 的 `seed` / `ripen` / `wither` / `prune` 路由（事件翻译由 [`lifecycle_test.md`](./lifecycle_test.md) 覆盖），也不验证 `LoadLifecycleStatusesFromPath` 的空路径分支与 `sqliteDB == nil` 分支。补充测试时可用 `t.TempDir()` 建库后直接调用 `LoadLifecycleStatusesFromPath`。
 - **测试里的 `EventType` 与业务写入值不同**：测试为构造事件图使用了 `"fruit"` / `"weed"` 作为 `events.event_type`，而 `lifecycle.go` 的 `HandleRecord` 实际写入的是 `"ripen"` / `"wither"`；`events.event_type` 无 CHECK 约束，因此两者都能通过。测试只验证存储层不验证枚举，修改事件类型命名时不要被该文件的字面量误导。
 - **状态值以 `Promote*` 为准**：测试断言的状态是 `"ripen"` / `"wither"`（与 `PromoteLifecycleStatusRipen` / `PromoteLifecycleStatusWither` 中硬编码的 `status` 一致），初始快照的状态为 `"seed"`。
 - **测试依赖 SQLite 驱动**：`go test` 会通过 `modernc.org/sqlite` 解析 `import _ "modernc.org/sqlite"`，该驱动在 `go.mod` 中已声明（`v1.57.0`），无需额外准备。

@@ -1,10 +1,10 @@
 # pkg/persist/sqlite.go
 
-> 📅 最后更新日期: 2026/10/09
+> 📅 最后更新日期: 2026/11/13
 
 ## 作用
 
-`pkg/persist/sqlite.go` 集中实现 **生命周期持久化** 的 SQLite 存储层，包括表结构定义、连接管理、事件/父边写入与回查、状态快照的写入与晋升，以及按 plot 维度的批量查询。文件本身只做 SQL 层的封装，不感知 `pkg/funnel` 与 `pkg/runtime` 的并发模型——这一层会在 [`lifecycle.md`](./lifecycle.md) 中作为 `LifecycleRecordHandler` 的依赖被复用。
+`pkg/persist/sqlite.go` 集中实现 **生命周期持久化** 的 SQLite 存储层，包括表结构定义、连接管理、事件/父边写入与回查、状态快照的写入与晋升，以及按 plot 维度的批量查询。文件本身只做 SQL 层的封装，不感知 `pkg/funnel` 与 `pkg/scarecrow` 的并发模型——这一层由 [`lifecycle.md`](./lifecycle.md) 中的 `LifecycleRecordHandler` 调用，也被 `Plot.Harvest` 通过 `LoadLifecycleStatusesFromPath` 用于离线查询。
 
 底层驱动为 [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)（纯 Go 实现，无需 CGo），驱动在文件顶部通过匿名导入 `_ "modernc.org/sqlite"` 注册到 `database/sql`。
 
@@ -23,10 +23,10 @@ type LifecycleEventRecord struct {
 
 | 字段 | 说明 |
 |------|------|
-| `EventID` | 事件唯一 ID（主键），通常由 `runtime.LocalEventClient.Emit` 分配 |
-| `EventType` | 事件类型；`pkg/persist` 自身写入 `seed` / `ripen` / `wither` / `prune`，但表结构不强制枚举 |
-| `Plot` | 事件所属 plot 名称；用于按 plot 过滤与按 plot 创建目录 |
-| `TS` | 时间戳（秒，浮点）。由 `LifecycleInlet` 写入时通过 `time.Now().UnixMilli() / 1000` 计算 |
+| `EventID` | 事件唯一 ID（主键），来自 `scarecrow` 事件携带的 `SeedID` / `FruitID` / `WeedID` / `PruneID` |
+| `EventType` | 事件类型；`pkg/persist` 自身写入 `record.Kind`，即 `seed` / `ripen` / `wither` / `prune`，但表结构不强制枚举 |
+| `Plot` | 事件所属 plot 名称 |
+| `TS` | 时间戳（Unix 秒，浮点，毫秒精度）。由事件自带时间换算：`float64(t.UnixMilli()) / 1000` |
 
 ### `LifecycleStatusRecord` — 状态快照记录
 
@@ -178,6 +178,22 @@ if err := tx.Commit(); err != nil { ... }
 >
 > 三个 `Promote*` 函数都不检查 `RowsAffected`：目标行不存在时 `UPDATE` 影响 0 行且**不报错**，调用方需自行确认 `input_event_id` 已存在。
 
+## 查询与离线读取
+
+| 函数 | 行为 |
+|------|------|
+| `LoadLifecycleEvent(db, eventID)` | 按主键读 `events` 单行；查不到时错误链中可 `errors.Is(err, sql.ErrNoRows)` |
+| `LoadLifecycleEventParents(db, eventID)` | 读 `event_parents` 中该事件的全部 `parent_id`，按 `parent_id` 升序；无父边时返回空切片（非 `nil`） |
+| `LoadLifecycleStatus(db, inputEventID)` | 按主键读 `status` 单行，9 列与 `LifecycleStatusRecord` 字段一一对应 |
+| `LoadLifecycleStatuses(db, plotName)` | 读该 plot 的全部快照，按 `ts, input_event_id` 升序；无数据时返回空切片 |
+| `LoadLifecycleStatusesFromPath(dbPath, plotName)` | 打开指定数据库文件（走 `OpenLifecycleSQLite`，含 PRAGMA 与建表），查询后立即关闭 |
+
+`LoadLifecycleStatusesFromPath` 用于「写入端已关闭」的离线场景：`Plot.Harvest` 先通过 `LifecycleWatcher.DBPath()` 拿到路径，再调用它读取该 Plot 的全部状态快照。
+
+- `dbPath == ""` 时直接返回 `lifecycle database path is empty`，不会尝试打开数据库。
+- 打开失败包装为 `open lifecycle sqlite %q: %w`；查询错误沿用 `LoadLifecycleStatuses` 的 `query lifecycle statuses for plot %q: ...` / `scan ...` / `iterate ...`。
+- 每次调用都新建连接并在返回前 `Close`，因此不要用它做高频轮询；需要多次查询时自行 `OpenLifecycleSQLite` 复用句柄。
+
 ## 公开符号清单
 
 | 符号 | 类别 | 用途 |
@@ -195,6 +211,7 @@ if err := tx.Commit(); err != nil { ... }
 | `PromoteLifecycleStatusPrune` | 函数 | 提升状态为 `prune`（仅刷新 `current_event_id` / `ts`） |
 | `LoadLifecycleStatus` | 函数 | 按 `input_event_id` 读取一条快照 |
 | `LoadLifecycleStatuses` | 函数 | 按 `plot` 读取全部快照（按 `ts, input_event_id` 排序） |
+| `LoadLifecycleStatusesFromPath` | 函数 | 打开指定数据库文件并在查询后关闭，用于离线读取 |
 
 > `configureLifecycleSQLite` 与 `rollbackOnError` 为包内私有辅助函数；`lifecycleSQLiteSchema` 为包内私有建表脚本常量。
 
@@ -230,6 +247,7 @@ flowchart LR
     Q2[LoadLifecycleEventParents] -->|event_id| R2[(event_parents)]
     Q3[LoadLifecycleStatus] -->|input_event_id| R3[(status)]
     Q4[LoadLifecycleStatuses] -->|plot| R3
+    Q5[LoadLifecycleStatusesFromPath] -->|dbPath + plot| R3
     R1 -->|SELECT| Q1
     R2 -->|SELECT ... ORDER BY parent_id| Q2
     R3 -->|SELECT ... ORDER BY ts, input_event_id| Q4
@@ -305,7 +323,7 @@ func main() {
 - **`Promote*` 对缺失行静默成功**：`UPDATE` 未命中时不返回错误，状态可能「看起来写入成功但库里没有变化」。
 - **依赖外键启用**：`status` 与 `event_parents` 的级联删除依赖 `foreign_keys = ON`，`OpenLifecycleSQLite` 已保证开启；若调用方绕开 `OpenLifecycleSQLite` 自行 `sql.Open`，需自己执行 PRAGMA。
 - **WAL 副作用**：启用 WAL 后同一目录下会生成 `*.sqlite3-wal` / `*.sqlite3-shm` 两个辅助文件；备份或传输 `.sqlite3` 时需要先 `db.Close()` 让 WAL 内容落盘，或使用 SQLite 的 backup API。
-- **时间戳为秒级浮点**：`TS` 来自 `float64(now) / 1000`，单位为秒；批量比较与排序时精度足够，但跨毫秒密集事件需注意浮点比较。
+- **时间戳为秒级浮点**：`TS` 由事件时间的 `float64(t.UnixMilli()) / 1000` 得到，带毫秒精度；批量比较与排序时精度足够，但跨毫秒密集事件仍需注意浮点比较。
 - **状态表无独立外键级联**：`status.current_event_id` 的 `FOREIGN KEY` 没有 `ON DELETE CASCADE`，仅 `status.input_event_id` 级联——防止在 `current_event_id` 被误删时把整条状态记录一起带走。
 - **不强制枚举 `EventType`**：`events.event_type` 没有任何 CHECK 约束，新增类型（如自定义 plot 的中间状态）只需在生产者处约定新字符串即可；`pkg/persist` 自身只会写入 `seed` / `ripen` / `wither` / `prune`。
 - **路径与 DSN**：文件路径经 `filepath.ToSlash` 后拼成 `file:...`，在 Windows 上避免反斜杠带来的 DSN 解析问题；`:memory:` 走字面量分支不会被改写。

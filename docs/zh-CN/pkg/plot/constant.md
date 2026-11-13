@@ -1,6 +1,6 @@
 # pkg/plot/constant.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/11/13
 
 `constant.go` 是 `plot` 包内的私有常量集合，目前只定义了一个 sentinel 字符串，用于在 `runtime.Payload.Source` 字段中区分「外部调用者」与「某个具名上游 plot」。
 
@@ -25,13 +25,14 @@ const sourceInput = "__input__"
 
 ## 使用位置
 
-`sourceInput` 在 `pkg/plot` 内共有 2 处使用，都在 `pkg/plot/plot_base.go`：
+`sourceInput` 在 `pkg/plot` 内共有 2 处使用，都在 `pkg/plot/plot.go`：
 
 1. `basePlot.Seal()`：
 
    ```go
    func (p *basePlot[S, F, Y]) Seal() {
        sealID := p.eventClient.Emit("seal", []int{})
+       p.emit(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
        p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
    }
    ```
@@ -55,7 +56,7 @@ const sourceInput = "__input__"
 sealPayload := runtime.Payload[Y]{Signal: runtime.SignalSeal, Source: p.name, EventID: sealID}
 ```
 
-注意 `Source` 是当前 plot 的 `name`（不是 `sourceInput`），从而下游可以正确识别来源。
+注意 `Source` 是当前 plot 的 `name`（不是 `sourceInput`），从而下游可以正确识别来源并在 `sealedFrom` 中按上游名登记。
 
 ## 注意事项
 

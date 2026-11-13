@@ -1,10 +1,10 @@
 # pkg/farm/render.go
 
-> 📅 最后更新日期: 2026/09/24
+> 📅 最后更新日期: 2026/11/13
 
 ## 作用
 
-`render.go` 把 `OrderGraph` 的图结构（节点集合 + 出边邻接表 + 源节点）渲染成**带边框的树形文本行列表**，供 `Farm.Run` 写入启动日志。它是纯函数式的渲染工具，不持有任何状态。
+`render.go` 把 `OrderGraph` 的图结构（节点集合 + 出边邻接表 + 源节点）渲染成**带边框的树形文本行列表**，用于填充 `scarecrow.FarmStartEvent.Structure`，最终由日志观察者逐行输出。它是纯函数式的渲染工具，不持有任何状态。
 
 `Farm` 中唯一调用点是 `Farm.getStructureList()`：
 
@@ -113,4 +113,5 @@ farm.RenderStructureList(nodes, edges, []string{"c1"})
 
 - **无状态、纯函数**：相同入参产生相同结果；函数不修改 `nodes` / `edges`，也不访问任何全局状态。
 - **节点集合无序的影响**：`nodes` 通常来自 `OrderGraph.Nodes()`，顺序不保证；因此在同一编译产物内多根之间的顺序、孤立节点的追加顺序可能不稳定（详见 [`graph.md`](./graph.md)）。
+- **调用点**：仅 `Farm.start` 在发射 `FarmStartEvent` 前调用 `Farm.getStructureList()`；该字段只被日志观察者消费，不参与调度。
 - **测试覆盖**：`pkg/farm/render_test.go` 覆盖基础形状、精确输出、空图、环 `[Ref]`、5000 节点深链与孤立节点 / 源节点推断。详见 `render_test.md`。

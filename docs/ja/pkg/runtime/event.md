@@ -1,50 +1,53 @@
 # pkg/runtime/event.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
-`event.go` はランタイムにおけるイベント ID 割り当ての抽象を定義します。「seed / fruit / weed / seal の各イベントに一意な数値 ID を割り当てる」という処理を最小限のインターフェース `EventClient` としてカプセル化し、プロセス内の既定実装 `LocalEventClient` を提供します。`pkg/plot` の各 plot ノードはこの抽象を通じて、「イベント ID をどのように生成するか」をスケジューリングロジックから切り離します。
+`event.go` はランタイムの**イベント ID 割り当て抽象**を定義します。インターフェース `EventClient` には `Emit(type_ string, parents []int) int` というメソッドが 1 つだけあり、既定実装 `LocalEventClient` はミューテックスロックでプロセス内の単調増加カウンターを維持します。`pkg/plot` の `basePlot` は `eventClient` フィールドを通じて ID を取得し、同時にその ID を `pkg/scarecrow` のイベント構造体（`SeedInputEvent.SeedID`、`SeedRipenEvent.FruitID`、`SeedWitherEvent.WeedID` など）へ書き込み、メトリクス・ログ・ライフサイクルオブザーバーが消費できるようにします。
+
+> 「イベント」には 2 つの概念があることに注意してください。本ファイルの `EventClient` は**整数 ID の割り当て**だけを担当します。オブザーバーが実際に消費するのは `pkg/scarecrow/event.go` で閉じて定義された `Event` 構造体です。詳細は [`../scarecrow/event.md`](../scarecrow/event.md) を参照してください。
 
 ## 役割
 
-- **イベント ID 割り当て器**の最小契約 `EventClient` を定義します。
+- **イベント ID 割り当て器**の最小契約 `EventClient` を定義し、「ID をどう生成するか」を plot のスケジューリングロジックから切り離します。
 - プロセス内で並行安全な既定実装 `LocalEventClient` を提供します。
-- plot がグローバルな状態に一切依存することなく、各業務イベント（seed の進入、fruit の生成、weed の失敗、seal の伝播）に対して単調増加する整数 ID を取得できるようにし、`pkg/persist` の SQLite 内で完全な因果チェーンとしてつなげられるようにします。
+- `Seed` / `Seal` / `witherSeed` / `pruneSeed` / `ripenSeed` / `sprout` の終了処理などの重要ポイントで単調増加する整数 ID を取得できるようにし、`parents` で「seed → fruit → 下流 seed → …」という因果チェーンをつなぎます。
+- これらの ID はイベント構造体とともに `scarecrow.Hub` へ渡り、最終的に `persist.LifecycleWatcher` によって SQLite の `events` / `event_parents` テーブルへ書き込まれます。
 
-> 本パッケージには `EventClient`、`LocalEventClient`、`NewLocalEventClient`、`(*LocalEventClient).Emit` の **4 つ**のエクスポートシンボルのみがあります。`EventKind` 列挙型も `Event` 構造体もありません。イベント種別（`"seed"` / `"fruit"` / `"weed"` / `"seal"`）は文字列リテラルとして `pkg/plot` から `Emit` の `type_` 引数に渡されます。
+> 本パッケージのエクスポートシンボルは `EventClient`、`LocalEventClient`、`NewLocalEventClient`、`(*LocalEventClient).Emit` の**4 つだけ**です。`EventKind` 列挙型も `Event` 構造体もありません。イベント種別（`"seed"` / `"fruit"` / `"weed"` / `"prune"` / `"seal"`）は文字列リテラルとして `pkg/plot` から `Emit` の `type_` 引数へ渡されます。
 
 ## 主要なオブジェクト
 
 ### `EventClient` インターフェース
 
-イベントクライアントの最小限の発行能力です。runtime パッケージ全体が要求するのは、**イベント ID を 1 つ割り当てる**というただ 1 つのことだけです。
+イベントクライアントの最小限の発行能力です。runtime パッケージが求めるのは、**イベント ID を 1 つ割り当てる**という 1 点だけです。
 
 ```go
 type EventClient interface {
-    Emit(type_ string, parents []int) int
+	Emit(type_ string, parents []int) int
 }
 ```
 
 | メソッド | 用途 |
 |------|------|
-| `Emit(type_ string, parents []int) int` | 型が `type_`、親イベント ID のリストが `parents` であるイベントを 1 回宣言し、割り当てられたイベント ID を返します |
+| `Emit(type_ string, parents []int) int` | 型が `type_`、直接の親イベント ID が `parents` であるイベントを 1 回宣言し、今回割り当てられたイベント ID を返します |
 
-> `type_` と `parents` は `LocalEventClient` の実装では**署名の契約にのみ関与します**。既定実装は `type_` を永続化せず、`parents` も保存せず、増加するローカル ID を返すだけです。両者の実際の意味は呼び出し側（`pkg/plot`）が解釈し、`persist.LifecycleRecord` とともに SQLite へ格納されます。この設計により、将来 plot のコードを変更することなく、分散 ID 生成器で既定実装を置き換えられます。
+> `type_` と `parents` は `LocalEventClient` の実装では**署名の契約にしか関与しません**。既定実装は `type_` を永続化せず、`parents` も保存せず、増加するローカル ID を返すだけです。両者の業務的な意味は呼び出し側（`pkg/plot`）が解釈し、`scarecrow.Event` とともにオブザーバーへ渡します。この設計により、将来 plot のコードを変更せずに分散 ID 生成器へ既定実装を置き換えられます。
 
 ### `LocalEventClient` 構造体
 
-プロセス内のイベント ID 割り当て器です。`newBasePlot` は各 plot を構築する際に既定でこれを作成して使用します。
+プロセス内のイベント ID 割り当て器です。`newBasePlot` は各 plot の構築時に既定でこれを作成して使用します。`Farm` は `NewFarm` で 1 つ作成し、登録済みのすべての plot に注入します。
 
 ```go
 type LocalEventClient struct {
-    mu     sync.Mutex
-    nextID int
+	mu     sync.Mutex
+	nextID int
 }
 ```
 
 | フィールド | 型 | 意味 |
 |------|------|------|
-| `mu` | `sync.Mutex` | `nextID` を保護するミューテックスロックで、`Emit` をマルチコルーチン下でもアトミックにします |
-| `nextID` | `int` | 次に割り当てるイベント ID（`0` から始まり、最初の `Emit` は `1` を返します） |
+| `mu` | `sync.Mutex` | `nextID` を保護するミューテックスロックで、`Emit` が並行呼び出しでもアトミックになるようにします |
+| `nextID` | `int` | 割り当て済みのイベント ID。ゼロ値は未割り当てを意味し、最初の `Emit` は `1` を返します |
 
 ### 構築と発行
 
@@ -56,8 +59,8 @@ func (e *LocalEventClient) Emit(type_ string, parents []int) int
 
 | 関数 | 振る舞い |
 |------|------|
-| `NewLocalEventClient()` | `EventClient` インターフェース値を返し、内部にゼロ値の `LocalEventClient`（`nextID = 0`）を保持します |
-| `Emit(type_, parents)` | ロックし、`nextID++` し、新しい `nextID` を返し、ロックを解放します。並行安全で、プロセス内で単調増加します |
+| `NewLocalEventClient()` | `EventClient` インターフェース値を返し、内部にゼロ値の `*LocalEventClient`（`nextID = 0`）を保持します |
+| `Emit(type_, parents)` | ロックし、`nextID++` し、新しい `nextID` を返してロックを解放します。並行安全で、同じインスタンス上では単調増加します |
 
 ```go
 c := runtime.NewLocalEventClient()
@@ -65,7 +68,7 @@ id1 := c.Emit("seed", []int{})      // 1
 id2 := c.Emit("fruit", []int{id1})  // 2
 ```
 
-> `LocalEventClient` は履歴を保存しません。担当するのは「ID の割り当て」だけです。プロセス終了後もイベントチェーンを追跡したい場合は、plot の `lifecycleInlet` と `persist.LifecycleRecordHandler` を組み合わせて SQLite に書き込んでください。
+> `LocalEventClient` は履歴を保存しません。担当するのは「ID の割り当て」だけで、割り当て済みの ID を問い合わせることはできません。イベントチェーンを追跡する必要がある場合は、オブザーバーが ID と `parents` を `pkg/persist` へ伝える仕組みに依存してください。
 
 ## 公開シンボル一覧
 
@@ -76,127 +79,213 @@ id2 := c.Emit("fruit", []int{id1})  // 2
 | `NewLocalEventClient` | `func() EventClient` | コンストラクタで、インターフェース値を返します |
 | `(*LocalEventClient).Emit` | `func(string, []int) int` | 新しい ID を割り当てて返します |
 
-## イベントの発行箇所（plot 内部）
+## ID 割り当ての実際の呼び出し箇所
 
-`Seed` / `Seal` / `witherSeed` / `sprout` は `basePlot`（`plot_base.go`）で定義されています。`ripenSeed` は成功パスから注入され、`Plot`、`SplitPlot`、`RoutePlot` にそれぞれ 1 つずつ実装があります。すべての呼び出し箇所は次のとおりです。
+`basePlot` の共通パスは `pkg/plot/plot.go` に、成功パスはノード種別ごとに `pkg/plot/plot_single.go`、`plot_split.go`、`plot_route.go` にあります。すべての呼び出しは現在の plot の `p.eventClient` を使用し、`Farm` 自身は `Emit` を呼びません。
 
-| トリガーメソッド | 所在する型 | `type_` | `parents` | 説明 |
-|---------|---------|---------|-----------|------|
-| `Seed` | `basePlot` | `"seed"` | `[]int{}`（空） | 外部から seed を 1 つ注入し、その seed の開始イベント ID を割り当てます。`Source` フィールドは空のままです |
-| `Seal` | `basePlot` | `"seal"` | `[]int{}`（空） | 外部からの終了信号で、`Payload.Source` は `sourceInput` として記録されます |
-| `witherSeed` | `basePlot` | `"weed"` | `[]int{seedID}` | 育成が最終的に失敗（cultivator が error を返す、`retryIf` がリトライを拒否する、または panic） |
-| `ripenSeed` | `Plot` | `"fruit"` | `[]int{seedID}` | 育成に成功し、fruitID を割り当てます。1 つの fruit は 1 つの下流 yield として転送されます |
-| `ripenSeed` | `Plot` | `"seed"` | `[]int{fruitID}` | 上流に登録された各下流に新しい seedID を割り当てます |
-| `ripenSeed` | `SplitPlot` | `"fruit"` + 各 fruit に 1 つの `"seed"` | 同上 | 1 回の成功で複数の fruit を生成し、1 つずつ転送します |
-| `ripenSeed` | `RoutePlot` | `"fruit"` + 各ルートに 1 つの `"seed"` | 同上 | ルーティングテーブルに従って yield を該当する下流へ配信します |
-| `sprout` の終了処理 | `basePlot` | `"seal"` | `[]int{...受信済みのすべての上流 sealID...}` | 入力が閉じられ、処理中の seed がなくなった後、すべての下流へ seal をブロードキャストします |
+| トリガーメソッド | 所在ファイル / 型 | `type_` | `parents` | その後に発行される `scarecrow.Event` |
+|---------|----------------|---------|-----------|------------------------------|
+| `Seed` | `plot.go` / `basePlot` | `"seed"` | `[]int{}` | `SeedInputEvent`（`From` は空、`Parents` も空） |
+| `Seal` | `plot.go` / `basePlot` | `"seal"` | `[]int{}` | `SealInputEvent` |
+| `witherSeed` | `plot.go` / `basePlot` | `"weed"` | `[]int{seedID}` | `SeedWitherEvent`（`WeedID`） |
+| `pruneSeed` | `plot.go` / `basePlot` | `"prune"` | `[]int{seedID}` | `SeedPruneEvent`（`PruneID`） |
+| `ripenSeed` | `plot_single.go` / `SinglePlot` | `"fruit"` | `[]int{seedID}` | `SeedRipenEvent`（`FruitID`） |
+| `ripenSeed` | 同上、下流ごと | `"seed"` | `[]int{fruitID}` | `SeedInputEvent`（`Plot` は下流名、`From` は本ノード名、`Parents = []int{fruitID}`） |
+| `ripenSeed` | `plot_split.go` / `SplitPlot` | `"fruit"`（1 回） | `[]int{seedID}` | `SeedRipenEvent` |
+| `ripenSeed` | 同上、下流ごと × 果実ごと | `"seed"` | `[]int{fruitID}` | `SeedInputEvent`（各産出につき 1 件） |
+| `ripenSeed` | `plot_route.go` / `RoutePlot` | `"fruit"`（1 回） | `[]int{seedID}` | `SeedRipenEvent` |
+| `ripenSeed` | 同上、ヒットしたルートごと | `"seed"` | `[]int{fruitID}` | `SeedInputEvent`（未接続のターゲットはスキップ） |
+| `sprout` の終了処理 | `plot.go` / `basePlot` | `"seal"` | 収集済みのすべての seal ID | `SealMergeEvent`（`ParentIDs`） |
 
-> 完全な因果チェーンは `parents` によって伝わります: seed → fruit → seed（下流）→ fruit（下流）→ … という流れで、その中の seed / fruit / weed イベントは SQLite の `events` + `event_parents` テーブルに永続化されます。**seal イベントはデータベースに保存されません**。その ID はメモリ内の `sealedFrom` マップで、後続の seal イベントの `parents` としてのみ使用されます。
+補足：
 
-> 同じ `EventClient` インスタンスはファーム内のすべての plot で共有されます。`Farm.AddPlot` は登録時に `PlotNode.SetEventClient(f.eventClient)` を呼び出して注入するため、Farm 全体の範囲でイベント ID は**単調かつ連続**になり、ID の再利用は発生しません。単体の standalone モードでは、各 plot が `newBasePlot` で既定で作成される `LocalEventClient` をそれぞれ使用します。
+- `witherSeed` は 3 つの失敗パスを同時にカバーします。`cultivator` が error を返す、`retryIf` がリトライを拒否する、`tend` の `recover` が panic を捕捉する（`cultivator panic: …` としてラップ）の 3 つです。
+- `pruneSeed` は `tend` が `cultivator` を呼び出す前に `pruneIf` にヒットしたときに発火し、fruit を生成せず、下流への転送も行いません。
+- `SeedInputEvent` は**配送側**が発行します。上流の `ripenSeed` が `Payload` を下流のチャネルへ書き込む前に発行し、`Plot` フィールドには下流名、`From` には本ノード名を設定します。下流の `sprout` が通常の `Payload` を読み取ったときに、入力イベントを追加で発行することはありません。
+- `sprout` の終了処理時の `parents` は `sealedFrom` map から取得した値であるため、**順序は不安定**です。SQLite の `event_parents` は辺のみを記録し、順序には依存しません。
 
-## `pkg/persist` との連携
+## 因果チェーン
 
-イベント ID 自体は業務情報を運びません。`pkg/plot` はイベント ID、業務データ、由来を `persist.LifecycleRecord` に組み立て、`persist.LifecycleInlet` → `funnel.Spout` → `persist.LifecycleRecordHandler` を経て SQLite へ格納します。
+以下では単一インスタンスの `LocalEventClient` と単一のチェーンを例に説明します（ID は 1 から連続して割り当てられます）。
 
-`"seed"` / `"fruit"` / `"weed"` は `LifecycleRecordHandler.HandleRecord` の `switch record.Kind` で振り分けられて処理されます。`"seal"` は `LifecycleRecord` を生成しません。
+```mermaid
+flowchart LR
+    S1["seed<br/>id=1"] -->|"Emit(fruit, [1])"| F2["fruit<br/>id=2"]
+    F2 -->|"Emit(seed, [2])"| S3["下流 seed<br/>id=3"]
+    S3 -->|"Emit(fruit, [3])"| F4["fruit<br/>id=4"]
+    S1 -.->|"失敗 Emit(weed, [1])"| W2["weed<br/>id=2"]
+    S1 -.->|"pruneIf ヒット<br/>Emit(prune, [1])"| P2["prune<br/>id=2"]
+```
 
-| `Emit` の `type_` | `LifecycleRecord.Kind`（定数 / リテラル） | `events.event_type` | `status.status` | 説明 |
-|-------------------|----------------------------------------|---------------------|-----------------|------|
-| `"seed"` | `lifecycleSeed` / `"seed"` | `"seed"` | `"seed"` | seed がシステムに入り、`seed_json` に書き込まれます |
-| `"fruit"` | `lifecycleRipen` / `"ripen"` | `"ripen"` | `"ripen"` | 育成に成功し、`fruit_json` に書き込まれます |
-| `"weed"` | `lifecycleWither` / `"wither"` | `"wither"` | `"wither"` | 育成に失敗し、`wither_type` / `wither_message` に書き込まれます |
-| `"seal"` | （`LifecycleRecord` を生成しません） | — | — | メモリ内の因果チェーンのノードとしてのみ機能し、データベースには保存されません |
+`fruit` → 複数の下流 `seed` になるとファンアウトが形成されます（`SplitPlot` の複数の果実、`RoutePlot` の複数のターゲットも同様です）。`weed` / `prune` はチェーンの終端であり、それ以上産出しません。seal チェーンは「上流のマージ seal → 下流」に沿って伝播します。
 
-> 命名の階層に注意してください。`Emit` の `type_` は `"fruit"` / `"weed"`（植物学の比喩）を使用しますが、`LifecycleRecord.Kind` とデータベースに保存される値は `"ripen"` / `"wither"`（状態のセマンティクス）を使用します。`events.event_type` に保存されるのは `Kind` なので、実際の値は `"seed"` / `"ripen"` / `"wither"` です。
+```mermaid
+flowchart LR
+    I["外部 Seal<br/>Emit(seal, [])<br/>id=10"] --> M1["plot A 終了処理<br/>Emit(seal, [10])<br/>id=11"]
+    M1 --> M2["plot B 終了処理<br/>Emit(seal, [11])<br/>id=12"]
+```
 
-データベースに保存される各 `LifecycleRecord` は `event_id` と `event_parents` テーブルを通じて親子エッジを確立し、これにより SQLite 内で因果グラフ全体を再構築できます。
+（図の A は上流を持たない source plot です。A に他の上流がある場合、マージ seal の `parents` には収集済みのすべての seal ID が含まれます。）
 
-## 主要なフロー
+### 1 回の完全な実行におけるイベント順序
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Plot as Plot
+    participant Caller as 呼び出し側
+    participant A as SinglePlot A
     participant EC as EventClient
-    participant LI as LifecycleInlet
-    participant Spout as funnel.Spout
-    participant DB as SQLite
+    participant Hub as Hub
+    participant B as SinglePlot B
 
-    Plot->>EC: Emit("seed", [])
-    EC-->>Plot: seedID
-    Plot->>LI: SeedInput(plot, seedID, nil, seed)
-    LI->>Spout: LifecycleRecord{Kind: "seed"}
-    Spout->>DB: events(seed) + status(seed)
-
-    Plot->>EC: Emit("fruit", [seedID])
-    EC-->>Plot: fruitID
-    Plot->>LI: SeedRipen(plot, seedID, seedID, fruitID, fruit)
-    LI->>Spout: LifecycleRecord{Kind: "ripen"}
-    Spout->>DB: events(ripen) + status(ripen)
-
-    Plot->>EC: Emit("seed", [fruitID])
-    EC-->>Plot: downstreamSeedID
-    Plot->>LI: SeedInput(nextPlot, downstreamSeedID, [fruitID], fruit)
+    Caller->>A: Seed(seed)
+    A->>EC: Emit("seed", [])
+    EC-->>A: seedID=1
+    A->>Hub: SeedInputEvent{From:"", SeedID:1}
+    A->>A: tend → cultivator 成功
+    A->>EC: Emit("fruit", [1])
+    EC-->>A: fruitID=2
+    A->>Hub: SeedRipenEvent{SeedID:1, FruitID:2}
+    A->>EC: Emit("seed", [2])
+    EC-->>A: downstreamSeedID=3
+    A->>Hub: SeedInputEvent{Plot:"B", From:"A", SeedID:3}
+    A->>B: Payload{Value: fruit, EventID: 3}
+    Caller->>A: Seal()
+    A->>EC: Emit("seal", [])
+    EC-->>A: sealID=4
+    A->>Hub: SealInputEvent{SealID:4}
+    A->>EC: Emit("seal", [4])
+    EC-->>A: mergeSealID=5
+    A->>Hub: SealMergeEvent{ParentIDs:[4], SealID:5}
+    A->>B: Payload{Signal: Seal, Source:"A", EventID:5}
 ```
+
+> 図では待機の過程を省略しています。`sprout` は `inputClosed` が真であり、かつ処理中のすべての seed が `done` で報告された後にのみマージ seal（`SealMergeEvent`）を発行します。そのため seal は、本ノードが受け取った seed をすべて処理し終えてから下流へブロードキャストされます。
+
+## オブザーバーと永続化の関係
+
+ID 自体は業務情報を運ばず、データベースへの保存は完全にオブザーバーが行います：
+
+- `scarecrow.MetricsWatcher` はイベントのフィールドに基づいて入力 / 成熟 / 枯萎 / 剪枝のカウントと上流・下流の由来分布を維持し、イベント ID は読み取りません。
+- `persist.LifecycleWatcher` は 4 種類の seed イベントを `persist.LifecycleRecord` へ変換し、`InsertLifecycleEvent` で `events` + `event_parents` に書き込み、`status` テーブルを更新します。
+- `persist.LogWatcher` は可読なログを出力し、`scarecrow.PrintWatcher` は進捗を表示します。どちらもデータベースへは保存しません。
+- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` は `pkg/assembly` が `Run` / `Start` 時に Hub へ自動登録します。`PrintWatcher` は呼び出し側が `AddWatcher` で手動でマウントする必要があります。
+
+```mermaid
+flowchart LR
+    P["basePlot<br/>Emit + emit"] --> H["scarecrow.Hub"]
+    H --> M["MetricsWatcher<br/>メモリメトリクス"]
+    H --> L["LifecycleWatcher<br/>SQLite"]
+    H --> G["LogWatcher<br/>ログファイル"]
+    H --> R["PrintWatcher<br/>ターミナル進捗"]
+```
+
+`type_` と保存値の対応関係は次のとおりです（`LifecycleRecord` の `Kind` 定数は `pkg/persist/lifecycle.go` で定義されています）。
+
+| `Emit` の `type_` | イベント | `LifecycleRecord.Kind` | `events.event_type` | `status.status` |
+|-------------------|------|------------------------|---------------------|-----------------|
+| `"seed"` | `SeedInputEvent` | `"seed"` | `"seed"` | `"seed"` |
+| `"fruit"` | `SeedRipenEvent` | `"ripen"` | `"ripen"` | `"ripen"` |
+| `"weed"` | `SeedWitherEvent` | `"wither"` | `"wither"` | `"wither"` |
+| `"prune"` | `SeedPruneEvent` | `"prune"` | `"prune"` | `"prune"` |
+| `"seal"` | `SealInputEvent` / `SealMergeEvent` | （レコードを生成しません） | — | — |
+
+> 命名の階層：`Emit` の `type_` は植物学の比喩（`fruit` / `weed`）を使い、`LifecycleRecord.Kind` と保存値は状態のセマンティクス（`ripen` / `wither`）を使います。`LifecycleRecord.ParentIDs` はイベントのフィールドから取得します。seed の入力は `SeedInputEvent.Parents` を使い、成熟 / 枯萎 / 剪枝はそれぞれ `[]int{SeedID}` を使用します。
 
 ## 使用例
 
 ### 既定実装の置き換え
 
-ローカルの自動増加 ID をスノーフレーク ID、UUID ハッシュ、外部サービスの割り当て器に置き換えたい場合は、`EventClient` インターフェースを実装し、`SetEventClient` を通じて注入するだけです。
+ローカルの自動増加 ID をスノーフレーク ID、UUID ハッシュ、外部サービスの割り当て器に置き換えたい場合は、`EventClient` を実装して `SetEventClient` で注入するだけです：
 
 ```go
-type snowflakeClient struct {
-    // 内部状态略
+package main
+
+import (
+	"fmt"
+	"sync/atomic"
+
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
+)
+
+// offsetClient 在本地自增序列上叠加固定偏移，便于和外部 ID 空间区分。
+type offsetClient struct {
+	base int
+	next atomic.Int64
 }
 
-func (s *snowflakeClient) Emit(type_ string, parents []int) int {
-    // 分配全局唯一 ID（具体策略略）
-    return nextSnowflake()
+func (c *offsetClient) Emit(type_ string, parents []int) int {
+	// type_ 与 parents 由调用方解释；此处只负责分配唯一 ID。
+	return c.base + int(c.next.Add(1))
 }
 
-f := farm.NewFarm("demo", "INFO")
-client := &snowflakeClient{}
+func main() {
+	double := plot.NewSinglePlot("double", func(seed int) (int, error) {
+		return seed * 2, nil
+	})
+	format := plot.NewSinglePlot("format", func(seed int) (string, error) {
+		return fmt.Sprintf("result=%d", seed), nil
+	})
 
-// 在注册时注入；也可注册后对单个 plot 覆盖
-if err := f.AddPlot(plotA, plotB); err != nil {
-    panic(err)
+	f := farm.NewFarm("demo_farm")
+	if err := f.AddPlot(double, format); err != nil {
+		panic(err)
+	}
+	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{format}); err != nil {
+		panic(err)
+	}
+
+	client := &offsetClient{base: 1000}
+	double.SetEventClient(client) // 覆盖 AddPlot 注入的默认 client
+	format.SetEventClient(client) // 同一条链路必须共用同一实例
+
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+		panic(err)
+	}
 }
-plotA.SetEventClient(client)
-plotB.SetEventClient(client) // 同一实例可被多个 plot 共享
 ```
 
-> `Emit` の `type_` / `parents` 引数は必ずシグネチャに含める必要があります。独自実装がそれらを読み取らない場合でも残さなければなりません。そうでなければ `runtime.EventClient` を実装できません。
+> `Emit` の `type_` / `parents` 引数は必ずシグネチャに含める必要があります。独自実装がそれらを読み取らない場合でも省略できません。そうでなければ `runtime.EventClient` を実装できません。
 
-### 現在の ID 割り当て状態のみを確認する
+### 既定実装をラップして統計を取る
 
-`LocalEventClient` は `Len()` / `Current()` のような照会メソッドを提供しません。現在の割り当て済み数を観察したい場合は、外側で 1 層ラップします。
+`LocalEventClient` は `Len()` / `Current()` のような照会メソッドを提供しません。割り当て済みの数を観察したい場合は、外側で 1 層ラップします：
 
 ```go
+package main
+
+import (
+	"sync/atomic"
+
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
+)
+
 type countedClient struct {
-    inner runtime.EventClient
-    n     atomic.Int64
+	inner runtime.EventClient
+	n     atomic.Int64
 }
 
 func (c *countedClient) Emit(type_ string, parents []int) int {
-    id := c.inner.Emit(type_, parents)
-    c.n.Add(1)
-    return id
+	id := c.inner.Emit(type_, parents)
+	c.n.Add(1)
+	return id
 }
 ```
 
 ## 重要な詳細
 
-- **並行安全**: `LocalEventClient.Emit` は `sync.Mutex` で `nextID++` を直列化するため、マルチコルーチンからの並行呼び出しでも返される ID は一意で単調増加します。
-- **永続化しない**: `LocalEventClient` は「**割り当て器**」であり「**記憶装置**」ではありません。状態は `nextID` という 1 つの `int` だけです。プロセス終了後は、イベント ID の意味を SQLite の `events` テーブルによってのみ追跡できます。
-- **インターフェース設計の動機**: `type_ string, parents []int` は「将来的に分散トレーシングシステムを接続する可能性」のために用意されています。OpenTelemetry / Jaeger の実装に置き換える際、シグネチャはすでに十分で、plot を変更する必要はありません。
-- **plot 間での共有**: `Farm.AddPlot` は同じ `EventClient` インスタンスをすべてのインスタンスに注入し、Farm 全体の範囲でイベント ID が単調で重複しないことを保証します。そのため SQLite では `plot` による部分的な絞り込みも、`event_id` による全体的な追跡も可能です。
-- **型ラベルはパススルーにすぎない**: `LocalEventClient` 自身は `"seed"` / `"fruit"` / `"weed"` / `"seal"` を**区別せず**、呼び出し側のセマンティックラベルとしてパススルーするだけで、型の格納は `persist` 側で行われます。
+- **並行安全**：`LocalEventClient.Emit` は `sync.Mutex` で `nextID++` を直列化するため、マルチゴルーチンからの並行呼び出しでも返される ID は一意かつ単調増加です。
+- **割り当てのみ、保存なし**：可変状態は `nextID` とそれを保護する `mu` だけです。`type_`、`parents`、タイムスタンプはいずれも割り当て器に入りません。
+- **ID は 1 から始まる**：ゼロ値の `nextID == 0` なので、最初の `Emit` は 1 を返します。そのため `EventID` を明示的に設定していない `Payload` の該当フィールドはゼロ値 `0` になります。
+- **Farm 内で共有**：`farm.NewFarm` は `LocalEventClient` を 1 つ作成し、`Farm.AddPlot` は各 plot に対して `SetEventClient(f.eventClient)` を呼び出します。そのため同じ Farm 内のすべての plot が 1 つの名前空間を共有し、plot をまたぐチェーンでも ID の再利用は発生しません。
+- **standalone では個別管理**：Farm を経由せず手動で複数の plot を接続する場合、各 plot の `newBasePlot` がそれぞれ `LocalEventClient` を作成するため、異なる plot で ID が重複する可能性があります。手動で組む場合は、すべてのノードに同じインスタンスを明示的に注入してください。
+- **seal は保存されない**：`LifecycleWatcher` は `SealInputEvent` / `SealMergeEvent` を無視するため、seal ID は SQLite へ書き込まれません。メモリ内の `sealedFrom` の集約、`SealMergeEvent` のフィールド、下流の `Payload` の中でのみ受け渡されます。
+- **`parents` は直接の親イベント**：因果パス上のすべての祖先ではありません。SQLite では各辺が 1 層だけ接続します。
 
 ## 注意事項
 
-- 外部で直接 `&runtime.LocalEventClient{}` を構築しないでください。`NewLocalEventClient()` を使用して `EventClient` インターフェース値を取得してください（後から実装をスムーズに置き換えられます）。
-- `parents` は「**親イベント ID**」のリストであり、因果パス上のすべての祖先 ID では**ありません**。SQLite へ書き込む際、`InsertLifecycleEvent` が `event_parents` テーブルに `(event_id, parent_id)` のエッジを挿入します。
-- 同じ因果チェーン上で 2 つの `LocalEventClient` インスタンスを混在させないでください。そうしないと同じ論理タスクに異なる ID が割り当てられ、SQLite 内のエッジ関係が壊れます。
-- 新しいイベント型を拡張した場合は、`persist.LifecycleRecordHandler.HandleRecord` の `switch record.Kind` 分岐も同期して更新してください。そうでなければ消費時に `unsupported lifecycle operation: <新しい型>` が返されます。
+- 名前空間を共有する必要がある場面で 2 つの `LocalEventClient` インスタンスを混在させないでください。同じ論理タスクに 2 系統の ID が割り当てられ、`event_parents` の辺関係が壊れます。
+- `LocalEventClient` のゼロ値は使用可能ですが、外部からの構築には `NewLocalEventClient()` の使用を推奨します。`EventClient` インターフェース値を取得でき、後から実装をスムーズに置き換えられます。
+- 業務イベント種別を追加する場合、`type_` のリテラルだけを変更することはできません。`scarecrow.Event` は閉じた集合であるため、`pkg/scarecrow/event.go` および `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` / `PrintWatcher` の `type switch` も同期して更新する必要があります。そうしなければ新しいイベントは黙って無視されます。
+- オブザーバーはイベント送信側のゴルーチン上で同期的に実行され、`Hub` は非同期キューを提供しません。`OnEvent` 内でブロッキング操作を行うと plot のスケジューリングパスが遅くなるため、避けてください。

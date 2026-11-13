@@ -1,12 +1,12 @@
 # pkg/persist/sqlite_test.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
-`pkg/persist/sqlite_test.go` は `pkg/persist` パッケージで **唯一** のテストファイルであり、[`sqlite.md`](./sqlite.md) に記述された SQLite ストレージ層のエンドツーエンド検証のみを行い、[`lifecycle.md`](./lifecycle.md) の `LifecycleRecordHandler` / `LifecycleInlet` や [`log.md`](./log.md) のログのディスク書き込みには関与しません。3 つのテスト関数はいずれも `t.TempDir()` で独立した一時ファイルを取得し、`OpenLifecycleSQLite` の入口として使用することで、テスト同士が互いに影響せず副作用もないことを保証します。
+`pkg/persist/sqlite_test.go` は [`sqlite.md`](./sqlite.md) に記述された SQLite ストレージ層のみをエンドツーエンドで検証し、[`lifecycle.md`](./lifecycle.md) の `LifecycleWatcher` / `LifecycleRecordHandler`（対応するのは [`lifecycle_test.md`](./lifecycle_test.md)）や [`log.md`](./log.md) のログオブザーバ（対応するのは [`log_test.md`](./log_test.md)）には関与しません。4 つのテスト関数はいずれも `t.TempDir()` で独立した一時ファイルを取得し、`OpenLifecycleSQLite` の入口として使用することで、テスト同士が互いに影響せず副作用もないことを保証します。
 
-> 現在のファイルには、`LifecycleRecordHandler.HandleRecord` のルーティング（`seed` / `ripen` / `wither`）および `LogInlet` / `LogRecordHandler` に対する単体テストは **ありません**。後から追加する場合は、`pkg/funnel` の Spout が単一 goroutine でスケジュールする特性に合わせ、インメモリ channel + 同期で締める方式で駆動するのが適切です。
+> 同じパッケージの `lifecycle_test.go` / `log_test.go` はキャプチャ用 handler を注入してイベント変換を検証し、実際のファイルに触れません。本ファイルは実際に SQLite を開いて schema を検証する唯一のテストです。
 
 ## テストのカバレッジ
 
@@ -14,6 +14,7 @@
 |------|----------|-----------|
 | `TestLifecycleSQLiteEventRoundTrip` | DB をオープン → seed + 親辺を書き込み → イベントと親辺を再読み出し | `events` の主キーが書き込み可能；`event_parents` の多対多の辺が書き込み可能；`LoadLifecycleEvent` / `LoadLifecycleEventParents` の動作が対称 |
 | `TestLifecycleSQLiteStatusRoundTrip` | 2 つのイベントを書き込み → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusRipen` → 再読み出し | 状態スナップショットが挿入可能；昇格は `current_event_id` / `status` / `fruit_json` / `ts` のみを更新し、`seed_json` と `plot` は保持する |
+| `TestLifecycleSQLitePruneStatus` | seed + prune イベントを書き込み → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusPrune` → 再読み出し | `prune` 状態への昇格とデシリアライズが可能で、`Status == "prune"`、`CurrentEventID` は prune イベントを指す |
 | `TestLifecycleSQLiteStatusPairs` | 複数 plot・複数イベントを混在させて挿入 → 複数回の挿入 + 1 回の ripen + 1 回の wither → plot 単位で検索 | `LoadLifecycleStatuses` は `ts, input_event_id` の昇順；`plot` のフィルタリングが正確；`Status` / `SeedJSON` / `FruitJSON` / `WitherType` / `WitherMessage` の各フィールドが正しく永続化される |
 
 ## 主要なテストの詳細
@@ -60,6 +61,24 @@ loadedStatus, _ := LoadLifecycleStatus(db, 1)
 - `PromoteLifecycleStatusRipen` が `current_event_id` / `status` / `fruit_json` / `ts` **だけ** を変更し、`seed_json` と `plot` を壊さないことを検証します。
 - 同時に、`LoadLifecycleStatus` の列順と `LifecycleStatusRecord` のフィールドが 1 対 1 で対応することも検証します（`WitherType` / `WitherMessage` が空文字列として読み出されることを含む）。
 
+### `TestLifecycleSQLitePruneStatus`
+
+```go
+InsertLifecycleEvent(db, 1, "seed", "stage_a", 1.0, nil)
+InsertLifecycleEvent(db, 2, "prune", "stage_a", 2.0, []int{1})
+
+UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0)
+PromoteLifecycleStatusPrune(db, 1, 2, 2.0)
+
+loadedStatus, _ := LoadLifecycleStatus(db, 1)
+// 断言: CurrentEventID == 2, Status == "prune"
+```
+
+- 前提となるイベントは `{EventID: 1, EventType: "seed", Plot: "stage_a", TS: 1.0}` と `{EventID: 2, EventType: "prune", Plot: "stage_a", TS: 2.0}` です。
+- 「`seed` スナップショット → `prune` 昇格」の全経路を通します。
+- `PromoteLifecycleStatusPrune` が `Status` を `"prune"` に更新し、`current_event_id` を prune イベントへ向け、`fruit_json` / `wither_*` フィールドに依存しないことを検証します（prune 記録ではこの 2 つのフィールドは既定値のままです）。
+- 「剪定は `cultivator` を呼ばない」という plot 側の意味論に対応します：ストレージ層は「その種子がスキップされた」ことだけを記録すればよく、果実やエラー情報は不要です。
+
 ### `TestLifecycleSQLiteStatusPairs`
 
 ```go
@@ -96,7 +115,7 @@ go test ./pkg/persist -run 'TestLifecycleSQLite' -v
 
 ## 注意事項
 
-- **カバーされていないパス**：現在のテストは `HandleRecord` の `seed` / `ripen` / `wither` ルーティングを直接カバーしておらず、`sqliteDB == nil` のときの `LoadStatuses` の「`SQLitePath` を再度オープンする」分岐も検証していません。補足のテストでは `pkg/funnel.NewSpout` + `chan LifecycleRecord` で駆動できます。
+- **カバーされていないパス**：本ファイルは `LifecycleRecordHandler.HandleRecord` の `seed` / `ripen` / `wither` / `prune` ルーティングを直接駆動せず（イベント変換は [`lifecycle_test.md`](./lifecycle_test.md) がカバー）、`LoadLifecycleStatusesFromPath` の空パス分岐や `sqliteDB == nil` の分岐も検証しません。補足する場合は `t.TempDir()` でデータベースを作成してから `LoadLifecycleStatusesFromPath` を直接呼び出せます。
 - **テスト内の `EventType` は業務が書き込む値と異なる**：テストはイベントグラフを構築するために `"fruit"` / `"weed"` を `events.event_type` として使用していますが、`lifecycle.go` の `HandleRecord` が実際に書き込むのは `"ripen"` / `"wither"` です。`events.event_type` には CHECK 制約がないため、どちらも通ります。テストはストレージ層のみを検証し列挙は検証しないので、イベント種別の命名を変更する際にこのファイルのリテラルに惑わされないでください。
 - **状態値は `Promote*` が基準**：テストがアサートする状態は `"ripen"` / `"wither"`（`PromoteLifecycleStatusRipen` / `PromoteLifecycleStatusWither` にハードコードされた `status` と一致）で、初期スナップショットの状態は `"seed"` です。
 - **テストは SQLite ドライバに依存**：`go test` は `modernc.org/sqlite` を通じて `import _ "modernc.org/sqlite"` を解決します。このドライバは `go.mod` で宣言済み（`v1.57.0`）なので、追加の準備は不要です。

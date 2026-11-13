@@ -1,10 +1,10 @@
 # pkg/persist/sqlite.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
-`pkg/persist/sqlite.go` は **ライフサイクル永続化** の SQLite ストレージ層を集中的に実装します。テーブル構造の定義、接続管理、イベント / 親辺の書き込みと再読み出し、状態スナップショットの書き込みと昇格、および plot 単位の一括検索を含みます。本ファイル自体は SQL 層のラッピングのみを行い、`pkg/funnel` と `pkg/runtime` の並行モデルは関知しません。この層は [`lifecycle.md`](./lifecycle.md) において `LifecycleRecordHandler` の依存として再利用されます。
+`pkg/persist/sqlite.go` は **ライフサイクル永続化** の SQLite ストレージ層を集中的に実装します。テーブル構造の定義、接続管理、イベント / 親辺の書き込みと再読み出し、状態スナップショットの書き込みと昇格、および plot 単位の一括検索を含みます。本ファイル自体は SQL 層のラッピングのみを行い、`pkg/funnel` と `pkg/scarecrow` の並行モデルは関知しません——この層は [`lifecycle.md`](./lifecycle.md) の `LifecycleRecordHandler` から呼ばれ、`Plot.Harvest` からも `LoadLifecycleStatusesFromPath` 経由でオフライン検索に使われます。
 
 基盤ドライバは [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)（純 Go 実装で CGo 不要）です。ドライバはファイル先頭で匿名インポート `_ "modernc.org/sqlite"` によって `database/sql` に登録されます。
 
@@ -23,10 +23,10 @@ type LifecycleEventRecord struct {
 
 | フィールド | 説明 |
 |------|------|
-| `EventID` | イベントの一意 ID（主キー）。通常は `runtime.LocalEventClient.Emit` が採番 |
-| `EventType` | イベント種別。`pkg/persist` 自身は `seed` / `ripen` / `wither` を書き込むが、テーブル構造は列挙を強制しない |
-| `Plot` | イベントが属する plot 名。plot によるフィルタリングと plot ごとのディレクトリ作成に使用 |
-| `TS` | タイムスタンプ（秒、浮動小数点）。`LifecycleInlet` が書き込み時に `time.Now().UnixMilli() / 1000` で計算 |
+| `EventID` | イベントの一意 ID（主キー）。`scarecrow` イベントが保持する `SeedID` / `FruitID` / `WeedID` / `PruneID` に由来 |
+| `EventType` | イベント種別。`pkg/persist` 自身は `record.Kind`、すなわち `seed` / `ripen` / `wither` / `prune` を書き込むが、テーブル構造は列挙を強制しない |
+| `Plot` | イベントが属する plot 名 |
+| `TS` | タイムスタンプ（Unix 秒、浮動小数点、ミリ秒精度）。イベント自身の時刻から換算：`float64(t.UnixMilli()) / 1000` |
 
 ### `LifecycleStatusRecord` — 状態スナップショットのレコード
 
@@ -47,9 +47,9 @@ type LifecycleStatusRecord struct {
 | フィールド | 説明 |
 |------|------|
 | `InputEventID` | 種子（入力）イベント ID（主キー）。`events.event_id` と 1 対 1 で対応 |
-| `CurrentEventID` | 現在指しているイベント ID（直近の `seed` / `ripen` / `wither` イベント） |
+| `CurrentEventID` | 現在指しているイベント ID（直近の `seed` / `ripen` / `wither` / `prune` イベント） |
 | `Plot` | 所属する plot。plot 単位の検索を容易にする |
-| `Status` | 状態の列挙：`seed` / `ripen` / `wither` |
+| `Status` | 状態の列挙：`seed` / `ripen` / `wither` / `prune` |
 | `SeedJSON` | 入力種子の JSON シリアライズ文字列（`toLifecycleJSON` が生成） |
 | `FruitJSON` | 成功時の果実 JSON。初期値はテーブル既定値の文字列 `"null"` で、`PromoteLifecycleStatusRipen` が上書きする |
 | `WitherType` | 失敗時の Go エラー型の文字列（`fmt.Sprintf("%T", err)`）。失敗でない場合は空文字列 |
@@ -97,9 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_status_current_event ON status(current_event_id);
 
 | テーブル | 主キー | 主要な外部キー / インデックス | 用途 |
 |----|------|-----------------|------|
-| `events` | `event_id` | `(event_type, ts)` インデックス | すべての seed / ripen / wither イベント本体を格納 |
+| `events` | `event_id` | `(event_type, ts)` インデックス | すべての seed / ripen / wither / prune イベント本体を格納 |
 | `event_parents` | `(event_id, parent_id)` | 2 つの `FOREIGN KEY` がいずれもカスケード | 多対多の親辺テーブルで、イベント DAG のトポロジを記述 |
-| `status` | `input_event_id` | `idx_status_plot_status_ts`、`idx_status_current_event` | 各種子の最新状態スナップショット。`seed` 時に `seed` として挿入し、`ripen` で `ripen` に、`wither` で `wither` に昇格する |
+| `status` | `input_event_id` | `idx_status_plot_status_ts`、`idx_status_current_event` | 各種子の最新状態スナップショット：`seed` 時に `seed` として挿入し、`ripen` で `ripen` に、`wither` で `wither` に、`prune` で `prune` に昇格する |
 
 > `fruit_json` の既定値は文字列 `"null"` で、`wither_type` / `wither_message` の既定値は空文字列です。これにより `seed` 段階で `NULL` テキストが生じて余分な分岐判定が発生するのを避けます。`seed_json` と `plot` には既定値がなく、書き込み時に明示的に指定する必要があります。
 
@@ -134,7 +134,7 @@ func OpenLifecycleSQLite(dbPath string) (*sql.DB, error)
 func EnsureLifecycleSQLiteSchema(db *sql.DB) error
 ```
 
-`lifecycleSQLiteSchema` スクリプトを冪等に実行します。呼び出し側がテーブル構造をアップグレードする必要があるときに明示的に呼び出せますが、通常は `OpenLifecycleSQLite` の内部から代わりに起動されます。
+`lifecycleSQLiteSchema` スクリプトを冪等に実行します。呼び出し側がテーブル構造をアップグレードする必要があるときに明示的に呼び出せますが、通常は `OpenLifecycleSQLite` の内部から起動されます。
 
 ## トランザクションと状態の書き込み
 
@@ -158,7 +158,7 @@ for _, parentID := range parentIDs {
 if err := tx.Commit(); err != nil { ... }
 ```
 
-- 引数は **位置引数** です（構造体ではありません）。まず `events` の行を書き込み、次に `parentIDs` の順に `event_parents` の辺を 1 件ずつ書き込みます。`parentIDs` が `nil` の場合はイベント本体だけを書き込みます。
+- 引数は**位置引数**です（構造体ではありません）。まず `events` の行を書き込み、次に `parentIDs` の順に `event_parents` の辺を 1 件ずつ書き込みます。`parentIDs` が `nil` の場合はイベント本体だけを書き込みます。
 - `rollbackOnError` は明示的な `return` の前に `defer` で発火し、「Commit していなければ Rollback する」ことと等価です。
 - 1 件の `events` 行 + 任意個の `event_parents` 辺が同じトランザクションに束縛され、親辺はすべてロールバック / すべてコミットされます。
 - エラーテキストはそれぞれ `insert event <id>: ...`、`insert parent edge <parent>-><event>: ...`、`commit insert lifecycle event: ...` です。
@@ -170,12 +170,29 @@ if err := tx.Commit(); err != nil { ... }
 | 関数 | SQL の形式 | 動作 |
 |------|----------|------|
 | `UpsertLifecycleStatusSeed(db, InputEventID, SeedJSON, Plot, TS)` | 純粋な `INSERT` | `status = "seed"`、`current_event_id = input_event_id` のスナップショットを 1 行挿入する。`fruit_json` / `wither_*` はテーブルの既定値を取る |
-| `PromoteLifecycleStatusRipen(db, inputEventID, currentEventID, fruitJSON, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'ripen', fruit_json = ?, ts = ?`。`seed_json` と `plot` は **変更しない** |
-| `PromoteLifecycleStatusWither(db, inputEventID, currentEventID, witherType, witherMessage, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'wither', wither_type = ?, wither_message = ?, ts = ?`。`seed_json` と `plot` は **変更しない** |
+| `PromoteLifecycleStatusRipen(db, inputEventID, currentEventID, fruitJSON, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'ripen', fruit_json = ?, ts = ?`。`seed_json` と `plot` は**変更しない** |
+| `PromoteLifecycleStatusWither(db, inputEventID, currentEventID, witherType, witherMessage, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'wither', wither_type = ?, wither_message = ?, ts = ?`。`seed_json` と `plot` は**変更しない** |
+| `PromoteLifecycleStatusPrune(db, inputEventID, currentEventID, ts)` | `UPDATE` | `SET current_event_id = ?, status = 'prune', ts = ?`。`seed_json`、`plot`、`fruit_json` / `wither_*` は**変更しない** |
 
-> ⚠️ **注意**：`UpsertLifecycleStatusSeed` は Upsert という名前ですが、実際の実装は **純粋な `INSERT`** です（`ON CONFLICT ... DO UPDATE` はありません）。同じ `input_event_id` で繰り返し呼び出すと主キー衝突によりエラーを返します（エラーテキストは `insert lifecycle status seed for input event <id>: ...`）。再試行の場面では旧状態の上書きをこれに依存できません。
+> ⚠️ **注意**：`UpsertLifecycleStatusSeed` は Upsert という名前ですが、実際の実装は**純粋な `INSERT`** です（`ON CONFLICT ... DO UPDATE` はありません）。同じ `input_event_id` で繰り返し呼び出すと主キー衝突によりエラーを返します（エラーテキストは `insert lifecycle status seed for input event <id>: ...`）。再試行の場面では旧状態の上書きをこれに依存できません。
 >
-> 2 つの `Promote*` 関数はいずれも `RowsAffected` を検査しません。対象行が存在しない場合、`UPDATE` は 0 行に影響し、**エラーも出しません**。呼び出し側が `input_event_id` の存在を自分で確認する必要があります。
+> 3 つの `Promote*` 関数はいずれも `RowsAffected` を検査しません。対象行が存在しない場合、`UPDATE` は 0 行に影響し、**エラーも出しません**。呼び出し側が `input_event_id` の存在を自分で確認する必要があります。
+
+## 検索とオフライン読み取り
+
+| 関数 | 動作 |
+|------|------|
+| `LoadLifecycleEvent(db, eventID)` | 主キーで `events` の単一行を読む。見つからない場合、エラーチェーンに対して `errors.Is(err, sql.ErrNoRows)` が使える |
+| `LoadLifecycleEventParents(db, eventID)` | `event_parents` 内のそのイベントのすべての `parent_id` を `parent_id` の昇順で読む。親辺がない場合は空スライス（`nil` ではない）を返す |
+| `LoadLifecycleStatus(db, inputEventID)` | 主キーで `status` の単一行を読む。9 列が `LifecycleStatusRecord` のフィールドと 1 対 1 で対応 |
+| `LoadLifecycleStatuses(db, plotName)` | その plot のすべてのスナップショットを `ts, input_event_id` の昇順で読む。データがない場合は空スライスを返す |
+| `LoadLifecycleStatusesFromPath(dbPath, plotName)` | 指定したデータベースファイルを開き（`OpenLifecycleSQLite` 経由で PRAGMA とテーブル作成を含む）、検索後に直ちにクローズする |
+
+`LoadLifecycleStatusesFromPath` は「書き込み側がすでに閉じている」オフラインの場面で使います：`Plot.Harvest` はまず `LifecycleWatcher.DBPath()` でパスを取得し、それを呼び出してその Plot のすべての状態スナップショットを読み取ります。
+
+- `dbPath == ""` の場合は直ちに `lifecycle database path is empty` を返し、データベースを開こうとはしません。
+- オープン失敗は `open lifecycle sqlite %q: %w` にラップされ、検索エラーは `LoadLifecycleStatuses` の `query lifecycle statuses for plot %q: ...` / `scan ...` / `iterate ...` をそのまま引き継ぎます。
+- 呼び出しごとに新しい接続を作り、返す前に `Close` するため、高頻度のポーリングには使わないでください。複数回検索する場合は自分で `OpenLifecycleSQLite` してハンドルを再利用します。
 
 ## 公開シンボル一覧
 
@@ -191,8 +208,10 @@ if err := tx.Commit(); err != nil { ... }
 | `UpsertLifecycleStatusSeed` | 関数 | 種子の初期状態スナップショットを挿入する（`status = "seed"`） |
 | `PromoteLifecycleStatusRipen` | 関数 | 状態を `ripen` に昇格させ、`fruit_json` を書き込む |
 | `PromoteLifecycleStatusWither` | 関数 | 状態を `wither` に昇格させ、`wither_type` / `wither_message` を書き込む |
+| `PromoteLifecycleStatusPrune` | 関数 | 状態を `prune` に昇格させる（`current_event_id` / `ts` のみ更新） |
 | `LoadLifecycleStatus` | 関数 | `input_event_id` でスナップショットを 1 件読み取る |
 | `LoadLifecycleStatuses` | 関数 | `plot` で全スナップショットを読み取る（`ts, input_event_id` でソート） |
+| `LoadLifecycleStatusesFromPath` | 関数 | 指定したデータベースファイルを開き、検索後に閉じる。オフライン読み取り用 |
 
 > `configureLifecycleSQLite` と `rollbackOnError` はパッケージ内の非公開ヘルパー関数です。`lifecycleSQLiteSchema` はパッケージ内の非公開なテーブル作成スクリプト定数です。
 
@@ -202,19 +221,22 @@ if err := tx.Commit(); err != nil { ... }
 
 ```mermaid
 flowchart TD
-    A["HandleRecord seed/ripen/wither"] -->|Kind = seed| B[InsertLifecycleEvent]
+    A["HandleRecord seed/ripen/wither/prune"] -->|Kind = seed| B[InsertLifecycleEvent]
     A -->|Kind = ripen| B
     A -->|Kind = wither| B
+    A -->|Kind = prune| B
     B --> C["トランザクション: INSERT events + N×INSERT event_parents"]
     C --> D{Commit?}
     D -->|はい| E{Kind}
     E -->|seed| F1[UpsertLifecycleStatusSeed<br/>status = seed]
     E -->|ripen| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
     E -->|wither| F3[PromoteLifecycleStatusWither<br/>status = wither]
+    E -->|prune| F4[PromoteLifecycleStatusPrune<br/>status = prune]
     D -->|いいえ| F[rollbackOnError が自動ロールバック]
     F1 --> G[(status テーブル)]
     F2 --> G
     F3 --> G
+    F4 --> G
 ```
 
 ### 検索パス
@@ -225,6 +247,7 @@ flowchart LR
     Q2[LoadLifecycleEventParents] -->|event_id| R2[(event_parents)]
     Q3[LoadLifecycleStatus] -->|input_event_id| R3[(status)]
     Q4[LoadLifecycleStatuses] -->|plot| R3
+    Q5[LoadLifecycleStatusesFromPath] -->|dbPath + plot| R3
     R1 -->|SELECT| Q1
     R2 -->|SELECT ... ORDER BY parent_id| Q2
     R3 -->|SELECT ... ORDER BY ts, input_event_id| Q4
@@ -300,7 +323,7 @@ func main() {
 - **`Promote*` は行が存在しない場合も黙って成功する**：`UPDATE` がヒットしなくてもエラーを返さないため、状態が「書き込みに成功したように見えてデータベースには変化がない」ことがあります。
 - **外部キーの有効化に依存**：`status` と `event_parents` のカスケード削除は `foreign_keys = ON` に依存しており、`OpenLifecycleSQLite` は有効化を保証しています。呼び出し側が `OpenLifecycleSQLite` を迂回して自分で `sql.Open` する場合は、PRAGMA を自分で実行する必要があります。
 - **WAL の副作用**：WAL を有効化すると同じディレクトリに `*.sqlite3-wal` / `*.sqlite3-shm` の 2 つの補助ファイルが生成されます。`.sqlite3` をバックアップまたは転送する際は、先に `db.Close()` して WAL の内容をディスクへ書き出すか、SQLite の backup API を使用する必要があります。
-- **タイムスタンプは秒単位の浮動小数点**：`TS` は `float64(now) / 1000` に由来し、単位は秒です。一括比較とソートには精度は十分ですが、ミリ秒をまたぐ密集イベントでは浮動小数点比較に注意が必要です。
-- **状態テーブルには独立した外部キーカスケードがない**：`status.current_event_id` の `FOREIGN KEY` には `ON DELETE CASCADE` がなく、カスケードするのは `status.input_event_id` のみです。これにより `current_event_id` が誤って削除されたときに状態レコード全体が巻き添えになるのを防ぎます。
-- **`EventType` の列挙を強制しない**：`events.event_type` には CHECK 制約がまったくないため、新しい種別（例えばカスタム plot の中間状態）を追加する場合はプロデューサ側で新しい文字列を決めるだけで済みます。`pkg/persist` 自身は `seed` / `ripen` / `wither` しか書き込みません。
+- **タイムスタンプは秒単位の浮動小数点**：`TS` はイベント時刻の `float64(t.UnixMilli()) / 1000` から得られ、ミリ秒精度を持ちます。一括比較とソートには精度は十分ですが、ミリ秒をまたぐ密集イベントでは浮動小数点比較に注意が必要です。
+- **状態テーブルには独立した外部キーカスケードがない**：`status.current_event_id` の `FOREIGN KEY` には `ON DELETE CASCADE` がなく、カスケードするのは `status.input_event_id` のみです——`current_event_id` が誤って削除されたときに状態レコード全体が巻き添えになるのを防ぎます。
+- **`EventType` の列挙を強制しない**：`events.event_type` には CHECK 制約がまったくないため、新しい種別（例えばカスタム plot の中間状態）を追加する場合はプロデューサ側で新しい文字列を決めるだけで済みます。`pkg/persist` 自身は `seed` / `ripen` / `wither` / `prune` しか書き込みません。
 - **パスと DSN**：ファイルパスは `filepath.ToSlash` を経て `file:...` に組み立てられ、Windows でバックスラッシュによる DSN 解析の問題を避けます。`:memory:` はリテラル分岐を通るため書き換えられません。

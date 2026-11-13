@@ -1,6 +1,6 @@
 # pkg/farm/farm_split_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
@@ -9,7 +9,7 @@
 ## Test Focus
 
 - **One-to-many split forwarding**: one successful `SplitPlot` produces multiple downstream yields, and the downstream seed count should be the sum of the split elements.
-- **Distinguishing counting semantics**: `SplitPlot.GetFruitNum` counts by "number of input seeds" (each split records 1 fruit) rather than by the number of split elements; only the downstream `head.GetSeedNum` reflects the total number of elements.
+- **Distinguishing counting semantics**: `SplitPlot.GetFruitNum` counts by "number of input seeds" (each split records 1 fruit, sourced from `SeedRipenEvent`) rather than by the number of split elements; only the downstream `head.GetSeedNum` reflects the total number of elements.
 - **Empty split result**: when the split function returns a `nil` slice, nothing is forwarded downstream.
 
 ## Test Cases
@@ -22,13 +22,15 @@
 
 - **The split function covers empty input**: `split` returns `nil, nil` for an empty string, used to cover the "empty split result" branch (no yield is emitted).
 - **Number parsing error**: a `strconv.Atoi` failure during splitting returns an error, which then takes the widhered path of `SplitPlot`; the inputs in this case are all valid integers, verifying the pure success path.
-- **`head`'s fan-in**: `head` uses `WithTenders(2)` and processes multiple yields from `split` concurrently, so `head.GetSeedNum` depends on the upstream yield counters being registered correctly.
+- **`head`'s fan-in**: `head` uses `WithTenders(2)` and processes multiple yields from `split` concurrently; its `GetSeedNum` comes from `MetricsWatcher` counting the `SeedInputEvent`s delivered by the upstream.
+- **`split` does not set `WithTenders` explicitly**: it keeps the default `runtime.NumCPU()`, showing that the concurrency level does not affect the "count by input" semantics.
 
 ## Related Source
 
 - `Connect` / `Run` in `pkg/farm/farm.go`
 - `SplitPlot.ripenSeed` in `pkg/plot/plot_split.go` (sends downstream yields element by element)
-- `GetSeedNum` / `GetFruitNum` / `AddDownstreamYieldNum` in `pkg/plot/counter.go`
+- `GetSeedNum` / `GetFruitNum` in `pkg/plot/plot.go` (read `scarecrow.MetricsWatcher`)
+- `MetricsWatcher` in `pkg/scarecrow/metrics.go` (counts inputs / ripens / failures / prunes)
 
 ## How to Run
 

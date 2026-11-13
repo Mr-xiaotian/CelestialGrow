@@ -1,6 +1,6 @@
 # pkg/plot/constant.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 `constant.go` is the collection of private constants in the `plot` package, and currently defines only a single sentinel string, used to distinguish "external caller" from "some named upstream plot" in the `runtime.Payload.Source` field.
 
@@ -25,13 +25,14 @@ const sourceInput = "__input__"
 
 ## Usage Sites
 
-`sourceInput` is used in 2 places within `pkg/plot`, both in `pkg/plot/plot_base.go`:
+`sourceInput` is used in 2 places within `pkg/plot`, both in `pkg/plot/plot.go`:
 
 1. `basePlot.Seal()`:
 
    ```go
    func (p *basePlot[S, F, Y]) Seal() {
        sealID := p.eventClient.Emit("seal", []int{})
+       p.emit(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
        p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
    }
    ```
@@ -55,7 +56,7 @@ On the normal path, however, seal propagation comes from the finishing logic of 
 sealPayload := runtime.Payload[Y]{Signal: runtime.SignalSeal, Source: p.name, EventID: sealID}
 ```
 
-Note that `Source` is the `name` of the current plot (not `sourceInput`), so downstream can correctly identify the origin.
+Note that `Source` is the `name` of the current plot (not `sourceInput`), so downstream can correctly identify the origin and register it in `sealedFrom` under the upstream name.
 
 ## Notes
 

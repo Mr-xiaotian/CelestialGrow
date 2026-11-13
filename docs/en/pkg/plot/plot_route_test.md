@@ -1,6 +1,6 @@
 # pkg/plot/plot_route_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 `plot_route_test.go` is the **result snapshot** test of `RoutePlot` and has a single case: it verifies that after a standalone batch run the routing node records each successful seed as exactly **one** `ripen` entry and persists the whole routing table as-is into `FruitJSON`.
 
@@ -19,6 +19,7 @@
   ```
 - **Configuration**: `plot.NewRoutePlot("route_harvest", cultivator, plot.WithTenders(2))`
 - **seeds**: `[]int{1, 2}`
+- **Run**: `route.Run([]int{1, 2}, "INFO")`
 
 Verifies:
 
@@ -33,10 +34,10 @@ Verifies:
 
 - Test package: `package plot_test` (black-box); it does not access the unexported fields of `RoutePlot`;
 - It relies on the two helper functions provided by the other test files in the same package (both defined in `plot_harvest_test.go`):
-  - `mustHarvest(t *testing.T, plot harvestable)`: wraps `Harvest()` and calls `t.Fatalf` on error; `harvestable` is the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`, so `Plot` / `RoutePlot` / `SplitPlot` can all be passed directly;
+  - `mustHarvest(t *testing.T, plot harvestable)`: wraps `Harvest()` and calls `t.Fatalf` on error; `harvestable` is the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`, so `SinglePlot` / `RoutePlot` / `SplitPlot` can all be passed directly;
   - `indexStatusesBySeed(records)`: indexes by `record.SeedJSON` as the key.
 - This case connects **no** downstream: `route.yieldChans` is empty, so the delivery loop in `ripenSeed` never executes; `Run` relies on the trailing `Seal()` to trigger input closing before wrapping up normally.
-- Therefore this case does **not** verify downstream forwarding behaviors such as `AddDownstreamYieldNum` / `SeedInput`—that part is covered by `farm_route_test.go` in `pkg/farm`.
+- Therefore this case does **not** verify downstream forwarding behaviors such as `SeedInputEvent`—that part is covered by the relevant tests of `pkg/farm`.
 
 ## How to run
 
@@ -48,4 +49,4 @@ go test ./pkg/plot -run "TestRoutePlot" -v
 
 - `FruitJSON` comes from `persist`'s JSON serialization; `encoding/json` outputs `map[string]string` as `{"left":...,"right":...}`, **sorted by key name**; the assertions hard-code this order, so if the serialization implementation switches to preserving insertion order, this test needs to be adjusted accordingly.
 - The key of `indexStatusesBySeed` is `SeedJSON` (the JSON text of an `int` seed, such as `"1"`, `"2"`), not a formatted struct string.
-- This case only verifies whole-table persistence for a single seed, not the delivery effect of "different downstreams receiving different yields"; to verify delivery, refer to `pkg/farm/farm_route_test.go`.
+- This case only verifies whole-table persistence for a single seed, not the delivery effect of "different downstreams receiving different yields"; to verify delivery, refer to the routing tests of `pkg/farm`.

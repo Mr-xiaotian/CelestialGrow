@@ -1,6 +1,6 @@
 # pkg/farm/farm_connect_test.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
@@ -17,18 +17,20 @@
 
 ## 重要なアサーション
 
-- `TestFarmAddPlot` は `GetPlot` で得たポインタが元の `plot` と一致することも検証する——`Farm.plots` はポインタで保持され、値のコピーは行われない。
+- `TestFarmAddPlot` は `GetPlot` で得たポインタが元の `SinglePlot` と一致することも検証する——`Farm.plots` はインターフェース値として保持され、ノードのコピーは行わない。
 - `TestFarmConnectHyperEdge` で重複して現れる `targetA` によって `source → targetA` が 2 回張られることはない。内部の `uniquePlots` が `Connect` を呼び出す前に重複排除を完了する。
-- `TestFarmConnectTypeMismatch` では上流と下流の `Plot[S, F]` の `F` と `S` が異なるため、`ConnectTo` 内の `next.GetSeedChanAny()` に対する `.(chan runtime.Payload[Y])` 型アサーションが失敗する。したがって `Connect` 全体が error を返し、`OrderGraph` には `AddEdge` の記録が残らない。
+- `TestFarmConnectHyperEdge` は `Run` の後に、`targetA` / `targetB` の `GetSeedNum()` と `GetFruitNum()` がともに 1 であることも検証し、ハイパーエッジが同一の fruit を確かに 2 つの下流へ配信したことを確認する。
+- `TestFarmConnectTypeMismatch` では上流と下流の `SinglePlot[S, F]` の `F` と `S` が異なるため、`ConnectTo` 内の `next.GetSeedChanAny()` に対する `.(chan runtime.Payload[Y])` 型アサーションが失敗する。したがって `Connect` 全体が error を返し、`OrderGraph` には `AddEdge` の記録が残らない。
 
 ## 関連ソース
 
 - `AddPlot` のエラー返却：`pkg/farm/farm.go` の `AddPlot` / `requireRegistered`
 - `Connect` のエラー返却：`pkg/farm/farm.go` の `Connect` / `uniquePlots` / `requireRegistered`
-- 型アサーション：`pkg/plot/plot_base.go` の `basePlot.ConnectTo`
+- 型アサーション：`pkg/plot/plot.go` の `basePlot.ConnectTo`
+- カウントの意味論：`pkg/plot/plot.go` の `GetSeedNum` / `GetFruitNum`（`scarecrow.MetricsWatcher` 経由で読み取る）
 
 ## 実行方法
 
 ```bash
-go test ./pkg/farm/ -run 'TestFarmAdd|TestFarmConnect' -v
+go test ./pkg/farm/ -run 'TestFarmAddPlot|TestFarmConnect' -v
 ```

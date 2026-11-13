@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
@@ -43,7 +43,8 @@
 - 期待：
   - `resultsA`（`midA1` / `midA2` が共同で収集）は 50 個の異なる値を含み、各値のカウントが 2 である（`midA1` と `midA2` からそれぞれ 1 回ずつ）。
   - `resultsB`（`headB` が収集）は 100 個の異なる値を含み、各元の seed が生む `seed*10+3` と `seed*10+4` がそれぞれ 1 回ずつ現れる。
-- `Farm.SourceNodes` が**2 つ**の source SCC（`{rootA}` と `{rootB1, rootB2}`）を正しく識別し、各 source に対して `Seal()` をトリガーすることを検証する。
+- `SourceNodes` が**各** Source SCC から代表ノードを 1 つ取ることを検証する（`{rootA}`、`{rootB1}`、`{rootB2}` がそれぞれ 1 つの Source SCC となる）。
+- `Farm.Run` がすべての source 代表へ終了シグナルを注入し、2 つのサブグラフがともに正常に終了することを検証する。
 
 ### `TestFarmStructure21FaninDifferentSpeed`
 
@@ -56,17 +57,18 @@
 ## 重要な詳細
 
 - **複数の連結成分**：`TestFarmStructureDisconnectedComponents` は `SourceNodes` が**各々の** Source SCC から 1 つの代表ノードを取ることを間接的にカバーする——これは `Farm.Run` が `rootA`、`rootB1`、`rootB2` のすべてに `Seal()` を送信することを意味する。
-- **fan-out / fan-in のカウント**：`counts[seed]` は `head` の `cultivator` に由来し、並行に呼び出されるため、テストでは `sync.Mutex` で保護する。
-- **失敗のルーティング**：`basePlot.witherSeed` は失敗を記録するだけで、下流へは転送しない。`head` が受信する fruit 数と `midA.GetFruitNum() + midB.GetFruitNum()` は厳密に等しく、このアサーションは `TestFarmStructure121PartialFailure` で検証される。
+- **fan-out / fan-in のカウント**：`counts[seed]` は `head` の `cultivator` に由来し、並行に呼び出されるため、テストでは `sync.Mutex` で保護する；`GetSeedNum` / `GetFruitNum` / `GetWeedNum` は `MetricsWatcher` の集計結果を読み取る。
+- **失敗のルーティング**：`basePlot.witherSeed` は失敗を記録して `SeedWitherEvent` を発するだけで、下流へは転送しない；`head` が受信する fruit 数と `midA.GetFruitNum() + midB.GetFruitNum()` は厳密に等しく、このアサーションは `TestFarmStructure121PartialFailure` で検証される。
 - **チャネル設定**：`WithChanSize` は `TestFarmStructure21FaninDifferentSpeed` で明示的に大きくし、遅い source が速い source の書き込みをブロックすることを避ける。
+- **実行エントリ**：4 つのケースはいずれも `Run(inputs, "INFO")` を呼ぶため、`InjectTasks` と `InjectTerminations(sourceNodes)` のデフォルトのバッチ処理経路を同時にカバーする。
 
 ## 関連ソース
 
-- `pkg/farm/farm.go`：`Run`、`SourceNodes`、`AddPlot`、`Connect`
+- `pkg/farm/farm.go`：`Run` / `start` / `AddPlot` / `Connect` / `InjectTasks` / `InjectTerminations`
 - `pkg/farm/graph.go`：`SourceNodes`、`TarjanSCC`
-- `pkg/plot/plot_base.go`：`GetState` / `sprout` / `tend` / `witherSeed`
-- `pkg/plot/plot.go`：`Plot.ripenSeed`
-- `pkg/plot/counter.go`：`GetSeedNum` / `GetFruitNum` / `GetWeedNum`
+- `pkg/plot/plot.go`：`GetState` / `sprout` / `tend` / `witherSeed` / `GetSeedNum` / `GetFruitNum` / `GetWeedNum`
+- `pkg/plot/plot_single.go`：`SinglePlot.ripenSeed`
+- `pkg/scarecrow/metrics.go`：`MetricsWatcher`
 
 ## 実行方法
 

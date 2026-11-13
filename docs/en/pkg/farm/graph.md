@@ -1,6 +1,6 @@
 # pkg/farm/graph.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
@@ -98,7 +98,7 @@ flowchart LR
     C -->|SourceNodes| SN[SourceNodes:<br/>a]
 ```
 
-`SourceNodes` is used in `Farm.Run` to decide which plots need `Seal()`. Only one representative is taken per Source SCC, avoiding repeated seals on a strongly connected cycle.
+`SourceNodes` is called before `Farm.Run` / `Farm.Start` begins, and the result is stored in `Farm.sourceNodes` to decide which plots receive termination signals for automatic termination by `Run` and for the injection-failure fallback. Only one representative is taken per Source SCC, avoiding repeated seals on a strongly connected cycle.
 
 ### Node level computation
 
@@ -157,6 +157,6 @@ fmt.Println(farm.SourceSCCs(g)) // [[a b]]
 
 ## Notes
 
-- **Graph analysis only, no scheduling**: `OrderGraph` is unaware of any runtime state (such as `Plot`'s `GetState`); all scheduling is driven by `Farm.Run`.
+- **Graph analysis only, no scheduling**: `OrderGraph` is unaware of any runtime state (such as `PlotNode`'s `GetState`); all scheduling is driven by `Farm.Run` / `Farm.Start`.
 - **Test coverage**: `pkg/farm/graph_test.go` covers basic CRUD, adjacency order stability, TopoSort, ComputeNodeLevels, Tarjan SCC and condensation graph naming. See `graph_test.md` for details.
 - **Not thread-safe**: to read the graph from multiple goroutines, lock externally or obtain deep copies via `OutEdges` / `InEdges` first and then use them concurrently.

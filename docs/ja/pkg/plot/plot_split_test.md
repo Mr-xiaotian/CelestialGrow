@@ -1,6 +1,6 @@
 # pkg/plot/plot_split_test.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 `plot_split_test.go` は `SplitPlot` の**結果スナップショット**テストであり、ケースは 1 つだけです。分割ノードが standalone でバッチ実行した後、各 seed を**1 件の** `ripen` として記録し、分割結果のスライス全体を `FruitJSON` に永続化することを検証します —— 「0 個の要素に分割する」境界ケースも含みます。
 
@@ -20,6 +20,7 @@
   ```
 - **設定**：`plot.NewSplitPlot("split_harvest", splitter, plot.WithTenders(2))`
 - **seeds**：`[]int{0, 2}`
+- **実行**：`split.Run([]int{0, 2}, "INFO")`
 
 検証：
 
@@ -29,7 +30,7 @@
    - `index["2"]`（`seed = 2` → `["2-0","2-1"]`）：`Status == "ripen"`、`FruitJSON == "[\"2-0\",\"2-1\"]"` です。
 
 > カバーのポイント：
-> 1. 分割で生成される要素数は 0 でもよく、その場合でも `ripen` を 1 件記録します（`AddFruitNum(1)` は `len(fruits)` とは無関係です）。
+> 1. 分割で生成される要素数は 0 でもよく、その場合でも `ripen` を 1 件記録します（成功カウントは `len(fruits)` とは無関係です）。
 > 2. スライス全体（個々の要素ではなく）が 1 回の成功結果として記録されます。
 
 ## 共通の前提条件
@@ -39,7 +40,7 @@
   - `mustHarvest(t *testing.T, plot harvestable)`：`Harvest()` をラップし、エラー時に `t.Fatalf` を呼びます。`harvestable` はテスト内で定義されたローカルインターフェース `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }` です。
   - `indexStatusesBySeed(records)`：`record.SeedJSON` を key としてインデックスを作成します。
 - 本ケースはどの下流も**接続していません**：`split.yieldChans` は空であり、`ripenSeed` の下流への配信ループは実行されません。`Run` は末尾の `Seal()` が入力のクローズを引き起こした後に正常に終了処理を行います。
-- したがって本ケースは「分割で生成された各要素が 1 つの下流 yield になる」ことや `AddDownstreamYieldNum(len(fruits))` のカウント効果を**検証しません** —— その部分は `pkg/farm` の `farm_split_test.go` がカバーします。
+- したがって本ケースは「分割で生成された各要素が 1 つの下流 yield になる」ことや下流の `InputTotal` の増加を**検証しません** —— その部分は `pkg/farm` の関連テストがカバーします。
 
 ## 実行方法
 

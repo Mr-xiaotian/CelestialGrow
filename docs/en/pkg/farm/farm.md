@@ -1,19 +1,19 @@
 # pkg/farm/farm.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
-The `farm` package is CelestialGrow's "graph-level" scheduler, and `farm.go` provides the `Farm` type, responsible for organizing multiple `plot.PlotNode` nodes into a static directed graph and handling:
+The `farm` package is CelestialGrow's "graph-level" scheduler. `farm.go` provides the `Farm` type, which organizes multiple `plot.PlotNode` nodes into a static directed graph and handles:
 
 - node registration and name uniqueness validation
-- group-to-group (hyper-edge) fully connected edge creation
-- global log / lifecycle spout startup and inlet binding
-- rendering the graph structure before running (`getStructureList` → `RenderStructureList`) into the farm startup log
-- unified source node detection, initial seed injection and sealing
-- waiting for all plots to finish and cleaning up spouts
+- group-to-group (hyper-edge) style fully connected edge creation
+- Farm-level watcher registration, receiving both Farm events and all Plot events through a **hierarchical Hub**
+- runtime resource assembly (`assembly.StartFarmResources` uniformly creates / starts / reclaims log and lifecycle watchers)
+- rendering the graph structure before running (`getStructureList` → `RenderStructureList`) into `FarmStartEvent`
+- source node detection (`SourceNodes`), initial seed injection, termination signal injection, and waiting for exit
 
-`Farm` only manages the orchestration layer and does not care about the generic seed / fruit types of `Plot` — this is erased through the `plot.PlotNode` interface. Internally, `Farm` uses the `OrderGraph` in the same directory to maintain topology information; see [`graph.md`](./graph.md) for details.
+`Farm` only manages the orchestration layer and does not care about a Plot's generic seed / fruit types — this is erased by the `plot.PlotNode` interface. The graph algorithms themselves live in `graph.go` and structure rendering in `render.go` in the same directory; see [`graph.md`](./graph.md) and [`render.md`](./render.md) for details.
 
 ## Core Objects
 
@@ -27,56 +27,68 @@ type Farm struct {
     *OrderGraph
 
     eventClient runtime.EventClient
-
-    logSpout       *funnel.Spout[persist.LogRecord]
-    lifecycleSpout *funnel.Spout[persist.LifecycleRecord]
-    logInlet       *persist.LogInlet
-    lifecycleInlet *persist.LifecycleInlet
+    hub         *scarecrow.Hub
 }
 ```
 
 | Field | Purpose |
 | --- | --- |
-| `name` | The Farm name, used as the farm identifier in logs |
+| `name` | The Farm name, written into `FarmStartEvent` / `FarmEndEvent` and logs |
 | `plots` | The node table indexed by plot name, used for registration validation and lookup |
-| `sourceNodes` | The "source node representatives" computed once during `Run`, one per Source SCC |
+| `sourceNodes` | The "source node representatives" computed once when `Run` / `Start` begins, one per Source SCC |
 | `*OrderGraph` | The embedded directed graph recording the edges between plots, used for topology and SCC analysis |
 | `eventClient` | The shared runtime event client, injected into each plot through `AddPlot` |
-| `logSpout` / `lifecycleSpout` | The global log / lifecycle message spouts, started uniformly during `Run` |
-| `logInlet` / `lifecycleInlet` | The farm-side inlet handles, used only for the `FarmStart` (including graph structure) / `FarmEnd` package-level logs |
+| `hub` | The Farm-level watcher Hub; it is also the nested Hub registered into each Plot |
+
+> `Farm` no longer holds spout / inlet / persist watchers. All runtime resources are assembled by `pkg/assembly`, and Farm exposes only one Hub.
 
 ### The `PlotNode` interface contract
 
-`Farm` is decoupled from the concrete `Plot[S, F]` through the `plot.PlotNode` interface. That interface is defined in `pkg/plot/plot_base.go`; `Farm` calls the following methods:
+`Farm` is decoupled from concrete nodes through the `plot.PlotNode` interface. That interface is defined in `pkg/plot/plot.go`, and `Farm` actually calls the following methods:
 
 | Method | Purpose |
 | --- | --- |
 | `GetName() string` | Unique identifier and edge matching |
 | `GetState() int32` | Reads the node state (`0=idle` / `1=running` / `2=done`) |
 | `GetSeedChanAny() any` | Exposes `seedChan` as `any`, for upstream `ConnectTo` to type-assert |
-| `ConnectTo(next PlotNode) error` | Validates type compatibility, registers the downstream yield channel, and wires the yield counters in both directions; returns an error on type mismatch |
-| `SetUpstreamYieldCounter(name string, yieldCounter *atomic.Int64)` | Registers the upstream name + yield counter, used for `GetSeedNum` aggregation and seal waiting |
-| `BindInlet(logChan, lifecycleChan)` | Binds the global spout channels during `Run` |
+| `ConnectTo(next PlotNode) error` | Validates type compatibility, registers the downstream yield channel and the upstream name; returns an error on type mismatch |
+| `AddUpstream(name string)` | Called by upstream `ConnectTo`, registers the upstream name for seal aggregation |
+| `AddWatcher(listener scarecrow.Watcher) error` | Registers a watcher; Farm registers its Farm Hub here at startup |
 | `SetEventClient(runtime.EventClient)` | Injects the same event client uniformly during `AddPlot` |
 | `StartAsync()` / `WaitAsync()` | Asynchronous lifecycle control |
-| `SeedAny(seed any) error` | Injects initial seeds per `inputs` during `Run` |
-| `Seal()` | Sends `SignalSeal` to each source during `Run` |
-
-> The bidirectional wiring of yield counters is already encapsulated in `ConnectTo` (the upstream writes `downstreamYields`, the downstream writes `upstreamYields`), so `Farm.Connect` no longer registers them separately. For details of the interface and implementation, see the `pkg/plot` documentation.
+| `SeedAny(seed any) error` | Injects an initial seed (called once per seed by `InjectTasks`) |
+| `Seal()` | Injects an external termination signal (called by `InjectTerminations`) |
 
 ## Public Symbols
 
 | Symbol | Signature | Purpose |
 | --- | --- | --- |
-| `NewFarm` | `func NewFarm(name, logLevel string) *Farm` | Constructs a Farm and creates the two global spouts and inlets |
+| `NewFarm` | `func NewFarm(name string) *Farm` | Constructs a Farm: initializes the plot table, an empty graph, a local event client and an empty Hub |
 | `PlotCount` | `func (f *Farm) PlotCount() int` | Returns the number of registered plots |
 | `HasPlot` | `func (f *Farm) HasPlot(name string) bool` | Reports whether the named plot is registered |
-| `GetPlot` | `func (f *Farm) GetPlot(name string) (plot.PlotNode, bool)` | Gets a plot by name; ok indicates whether it exists |
+| `GetPlot` | `func (f *Farm) GetPlot(name string) (plot.PlotNode, bool)` | Gets a plot by name; `ok` indicates whether it exists |
 | `AddPlot` | `func (f *Farm) AddPlot(plots ...plot.PlotNode) error` | Registers one or more plots, requiring non-nil, non-empty and unique names |
-| `Connect` | `func (f *Farm) Connect(fromPlots, toPlots []plot.PlotNode) error` | Creates Cartesian-product connections between the source group and the target group |
-| `Run` | `func (f *Farm) Run(inputs map[string][]any) error` | Runs the whole graph synchronously, waiting for all plots to finish |
+| `Connect` | `func (f *Farm) Connect(fromPlots, toPlots []plot.PlotNode) error` | Creates Cartesian-product style connections between the source group and the target group |
+| `AddWatcher` | `func (f *Farm) AddWatcher(watcher scarecrow.Watcher) error` | Registers a Farm-level watcher (receives both Farm and Plot events) |
+| `Run` | `func (f *Farm) Run(inputs map[string][]any, logLevel string) error` | Runs synchronously: start → inject seeds → seal sources → wait for exit |
+| `Start` | `func (f *Farm) Start(logLevel string) error` | Runs synchronously without any injection, driven externally |
+| `InjectTasks` | `func (f *Farm) InjectTasks(tasks map[string][]any) error` | Injects seeds into the given Plots; may be called at runtime |
+| `InjectTerminations` | `func (f *Farm) InjectTerminations(nodes []string) error` | Injects termination signals into the given Plots; may be called at runtime |
 
-> `Farm` has no method such as `SetLogLevel`: the log level is injected into the global `LogInlet` through the `logLevel` parameter at `NewFarm` time and cannot be changed at runtime.
+### Semantic differences between `Run` / `Start` / `Inject*`
+
+| Method | Starts Plots | Injects seeds | Injects termination signals | Blocks | Typical scenario |
+| --- | :---: | :---: | :---: | :---: | --- |
+| `Run(inputs, logLevel)` | ✅ | ✅ `inputs` | ✅ `sourceNodes` | Yes | One-shot batch processing |
+| `Start(logLevel)` | ✅ | ❌ | ❌ | Yes | External driving (e.g. reporter, interactive injection) |
+| `InjectTasks(tasks)` | ❌ | ✅ `tasks` | ❌ | No | Appending seeds at runtime |
+| `InjectTerminations(nodes)` | ❌ | ❌ | ✅ `nodes` | No | Terminating the given Plots at runtime |
+
+- `Run` = `validateRunInputs` + `start(logLevel, prepare)`, where `prepare` executes `InjectTasks(inputs)` and then `InjectTerminations(f.sourceNodes)`.
+- `Start` performs no input validation and calls `start(logLevel, nil)` directly; **`Start` will not return if no external termination signal is ever injected**.
+- `InjectTasks` / `InjectTerminations` only operate on registered Plots; they do not trigger resource assembly and do not change `sourceNodes`.
+
+> The log level is no longer decided by `NewFarm`: `logLevel` is a parameter of every run (`Run` / `Start`), and an empty string is treated as `INFO`.
 
 ## Key Flows
 
@@ -85,117 +97,187 @@ type Farm struct {
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as User
+    participant U as Caller
     participant F as Farm
+    participant A as assembly
+    participant H as Farm Hub
     participant P as PlotNode
-    participant G as OrderGraph
-    participant S as Spout/Inlet
 
-    U->>F: NewFarm(name, logLevel)
-    Note over F: create logSpout / lifecycleSpout /<br/>logInlet / lifecycleInlet
+    U->>F: NewFarm(name)
+    Note over F: initialize plots table / OrderGraph / Hub
 
     U->>F: AddPlot(p1, p2, ...)
     loop each plot
         F->>F: validate non-nil / non-empty / unique name
-        F->>G: AddNode(name)
+        F->>F: AddNode(name)
         F->>P: SetEventClient(eventClient)
     end
 
     U->>F: Connect(froms, tos)
-    Note over F: uniquePlots dedup
-    F->>F: requireRegistered(froms)
-    F->>F: requireRegistered(tos)
+    F->>F: uniquePlots dedup + nil filtering
+    F->>F: requireRegistered(froms / tos)
     loop from × to Cartesian product
         F->>P: from.ConnectTo(to)
-        Note over P: register yieldChans +<br/>bidirectional yield counters
-        F->>G: AddEdge(from, to)
+        Note over P: register yieldChans and upstreams
+        F->>F: AddEdge(from, to)
     end
 
-    U->>F: Run(inputs)
+    U->>F: Run(inputs, logLevel)
     F->>F: validateRunInputs(inputs)
-    F->>G: SourceNodes(OrderGraph) → sourceNodes
-    F->>S: logSpout.Start() / lifecycleSpout.Start()
-    F->>F: logInlet.FarmStart(name, structureList)
+    F->>F: sourceNodes = SourceNodes(OrderGraph)
+    F->>A: StartFarmResources(F.hub, logLevel)
+    A->>H: AddWatcher(Metrics / Lifecycle / Log)
+    F->>H: emit(FarmStartEvent)
     loop each plot
-        F->>P: BindInlet(logSpout, lifecycleSpout)
+        F->>P: AddWatcher(F.hub)
     end
     loop each plot
         F->>P: StartAsync()
     end
-    loop each seed of inputs[name]
-        F->>P: plot.SeedAny(seed)
-    end
-    loop each source node
-        F->>P: plots[source].Seal()
-    end
+    F->>F: InjectTasks(inputs)
+    F->>F: InjectTerminations(sourceNodes)
+    Note over F: injection failed → fallback InjectTerminations(sourceNodes)
     loop each plot
         F->>P: WaitAsync()
     end
-    F->>F: logInlet.FarmEnd(name, duration)
-    F->>S: lifecycleSpout.Stop() / logSpout.Stop()
+    F->>H: emit(FarmEndEvent)
+    F->>A: resources.Stop()
 ```
 
-### `AddPlot` error return points
+### Internal `start` flow (shared by `Run` / `Start`)
+
+1. Records `startTime`.
+2. `assembly.StartFarmResources(f.hub, logLevel)` assembles the runtime resources: it creates `MetricsWatcher`, `LifecycleWatcher` and `LogWatcher`, and registers them into the Farm Hub after startup. On failure it returns immediately, before any Plot has been started.
+3. `defer resources.Stop()`: stops and flushes when the run ends.
+4. Emits `scarecrow.FarmStartEvent`, containing `Farm`, `IsDAG`, `Plots`, `Edges`, `SourcePlots`, `Structure`, `StartTime`.
+5. `defer` emits `scarecrow.FarmEndEvent` (`Elapsed` is `time.Since(startTime)`).
+6. For each plot, calls `plot.AddWatcher(f.hub)` — **the Farm Hub is registered into every Plot as a nested Hub**.
+7. For each plot, calls `StartAsync()`.
+8. Calls `prepare()` (the injection logic for `Run`, `nil` for `Start`).
+9. If `prepare` returns an error, still performs one `InjectTerminations(f.sourceNodes)` as a fallback (ignoring its error), so the graph does not wait forever for a termination signal that will never arrive.
+10. For each plot, calls `WaitAsync()`, and returns `prepareErr` after all of them have exited.
+
+> `start` returns only assembly errors or injection errors; cultivation failures inside a Plot enter the watcher system as `SeedWitherEvent` and will not make `Run` / `Start` return an error.
+
+### Hierarchical Hub dispatch
+
+```mermaid
+flowchart LR
+    subgraph PlotHub[Plot internal Hub]
+        PE[Plot.emit] --> PH[hub]
+    end
+    PH -->|registered via AddWatcher| FH[Farm Hub]
+    FH --> M[MetricsWatcher]
+    FH --> L[LifecycleWatcher]
+    FH --> G[LogWatcher]
+    FH --> W[user AddWatcher]
+    FE[Farm.emit] --> FH
+
+    style FH fill:#eef
+```
+
+- Plot events (`PlotStart`, `SeedRipen`, etc.) are dispatched by the Plot's own Hub to registered watchers; the Farm Hub is one of them, so they continue to propagate upward.
+- Farm events (`FarmStartEvent` / `FarmEndEvent`) go directly into the Farm Hub and are **not** dispatched down to Plots.
+- `scarecrow.Find` can look up watchers along nested Hubs; this is exactly how `plot.Harvest()` finds `LifecycleWatcher` on the Plot Hub → Farm Hub chain.
+- The copy-on-write semantics of `Hub` allow watchers to be appended at runtime, but only for subsequent events; registering the same Hub twice causes duplicate dispatch.
+
+### Computing `sourceNodes`
+
+`Run` and `Start` both execute `f.sourceNodes = SourceNodes(f.OrderGraph)` before starting:
+
+1. `TarjanSCC` computes the strongly connected components;
+2. computes the Source SCCs with in-degree 0 in the condensation graph (`SourceSCCs`);
+3. takes `scc[0]` of each Source SCC as its representative node (`SourceNodes`).
+
+This way, even if a source lies inside a strongly connected cycle, only one representative node receives the termination signal, avoiding duplicate seals. Isolated nodes (added by `AddPlot` but never connected) also become Source SCCs, so they receive termination signals too.
+
+## Error Scenarios
+
+### `AddPlot`
 
 - Any plot is `nil` → `plot is nil`
 - The name is empty → `plot name cannot be empty`
 - The name is duplicated → `plot %q already exists`
 
-Note: `AddPlot` returns as soon as it encounters the first error while iterating, and nodes already successfully added to `f.plots` and the graph are **not** rolled back.
+The first error is returned immediately; plots already added successfully are **not rolled back**.
 
-### `Connect` error return points
+### `Connect`
 
-- `fromPlots` / `toPlots` is empty after overall deduplication → `from plots cannot be empty` / `to plots cannot be empty`
-- Any plot is not registered in the farm → `plot %q is not registered in farm`
-- A `from → to` pair fails the type assertion in `from.ConnectTo(to)` → the error from `plot.ConnectTo` is passed through
+- `fromPlots` is empty after deduplication → `from plots cannot be empty`
+- `toPlots` is empty after deduplication → `to plots cannot be empty`
+- Any plot is `nil` or unregistered → `plot is nil` / `plot %q is not registered in farm`
+- The type assertion in `from.ConnectTo(to)` fails → passes through `plot %q yield type is incompatible with plot %q seed type`
 
-> ⚠️ **Partial failure is not undone**: `Connect` returns immediately once the inner loop fails. Already established connections (`ConnectTo` has already written the upstream `yieldChans` and registered the yield counters bidirectionally, and the graph has `AddEdge`) are kept; a later `Connect` will have duplicate edges ignored at the graph level, but the `yieldChans` inside `PlotNode` will keep the old mappings. To start over, create a new `Farm`.
+> ⚠️ **Partial failure is not undone**: once the inner loop fails, `Connect` returns immediately and connections already established (`yieldChans`, `upstreams`, graph edges) are kept. On a later `Connect`, duplicate edges are ignored at the graph level, but the mappings inside Plots keep the old state.
 
-### `Run` error return points
+### `AddWatcher`
 
-- `inputs` contains an unregistered plot → `plot %q is not registered in farm`
-- A `SeedAny` type assertion fails → the error is passed through (at this point some plots have already `StartAsync`ed, and the caller must ensure the graph state is suitable for a retry)
+- `watcher` is `nil` → `scarecrow: cannot add nil listener`
+- Would create a Hub cycle → `scarecrow: cyclic hub registration rejected: ...` / `scarecrow: cannot add a hub to itself`
+
+### `Run`
+
+| Stage | Error source | Description |
+| --- | --- | --- |
+| Validation | `validateRunInputs` | An unregistered plot appears in `inputs` → `plot %q is not registered in farm`; at this point **no Plot has been started** |
+| Assembly | `assembly.StartFarmResources` | Hub is nil, watcher startup fails, etc.; Plots have not been started yet |
+| Registration | `plot.AddWatcher(f.hub)` | Hub cycle or nil watcher; returns before `StartAsync` |
+| Injection | `InjectTasks` | Unregistered plot, `SeedAny` type assertion failure (`plot %q seed type mismatch: got %T`) |
+| Injection | `InjectTerminations` | Unregistered plot |
+| Wait | `WaitAsync` | Does not return an error |
+
+### `InjectTasks`
+
+- First runs `validateRunInputs` on all keys: if any target is unregistered → returns an error and **injects no seed at all**.
+- Then calls `SeedAny` for each seed in map iteration order; if one seed has a mismatched type, it returns immediately and seeds already injected **cannot be withdrawn**.
+
+### `InjectTerminations`
+
+- First validates that all names are registered; if any is unregistered → returns an error and **injects no termination signal at all**.
+- After validation passes, calls `Seal()` one by one to inject external termination signals (`Source == "__input__"`), with strong termination semantics: it no longer waits for upstream seals that have not yet arrived.
+- After a termination signal is injected into a Plot, any seed later injected into it will not be processed.
 
 ## Important Details
 
 ### Group-to-group Cartesian product
 
-`Connect(froms, tos)` first performs `uniquePlots` deduplication + `nil` filtering on both sides, then creates `len(froms) × len(tos)` edges. For example:
+`Connect(froms, tos)` first applies `uniquePlots` (deduplication + `nil` filtering) to both sides, then creates `len(froms) × len(tos)` edges:
 
 ```go
 farm.Connect([]plot.PlotNode{root}, []plot.PlotNode{midA, midB})
 // 等价于 root → midA 与 root → midB 两条独立边
 ```
 
-Note: only nodes appearing in the "source group" are connected to every node in the "target group". `midA` and `midB` are not connected to each other.
+Edges are created only between the source group and the target group; nodes inside the same group are not connected to each other.
 
-### Source node sealing
+### Termination fallback on injection failure
 
-`Run` computes the representative node of each Source SCC via `SourceNodes(OrderGraph)` and calls `Seal()` on it. `Seal()` sends `SignalSeal` with `Source == sourceInput` (i.e. `__input__`), which triggers "forced termination" semantics for plots that have upstream connections — it no longer waits for upstream seals that have not yet arrived.
+In `start`, after `prepare()` fails, `InjectTerminations(f.sourceNodes)` is still called:
 
-### Concurrency control
+- avoiding `WaitAsync` blocking forever on a graph that has no termination signal;
+- the fallback error is explicitly ignored (`_ =`), and the returned value is still the original `prepareErr`;
+- the fallback only terminates `sourceNodes`; downstream nodes exit through the normal propagation path after receiving the seal signal.
 
-- `Run` is a **synchronous** call: it calls `StartAsync` in turn and then waits for all plots to exit through `WaitAsync`.
-- `StartAsync` uses `sync.WaitGroup.Go` (the new Go 1.25 style) to start each plot's `sprout` scheduler.
-- The global `logSpout` / `lifecycleSpout` both have capacity 100 and a flush interval of `1s`, stopped in `defer` order at the end of `Run`.
+### Events and logs
 
-### Graph structure rendering
-
-Before writing the startup log, `Run` calls `getStructureList()`: it passes `Nodes()`, `OutEdges()` and the `sourceNodes` computed for this run to `RenderStructureList`, which renders them into a list of framed tree text lines, then hands them to `logInlet.FarmStart` for line-by-line output. For rendering rules and algorithms, see [`render.md`](./render.md).
-
-> `sourceNodes` is computed in `Run` before `logInlet.FarmStart`, so the rendered structure matches the set of nodes actually sealed.
-
-### Collaboration with `pkg/persist`
-
-During `Run`, `Farm` writes "farm-level" run summaries through `logInlet.FarmStart(name, structureList)` / `FarmEnd(name, duration)`, where `structureList` is the rendering result from the previous section; each plot still writes its own `PlotStart` / `PlotEnd` / `SeedInput` / `SeedRipen` / `SeedWither` / `SeedReplant` records through the inlet it received from `BindInlet`.
+- `Farm` emits only two events: `FarmStartEvent` and `FarmEndEvent`, defined in `pkg/scarecrow/event.go`.
+- The `Structure` field comes from `getStructureList()`, i.e. `RenderStructureList(f.Nodes(), f.OutEdges(), f.sourceNodes)`.
+- `persist.LogWatcher` outputs the structure line by line when consuming `FarmStartEvent`, and outputs the elapsed time when consuming `FarmEndEvent`.
+- `Farm` itself does not write to the database; lifecycle and log persistence are all handled by the watchers registered by `assembly`.
 
 ### Collaboration with `pkg/runtime`
 
-`eventClient` is injected during `AddPlot`, and all plots share the same event ID namespace, guaranteeing that the cross-plot seed → fruit → seal event ID chain is traceable. `Farm` itself does not emit events directly.
+`eventClient` is injected during `AddPlot`, and all plots share the same event ID namespace, guaranteeing that the cross-plot seed → fruit → seal event chain is traceable.
 
-## Usage Example
+### Concurrency control
 
-The example below corresponds to the farm mode in the README, showing only the version that uses `pkg/farm` directly (real projects are advised to go through `pkg/api`):
+- `Run` / `Start` are **synchronous** calls: they call `StartAsync` in turn and then wait for all plots to exit through `WaitAsync`.
+- `StartAsync` uses `sync.WaitGroup.Go` (the Go 1.25 style) internally to start each plot's `sprout` scheduler.
+- `InjectTasks` / `InjectTerminations` are designed to be called by other goroutines while `Start` is blocking; the `plots` table of `Farm` itself is not locked, so **the registration / connection phase must not be concurrent with the running phase**.
+
+## Usage Examples
+
+### Batch processing: `Run`
 
 ```go
 package main
@@ -208,15 +290,15 @@ import (
 )
 
 func main() {
-    double := plot.NewPlot("double", func(seed int) (int, error) {
+    double := plot.NewSinglePlot("double", func(seed int) (int, error) {
         return seed * 2, nil
     }, plot.WithTenders(2))
 
-    format := plot.NewPlot("format", func(seed int) (string, error) {
+    format := plot.NewSinglePlot("format", func(seed int) (string, error) {
         return fmt.Sprintf("result=%d", seed), nil
     })
 
-    f := farm.NewFarm("demo_farm", "INFO")
+    f := farm.NewFarm("demo_farm")
     if err := f.AddPlot(double, format); err != nil {
         panic(err)
     }
@@ -226,15 +308,85 @@ func main() {
 
     if err := f.Run(map[string][]any{
         "double": {1, 2, 3, 4},
-    }); err != nil {
+    }, "INFO"); err != nil {
         panic(err)
     }
 }
 ```
 
+### Externally driven: `Start` + `InjectTasks` / `InjectTerminations`
+
+```go
+package main
+
+import (
+    "fmt"
+
+    "github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
+    "github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
+    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
+)
+
+func main() {
+    root := plot.NewSinglePlot("root", func(seed int) (int, error) {
+        return seed * 2, nil
+    }, plot.WithTenders(2), plot.WithChanSize(8))
+
+    f := farm.NewFarm("external_driven")
+    if err := f.AddPlot(root); err != nil {
+        panic(err)
+    }
+
+    if err := f.AddWatcher(scarecrow.WatcherFunc(func(event scarecrow.Event) error {
+        switch ev := event.(type) {
+        case scarecrow.PlotStartEvent:
+            fmt.Println("plot started:", ev.Plot)
+        case scarecrow.FarmEndEvent:
+            fmt.Println("farm done in", ev.Elapsed)
+        }
+        return nil
+    })); err != nil {
+        panic(err)
+    }
+
+    go func() {
+        for i := 0; i < 3; i++ {
+            if err := f.InjectTasks(map[string][]any{"root": {i}}); err != nil {
+                panic(err)
+            }
+        }
+        if err := f.InjectTerminations([]string{"root"}); err != nil {
+            panic(err)
+        }
+    }()
+
+    if err := f.Start("INFO"); err != nil {
+        panic(err)
+    }
+}
+```
+
+> `Start` blocks until all Plots exit; you must ensure that some external goroutine (or signal handling logic) eventually calls `InjectTerminations`, otherwise the call will never return.
+
+### Reading results after the run ends
+
+```go
+records, err := root.Harvest()
+if err != nil {
+    panic(err)
+}
+for _, record := range records {
+    fmt.Println(record.Status) // e.g. ripen
+}
+```
+
+`Harvest` relies on the Farm Hub already being registered into the Plot Hub, so that it can find `LifecycleWatcher` along the nested Hubs.
+
 ## Notes
 
-- **Test coverage**: `farm_connect_test.go`, `farm_start_test.go`, `farm_structure_test.go`, `farm_route_test.go`, `farm_split_test.go`, `graph_test.go`, and `render_test.go` under `pkg/farm` together cover registration, connection (including type mismatch / hyper-edge / duplicate name), linear `Run` flow, `121` / `21-fanin` / multiple connected components, `RoutePlot` directed routing, `SplitPlot` splitting, graph algorithms, and structure rendering. See the individual test documentation for details.
-- **Synchronization between the graph and nodes**: the `OrderGraph` node set and `f.plots` are not strictly equivalent — `AddNode` is also auto-completed by `AddEdge` during `Connect`. `SourceNodes` in `Run` uses the `OrderGraph` view, so isolated plots (added via `AddPlot` but with no edges) are also treated as sources and receive `Seal()`.
-- **Not re-entrant**: `Run` has no concurrency protection; the same `Farm` instance does not support running `Run` multiple times concurrently, nor calling `AddPlot` / `Connect` while `Run` is in progress.
-- **Error recovery**: after a failed `Run`, some plots may already be started; to rerun, create a new `Farm` instance.
+- **Not re-entrant**: the same `Farm` instance does not support concurrent or repeated `Run` / `Start`. Each `start` registers the Farm Hub into every Plot again, causing duplicate event dispatch; the Plot `state` also stays at `done`.
+- **Injection order**: `InjectTasks` relies on `plots[name]` being registered. Do not modify the registry before runtime injection.
+- **Termination is irreversible**: after `Seal()` the Plot's `sprout` no longer consumes seeds; `InjectTasks` does not report an error, but seeds will only linger in `seedChan`, and once the buffer is full the call blocks.
+- **Graph vs. node set**: nodes in `OrderGraph` may be auto-completed by `AddEdge`, but on the normal path `AddPlot` has registered all nodes; `sourceNodes` uses the graph view rather than the `plots` view.
+- **Log level**: for `logLevel` values see the level table in `pkg/persist`; unknown values are treated as `INFO`.
+- **Test coverage**: `farm_connect_test.go`, `farm_start_test.go`, `farm_structure_test.go`, `farm_route_test.go`, `farm_split_test.go`, `farm_inject_test.go`, `farm_harvest_test.go`, `graph_test.go`, and `render_test.go` cover registration / connection, the linear `Run` flow, non-trivial topologies, routing / splitting, external injection, `Harvest`, graph algorithms and structure rendering.

@@ -1,6 +1,6 @@
 # pkg/farm/farm_route_test.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
@@ -9,7 +9,7 @@
 ## テストの重点
 
 - **有向転送**：同一の上流 seed を `map[string]Y` ルートテーブルの key に従って異なる下流へ振り分ける。
-- **下流の seed カウント**：`left` / `right` の `GetSeedNum` は上流の yield カウンタに由来する（本ケースでは両者ともローカルで種子を播かない）。`ConnectTo` のエッジをまたぐ yield カウントの配線を検証する。
+- **下流の seed カウント**：`left` / `right` の `GetSeedNum` は `MetricsWatcher` による `SeedInputEvent` の累計に由来する（本ケースでは両者ともローカルで種子を播かない）。エッジをまたぐ転送が確かに下流向けの入力イベントを生成したことを検証する。
 - **未接続のターゲットは静かにスキップされる**：未接続の下流へのルーティングは他のルート項目に影響せず、上流もブロックしない。
 - **順序に依存しないアサーション**：並行転送下では下流の受信順序を仮定しない。
 
@@ -24,7 +24,7 @@
 
 - **並行収集のロック**：両方のケースは `sync.Mutex` で下流の `received` map / スライスを保護する。`RoutePlot.ripenSeed` は複数の tender コルーチン上で並行に実行されるためである。
 - **`assertSeeds` ヘルパー関数**：まず実収集の集合をソートしてから項目ごとに比較し、下流の並行受信順序に依存することを避ける。
-- **上流の yield カウントに依存**：`left` / `right` にはローカルの `Seed` がなく、その `GetSeedNum` は完全に上流が `upstreamYieldCounter` に登録したカウンタから寄与される。これは「per-edge の下流 yield カウント」へのリファクタリングに対する直接の回帰テストである。
+- **エッジをまたぐカウントに依存**：`left` / `right` にはローカルの `Seed` がなく、その `GetSeedNum` は完全に上流の転送が生成する `SeedInputEvent` に由来する；これは「Plot イベント → MetricsWatcher」経路への直接の回帰である。
 - **`WithTenders(2)`**：ルートノードと下流はいずれも明示的に 2 つの tender を設定し、並行カバレッジを高める。
 
 ## 関連ソース
@@ -32,8 +32,8 @@
 - `pkg/farm/farm.go` の `Connect` / `Run`
 - `pkg/farm/graph.go` の `SourceNodes` / `AddEdge`
 - `pkg/plot/plot_route.go` の `RoutePlot.ripenSeed`（未接続の下流をスキップする）
-- `pkg/plot/plot_base.go` の `ConnectTo`（yield カウンタの双方向配線）
-- `pkg/plot/counter.go` の `GetSeedNum` / `GetFruitNum`
+- `pkg/plot/plot.go` の `ConnectTo`（下流の出力チャネルを登録する）と `GetSeedNum`（指標を読み取る）
+- `pkg/scarecrow/metrics.go` の `MetricsWatcher`（`SeedInputEvent` を集計する）
 
 ## 実行方法
 

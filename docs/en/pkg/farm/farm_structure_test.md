@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
@@ -43,7 +43,8 @@
 - Expectations:
   - `resultsA` (collected jointly by `midA1` / `midA2`) contains 50 distinct values, each counted 2 times (once each from `midA1` and `midA2`).
   - `resultsB` (collected by `headB`) contains 100 distinct values, with `seed*10+3` and `seed*10+4` produced by each original seed appearing once each.
-- Verifies that `Farm.SourceNodes` correctly identifies **two** source SCCs (`{rootA}` and `{rootB1, rootB2}`) and triggers `Seal()` for each source.
+- Verifies that `SourceNodes` can take one representative node from **each** Source SCC (`{rootA}`, `{rootB1}`, `{rootB2}` are each one Source SCC).
+- Verifies that `Farm.Run` injects termination signals into all source representatives, so both subgraphs can finish properly.
 
 ### `TestFarmStructure21FaninDifferentSpeed`
 
@@ -56,17 +57,18 @@
 ## Key Details
 
 - **Multiple connected components**: `TestFarmStructureDisconnectedComponents` indirectly covers the fact that `SourceNodes` takes one representative node from **each** Source SCC — meaning `Farm.Run` sends `Seal()` to `rootA`, `rootB1`, and `rootB2`.
-- **fan-out / fan-in counting**: `counts[seed]` comes from `head`'s `cultivator`, which is called concurrently, so the test protects it with a `sync.Mutex`.
-- **Failure routing**: `basePlot.witherSeed` only records the failure and does not forward it downstream; the number of fruits received by `head` is strictly equal to `midA.GetFruitNum() + midB.GetFruitNum()`, and this assertion is verified in `TestFarmStructure121PartialFailure`.
+- **fan-out / fan-in counting**: `counts[seed]` comes from `head`'s `cultivator`, which is called concurrently, so the test protects it with a `sync.Mutex`; `GetSeedNum` / `GetFruitNum` / `GetWeedNum` instead read the aggregated results of `MetricsWatcher`.
+- **Failure routing**: `basePlot.witherSeed` only records the failure and emits `SeedWitherEvent` without forwarding it downstream; the number of fruits received by `head` is strictly equal to `midA.GetFruitNum() + midB.GetFruitNum()`, and this assertion is verified in `TestFarmStructure121PartialFailure`.
 - **Channel configuration**: `WithChanSize` is explicitly enlarged in `TestFarmStructure21FaninDifferentSpeed` to prevent a slow source from blocking writes from a fast source.
+- **Run entry point**: all four cases call `Run(inputs, "INFO")`, so they also cover the default batch path of `InjectTasks` and `InjectTerminations(sourceNodes)`.
 
 ## Related Source
 
-- `pkg/farm/farm.go`: `Run`, `SourceNodes`, `AddPlot`, `Connect`
+- `pkg/farm/farm.go`: `Run` / `start` / `AddPlot` / `Connect` / `InjectTasks` / `InjectTerminations`
 - `pkg/farm/graph.go`: `SourceNodes`, `TarjanSCC`
-- `pkg/plot/plot_base.go`: `GetState` / `sprout` / `tend` / `witherSeed`
-- `pkg/plot/plot.go`: `Plot.ripenSeed`
-- `pkg/plot/counter.go`: `GetSeedNum` / `GetFruitNum` / `GetWeedNum`
+- `pkg/plot/plot.go`: `GetState` / `sprout` / `tend` / `witherSeed` / `GetSeedNum` / `GetFruitNum` / `GetWeedNum`
+- `pkg/plot/plot_single.go`: `SinglePlot.ripenSeed`
+- `pkg/scarecrow/metrics.go`: `MetricsWatcher`
 
 ## How to Run
 

@@ -1,15 +1,15 @@
 # pkg/plot/plot_route.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 `plot_route.go` defines `RoutePlot[S, Y]`: a node that performs **targeted forwarding**. Its `cultivator` returns not a single fruit but a routing table `map[string]Y`, where the key is the target downstream name and the value is the yield to send to that downstream.
 
-Therefore, unlike the "broadcast to all downstreams" behavior of `Plot`, `RoutePlot` can achieve "different downstreams receive different data", and **downstreams that are not routed to receive nothing at all**.
+Therefore, unlike the "broadcast to all downstreams" behavior of `SinglePlot`, `RoutePlot` can achieve "different downstreams receive different data", and **downstreams that are not routed to receive nothing at all**.
 
 ## Role
 
 - Provides the generic node `RoutePlot[S, Y]`: one seed → targeted delivery to a number of downstreams by name.
-- Reuses the shared `basePlot[S, map[string]Y, Y]` skeleton (see `plot_base.md`) and implements only the `ripenSeed` success hook.
+- Reuses the shared `basePlot[S, map[string]Y, Y]` skeleton (see `plot.md`) and implements only the `ripenSeed` success hook.
 - Lets the dispatch policy be decided by a business function rather than by the topology of the graph.
 
 ## Core objects
@@ -39,25 +39,26 @@ Note that the "result type" of this node is `map[string]Y` (the whole routing ta
 | `cultivator` | routing function, returns `map[downstream name]yield` or an error |
 | `opts` | optional configuration (see `option.md`) |
 
-The implementation notes are the same as for `NewPlot`: first declare `var p *RoutePlot[S, Y]`, then build `newBasePlot[S, map[string]Y, Y]` and inject a closure that calls `p.ripenSeed(...)`, and finally assign base to `p`. The `p` captured by the closure is only called after `StartAsync`, so the assignment order is safe.
+The implementation notes are the same as for `NewSinglePlot`: first declare `var p *RoutePlot[S, Y]`, then build `newBasePlot[S, map[string]Y, Y]` and inject a closure that calls `p.ripenSeed(...)`, and finally assign base to `p`. The `p` captured by the closure is only called after `StartAsync`, so the assignment order is safe.
 
 ### `ripenSeed(seedPayload runtime.Payload[S], routes map[string]Y, startTime time.Time)` (unexported)
 
 The success path, called by `basePlot.tend` when the routing function returns a `nil` error:
 
-1. `AddFruitNum(1)`, `reportProgress()`—**no matter how many downstreams are routed to, one seed counts as only 1 fruit**;
-2. `eventClient.Emit("fruit", []int{seedID})` allocates `fruitID`;
-3. Writes `logInlet.SeedRipen` (the routing table truncated to 25 runes) and `lifecycleInlet.SeedRipen` (`FruitJSON` is the JSON of the whole routing table);
-4. Iterates over the routing table `routes`:
+1. `eventClient.Emit("fruit", []int{seedID})` allocates `fruitID`;
+2. Compute the readable representation: the seed is truncated to 50 runes and the routing table to 25 runes (see `helper.md`);
+3. Emit `scarecrow.SeedRipenEvent` (`Fruit` is the whole routing table and `FruitRepr` is its readable representation)—**no matter how many downstreams are routed to, one seed records only 1 `ripen` / 1 success**;
+4. Iterate over the routing table `routes`:
    - `ch, ok := p.yieldChans[nextPlot]`; `!ok` (that target is not connected) → `continue` and skip, without affecting the other routing entries;
-   - `AddDownstreamYieldNum(nextPlot, 1)`—each routed-to downstream gets exactly +1;
    - `eventClient.Emit("seed", []int{fruitID})` allocates the downstream seed event ID (the parent event is `fruitID`);
-   - Writes `logInlet.SeedInput` (the yield truncated to 50 runes) and `lifecycleInlet.SeedInput`;
-   - Sends `runtime.Payload[Y]{Value: yield, EventID: downstreamSeedID}`.
+   - Emit `scarecrow.SeedInputEvent` (`Plot` is the target name, `From` is this node's name, `Seed` is the yield for that target, and `Parents` is `[]int{fruitID}`);
+   - Send `runtime.Payload[Y]{Value: yield, EventID: downstreamSeedID}`.
+
+> Counting semantics: this node's `Succeeded` increases by 1 per success; a downstream's `InputTotal` increases only for targets that **actually receive a yield**, so the metrics naturally agree with the delivery result.
 
 ## Key flows
 
-### Differences from `Plot`
+### Differences from `SinglePlot`
 
 ```mermaid
 flowchart LR
@@ -69,18 +70,18 @@ flowchart LR
     M --> F["1 ripen record<br/>FruitJSON = the whole routing table"]
 ```
 
-| Aspect | `Plot` | `RoutePlot` |
-|--------|--------|-------------|
+| Aspect | `SinglePlot` | `RoutePlot` |
+|--------|--------------|-------------|
 | Result type | `F` | `map[string]Y` |
 | Delivery scope | 1 each to all connected downstreams | Only targets in the routing table that are **connected** |
 | Data each downstream receives | Exactly the same | Can be completely different (each takes its own value from the routing table) |
 | Unconnected targets | Not applicable | Silently skipped |
-| `fruit` count | +1 | +1 |
-| Downstream yield count increment | Every downstream +1 | Every routed-to downstream +1 |
+| Success count | +1 | +1 |
+| Downstream input count increment | Every downstream +1 | Every actually delivered downstream +1 |
 
 ### Empty routing table / `nil`
 
-When `cultivator` returns a `nil` map or an empty map: one `ripen` record is still written (`FruitJSON` is `null` or `{}`), but **no downstream yield is produced**.
+When `cultivator` returns a `nil` map or an empty map: one `ripen` record is still emitted (`FruitJSON` is `null` or `{}`), but **no downstream yield is produced**.
 
 ## Usage examples
 
@@ -106,7 +107,7 @@ func main() {
 		return routes, nil
 	}, plot.WithTenders(2))
 
-	route.Run([]int{1, 2, 3})
+	route.Run([]int{1, 2, 3}, "INFO")
 
 	records, err := route.Harvest()
 	if err != nil {
@@ -121,10 +122,10 @@ func main() {
 ### Per-target dispatch within a Farm
 
 ```go
-f := farm.NewFarm("route_demo", "INFO")
+f := farm.NewFarm("route_demo")
 
-left := plot.NewPlot("left", func(seed string) (string, error) { return "L:" + seed, nil })
-right := plot.NewPlot("right", func(seed string) (string, error) { return "R:" + seed, nil })
+left := plot.NewSinglePlot("left", func(seed string) (string, error) { return "L:" + seed, nil })
+right := plot.NewSinglePlot("right", func(seed string) (string, error) { return "R:" + seed, nil })
 route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 	return map[string]string{"left": fmt.Sprintf("%d", seed)}, nil
 })
@@ -132,15 +133,15 @@ route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 _ = f.AddPlot(route, left, right)
 // 只连 route → left、route → right；路由表中未出现的目标不会收到数据
 _ = f.Connect([]plot.PlotNode{route}, []plot.PlotNode{left, right})
-_ = f.Run(map[string][]any{"route": {1, 2, 3}})
+_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO")
 ```
 
 > Since the `S` of the downstreams `left` / `right` is `string`, the `Y` of `RoutePlot` must also be `string`; otherwise the `Connect` stage reports a type-mismatch error.
 
 ## Notes
 
-- The keys of the routing table must match the `name` of the downstream plots exactly; when a name does not match (or the target was not `Connect`ed), it is **silently skipped**—no error, no log.
+- The keys of the routing table must match the `name` of the downstream plots exactly; when a name does not match (or the target was not `Connect`ed), it is **silently skipped**—no error and no event.
 - The routing table is serialized as a whole into the `FruitJSON` of one `ripen` lifecycle record; if the map content is large, it is recommended to trim it on the business side first.
 - Because `map` iteration order is random, the **order** of delivery to multiple downstreams is nondeterministic; however, each target only ever receives its own single yield.
-- `AddDownstreamYieldNum` is called only for connected targets, so a downstream's `GetSeedNum` matches exactly the number of yields it actually receives.
+- Targets that are not hit receive no `SeedInputEvent`, so their `InputTotal` does not grow and `IsFinish` does not mistakenly think there is still pending input.
 - Do not let `cultivator` mutate and reuse the same map (that races under concurrent `tend` calls); returning a new map each time is the safest.

@@ -1,6 +1,6 @@
 # pkg/farm/graph.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
@@ -98,7 +98,7 @@ flowchart LR
     C -->|SourceNodes| SN[SourceNodes:<br/>a]
 ```
 
-`SourceNodes` は `Farm.Run` において、どの plot が `Seal()` を必要とするかを決めるために用いられる。各 Source SCC からは代表を 1 つだけ取ることで、強連結なサイクル上で seal が重複するのを避ける。
+`SourceNodes` は `Farm.Run` / `Farm.Start` の起動前に呼ばれ、結果は `Farm.sourceNodes` に格納される。これは `Run` の自動終了、および注入失敗時のフォールバックでどの plot へ終了シグナルを送るかを決めるために用いられる。各 Source SCC からは代表を 1 つだけ取ることで、強連結なサイクル上で seal が重複するのを避ける。
 
 ### ノード階層の計算
 
@@ -157,6 +157,6 @@ fmt.Println(farm.SourceSCCs(g)) // [[a b]]
 
 ## 注意事項
 
-- **グラフ分析のみを行い、スケジューリングは行わない**：`OrderGraph` はランタイム状態（`Plot` の `GetState` など）を一切感知せず、すべてのスケジューリングは `Farm.Run` が主導する。
+- **グラフ分析のみを行い、スケジューリングは行わない**：`OrderGraph` はランタイム状態（`PlotNode` の `GetState` など）を一切感知せず、すべてのスケジューリングは `Farm.Run` / `Farm.Start` が主導する。
 - **テストカバレッジ**：`pkg/farm/graph_test.go` は基本的な CRUD、隣接順序の安定性、TopoSort、ComputeNodeLevels、Tarjan SCC と凝縮グラフの命名をカバーする。詳しくは `graph_test.md` を参照。
 - **スレッドセーフではない**：複数のコルーチンでグラフを読む必要がある場合は、外部でロックするか、先に `OutEdges` / `InEdges` でディープコピーを取得してから並行に使用すること。

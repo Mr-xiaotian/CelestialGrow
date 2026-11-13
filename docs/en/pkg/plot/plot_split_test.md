@@ -1,6 +1,6 @@
 # pkg/plot/plot_split_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 `plot_split_test.go` is the **result snapshot** test of `SplitPlot` and has a single case: it verifies that after a standalone batch run the split node records each seed as exactly **one** `ripen` entry and persists the complete slice of split results into `FruitJSON`—including the boundary case of "0 elements split out".
 
@@ -20,6 +20,7 @@
   ```
 - **Configuration**: `plot.NewSplitPlot("split_harvest", splitter, plot.WithTenders(2))`
 - **seeds**: `[]int{0, 2}`
+- **Run**: `split.Run([]int{0, 2}, "INFO")`
 
 Verifies:
 
@@ -29,7 +30,7 @@ Verifies:
    - `index["2"]` (`seed = 2` → `["2-0","2-1"]`): `Status == "ripen"`, `FruitJSON == "[\"2-0\",\"2-1\"]"`.
 
 > Coverage points:
-> 1. The number of split-out elements can be 0, and even then one `ripen` entry is still recorded (`AddFruitNum(1)` is independent of `len(fruits)`);
+> 1. The number of split-out elements can be 0, and even then one `ripen` entry is still recorded (the success count is independent of `len(fruits)`);
 > 2. The entire slice (rather than a single element) is recorded as the result of one success.
 
 ## Common preconditions
@@ -39,7 +40,7 @@ Verifies:
   - `mustHarvest(t *testing.T, plot harvestable)`: wraps `Harvest()` and calls `t.Fatalf` on error; `harvestable` is the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`;
   - `indexStatusesBySeed(records)`: indexes by `record.SeedJSON` as the key.
 - This case connects **no** downstream: `split.yieldChans` is empty, so the downstream delivery loop in `ripenSeed` never executes; `Run` relies on the trailing `Seal()` to trigger input closing before wrapping up normally.
-- Therefore this case does **not** verify that "every split-out element becomes one downstream yield" nor the counting effect of `AddDownstreamYieldNum(len(fruits))`—that part is covered by `farm_split_test.go` in `pkg/farm`.
+- Therefore this case does **not** verify that "every split-out element becomes one downstream yield" nor the growth of the downstream's `InputTotal`—that part is covered by the relevant tests of `pkg/farm`.
 
 ## How to run
 

@@ -1,10 +1,10 @@
 # pkg/farm/render.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
-`render.go` renders `OrderGraph`'s graph structure (node set + out-edge adjacency list + source nodes) into a **list of framed tree text lines** for `Farm.Run` to write into the startup log. It is a purely functional rendering utility that holds no state.
+`render.go` renders `OrderGraph`'s graph structure (node set + out-edge adjacency list + source nodes) into a **list of framed tree text lines**, used to fill `scarecrow.FarmStartEvent.Structure`, which is finally output line by line by the log watcher. It is a purely functional rendering utility that holds no state.
 
 The only call site in `Farm` is `Farm.getStructureList()`:
 
@@ -113,4 +113,5 @@ farm.RenderStructureList(nodes, edges, []string{"c1"})
 
 - **Stateless, pure function**: the same inputs produce the same result; the function does not modify `nodes` / `edges`, nor does it access any global state.
 - **Impact of the unordered node set**: `nodes` usually comes from `OrderGraph.Nodes()` and its order is not guaranteed; therefore within the same build the order among multiple roots and the append order of orphan nodes may be unstable (see [`graph.md`](./graph.md) for details).
+- **Call site**: only `Farm.start` calls `Farm.getStructureList()` before emitting `FarmStartEvent`; that field is consumed only by the log watcher and takes no part in scheduling.
 - **Test coverage**: `pkg/farm/render_test.go` covers basic shapes, exact output, empty graph, cycle `[Ref]`, a 5000-node deep chain, and orphan / source node inference. See `render_test.md` for details.

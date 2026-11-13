@@ -1,12 +1,12 @@
 # pkg/persist/sqlite_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
-`pkg/persist/sqlite_test.go` is the **only** test file in the `pkg/persist` package, and it performs end-to-end verification only for the SQLite storage layer described in [`sqlite.md`](./sqlite.md); it does not touch `LifecycleRecordHandler` / `LifecycleInlet` from [`lifecycle.md`](./lifecycle.md) or the log persistence of [`log.md`](./log.md). All three test functions use `t.TempDir()` to obtain an independent temporary file as the entry point of `OpenLifecycleSQLite`, ensuring that tests do not affect each other and have no side effects.
+`pkg/persist/sqlite_test.go` performs end-to-end verification only for the SQLite storage layer described in [`sqlite.md`](./sqlite.md); it does not touch `LifecycleWatcher` / `LifecycleRecordHandler` from [`lifecycle.md`](./lifecycle.md) (covered by [`lifecycle_test.md`](./lifecycle_test.md)) or the log watcher of [`log.md`](./log.md) (covered by [`log_test.md`](./log_test.md)). All four test functions use `t.TempDir()` to obtain an independent temporary file as the entry point of `OpenLifecycleSQLite`, ensuring that tests do not affect each other and have no side effects.
 
-> The current file has **no** unit tests for the `LifecycleRecordHandler.HandleRecord` routing (`seed` / `ripen` / `wither`) or for `LogInlet` / `LogRecordHandler`; if they are added later, given the single-goroutine scheduling of `pkg/funnel` Spout, they should be driven with an in-memory channel plus a synchronous hand-off.
+> The sibling `lifecycle_test.go` / `log_test.go` verify event translation by injecting a capturing handler and do not touch real files; this file is the only test that actually opens SQLite and validates the schema.
 
 ## Test Coverage Points
 
@@ -14,6 +14,7 @@
 |------|----------|-----------|
 | `TestLifecycleSQLiteEventRoundTrip` | Open DB → write seed + parent edge → read back event and parent edges | The `events` primary key is writable; the many-to-many edges of `event_parents` are writable; `LoadLifecycleEvent` / `LoadLifecycleEventParents` behave symmetrically |
 | `TestLifecycleSQLiteStatusRoundTrip` | Write two events → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusRipen` → read back | The status snapshot can be inserted; promotion only refreshes `current_event_id` / `status` / `fruit_json` / `ts`, preserving `seed_json` and `plot` |
+| `TestLifecycleSQLitePruneStatus` | Write seed + prune events → `UpsertLifecycleStatusSeed` → `PromoteLifecycleStatusPrune` → read back | The `prune` status can be promoted and deserialized, with `Status == "prune"` and `CurrentEventID` pointing at the prune event |
 | `TestLifecycleSQLiteStatusPairs` | Mixed insertion of multiple plots and events → several inserts + one ripen + one wither → query by plot dimension | `LoadLifecycleStatuses` is ascending by `ts, input_event_id`; the `plot` filter is accurate; the `Status` / `SeedJSON` / `FruitJSON` / `WitherType` / `WitherMessage` fields all land correctly |
 
 ## Key Test Details
@@ -27,7 +28,7 @@ if err != nil { t.Fatalf("OpenLifecycleSQLite() error = %v", err) }
 defer db.Close()
 ```
 
-- Each test requests its own `t.TempDir()`, and `lifecycle.sqlite3` is created by SQLite on that side.
+- Each test requests its own `t.TempDir()`, and `lifecycle.sqlite3` is then created by SQLite.
 - `defer db.Close()` closes the database before the test function returns, triggering the WAL flush; `t.TempDir()` is cleaned up automatically after the test, so no manual `os.Remove` is needed.
 - Because `OpenLifecycleSQLite` internally triggers the PRAGMA + schema script, **the test also verifies the connection configuration and the schema creation path**.
 
@@ -60,6 +61,24 @@ loadedStatus, _ := LoadLifecycleStatus(db, 1)
 - It verifies that `PromoteLifecycleStatusRipen` changes **only** `current_event_id` / `status` / `fruit_json` / `ts` and does not break `seed_json` or `plot`.
 - It also verifies that the column order of `LoadLifecycleStatus` corresponds one-to-one with the fields of `LifecycleStatusRecord` (including `WitherType` / `WitherMessage` read out as empty strings).
 
+### `TestLifecycleSQLitePruneStatus`
+
+```go
+InsertLifecycleEvent(db, 1, "seed", "stage_a", 1.0, nil)
+InsertLifecycleEvent(db, 2, "prune", "stage_a", 2.0, []int{1})
+
+UpsertLifecycleStatusSeed(db, 1, `{"value":"alpha"}`, "stage_a", 1.0)
+PromoteLifecycleStatusPrune(db, 1, 2, 2.0)
+
+loadedStatus, _ := LoadLifecycleStatus(db, 1)
+// 断言: CurrentEventID == 2, Status == "prune"
+```
+
+- The preceding events are `{EventID: 1, EventType: "seed", Plot: "stage_a", TS: 1.0}` and `{EventID: 2, EventType: "prune", Plot: "stage_a", TS: 2.0}`.
+- It walks the whole chain from the `seed` snapshot to the `prune` promotion.
+- It verifies that `PromoteLifecycleStatusPrune` refreshes `Status` to `"prune"` and points `current_event_id` at the prune event, without depending on the `fruit_json` / `wither_*` fields (prune records leave both fields at their defaults).
+- This corresponds to the plot-side semantics of "pruning does not call `cultivator`": the storage layer only needs to record that "this seed was skipped", with no fruit or error information.
+
 ### `TestLifecycleSQLiteStatusPairs`
 
 ```go
@@ -84,19 +103,19 @@ statuses, _ := LoadLifecycleStatuses(db, "stage_a")
 ## How to Run
 
 ```bash
-# 运行本包全部测试
+# Run all tests of this package
 go test ./pkg/persist/...
 
-# 仅运行本文件
+# Run only this file
 go test ./pkg/persist -run 'TestLifecycleSQLite'
 
-# 带 -v 查看每个用例的子断言
+# Use -v to see the sub-assertions of each case
 go test ./pkg/persist -run 'TestLifecycleSQLite' -v
 ```
 
 ## Notes
 
-- **Uncovered paths**: the current tests do **not** directly cover the `seed` / `ripen` / `wither` routing of `HandleRecord`, nor do they verify the branch of `LoadStatuses` that reopens by `SQLitePath` when `sqliteDB == nil`. Additional tests can be driven with `pkg/funnel.NewSpout` + `chan LifecycleRecord`.
+- **Uncovered paths**: this file does **not** directly drive the `seed` / `ripen` / `wither` / `prune` routing of `LifecycleRecordHandler.HandleRecord` (event translation is covered by [`lifecycle_test.md`](./lifecycle_test.md)), nor does it verify the empty-path branch of `LoadLifecycleStatusesFromPath` or the `sqliteDB == nil` branch. When adding tests, you can create a database with `t.TempDir()` and call `LoadLifecycleStatusesFromPath` directly.
 - **The `EventType` in the tests differs from the value written by the business code**: the tests use `"fruit"` / `"weed"` as `events.event_type` to build the event graph, while `HandleRecord` in `lifecycle.go` actually writes `"ripen"` / `"wither"`; `events.event_type` has no CHECK constraint, so both pass. The tests only verify the storage layer, not the enumeration, so do not be misled by the literals in this file when changing the event type naming.
 - **Status values follow the `Promote*` functions**: the statuses asserted in the tests are `"ripen"` / `"wither"` (consistent with the hardcoded `status` in `PromoteLifecycleStatusRipen` / `PromoteLifecycleStatusWither`), and the initial snapshot status is `"seed"`.
 - **The tests depend on the SQLite driver**: `go test` resolves `import _ "modernc.org/sqlite"` through `modernc.org/sqlite`, and the driver is already declared in `go.mod` (`v1.57.0`), so no extra preparation is needed.

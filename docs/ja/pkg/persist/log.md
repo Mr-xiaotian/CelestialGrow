@@ -1,16 +1,22 @@
 # pkg/persist/log.go
 
-> 📅 最終更新日: 2026/09/24
+> 📅 最終更新日: 2026/11/13
 
 ## 役割
 
-`pkg/persist/log.go` は **実行ログ** 向けの非同期ディスク書き込みを実装します。業務側は `LogInlet` を通じてレベル付きのログレコードを送信し、`funnel.Spout[LogRecord]` がスケジュールする `LogRecordHandler` が `logs/grow_log(YYYY-MM-DD).log` ファイルへ追記します。`LogInlet` には **最低レベルのしきい値** が組み込まれており、しきい値未満のレコードは黙って破棄されるため、上位の Plot / Farm は高頻度呼び出し時にフィルタリングを気にする必要がありません。
+`pkg/persist/log.go` は `pkg/scarecrow` の実行期イベントをテキストログに変換し、ファイルへ非同期に追記します：
 
-> ログと並行する **ライフサイクルの永続化** は [`lifecycle.md`](./lifecycle.md) / [`sqlite.md`](./sqlite.md) にあります。両者は `pkg/funnel` の Inlet/Spout 抽象を共用しますが、チャネルとファイルは **共用しません**。
+- `LogWatcher` は `scarecrow.Watcher` を実装し、`OnEvent` 内で「イベント → `LogRecord`」のマッピングとレベルフィルタリングを行います。
+- `LogRecordHandler` は `funnel.RecordHandler[LogRecord]` を実装し、記録を 1 行のテキストに整形して `logs/grow_log(YYYY-MM-DD).log` へ書き込みます。
+- 両者は `funnel.Spout` / `funnel.Inlet` で接続され、書き込みはバックグラウンド goroutine で行われるため、業務の実行経路は 1 回のキュー投入コストだけを負担します。
+
+`LogWatcher` はさらに `*scarecrow.MetricsWatcher` を保持します。`PlotEndEvent` の果実／雑草／剪定の件数は指標スナップショットから直接読み取り、自前で計数しません。
+
+> ライフサイクルの永続化は [`lifecycle.md`](./lifecycle.md) / [`sqlite.md`](./sqlite.md) を参照してください。ログと同じく Inlet/Spout 抽象を共有しますが、チャネルとファイルは共有しません。両方は `pkg/assembly` が一括作成し、`scarecrow.Hub` に登録して起動します。
 
 ## 主要オブジェクト
 
-### `LogRecord` — チャネルペイロード
+### `LogRecord` — キューのペイロード
 
 ```go
 type LogRecord struct {
@@ -22,11 +28,11 @@ type LogRecord struct {
 
 | フィールド | 説明 |
 |------|------|
-| `FormatTime` | `LogInlet` が送信時に `time.Now().Format("2006-01-02 15:04:05")` で生成する。ファイルへの書き込み時には `Level` / `Message` と半角スペース 1 つで連結して 1 行にする |
-| `Level` | ログレベルの文字列（`TRACE` / `DEBUG` / `SUCCESS` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`） |
-| `Message` | 業務側が提供する可読テキスト |
+| `FormatTime` | イベント時刻の整形結果（`2006-01-02 15:04:05`）。`log` が送信前にイベント自身の時刻から生成する |
+| `Level` | `TRACE` / `DEBUG` / `SUCCESS` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` のいずれか |
+| `Message` | すでにレンダリング済みのテキスト（時刻とレベルを含まない） |
 
-### `LogRecordHandler` — コンシューマ側（Spout ハンドラ）
+### `LogRecordHandler` — コンシューマ側
 
 ```go
 type LogRecordHandler struct {
@@ -35,31 +41,35 @@ type LogRecordHandler struct {
 }
 ```
 
-`funnel.RecordHandler[LogRecord]` を実装します。メソッドシグネチャは次のとおりです：
+`funnel.RecordHandler[LogRecord]` を実装します：
 
 | メソッド | 呼び出しタイミング | 動作 |
 |------|----------|------|
-| `BeforeStart() error` | Spout 起動前 | `logs/` ディレクトリを作成し（権限 `0755`）、`O_CREATE \| O_WRONLY \| O_APPEND`（権限 `0644`）で `logs/grow_log(<YYYY-MM-DD>).log` をオープンする |
-| `HandleRecord(record LogRecord) error` | レコード到着ごと | `record.FormatTime + " " + record.Level + " " + record.Message + "\n"` をまとめて `WriteString` でファイルへ書き込む |
-| `AfterStop() error` | Spout 停止後 | `logFile` ハンドルをクローズする（nil にはしない） |
+| `BeforeStart() error` | `Spout.Start()` 内、消費ループ開始前 | `logs/` を作成し（権限 `0755`）、`O_CREATE \| O_WRONLY \| O_APPEND`、権限 `0644` で `logs/grow_log(<YYYY-MM-DD>).log` を開き、パスを `LogPath` に保存する |
+| `HandleRecord(record LogRecord) error` | 各記録のデキュー時 | `fmt.Sprintf("%s %s %s\n", FormatTime, Level, Message)` で 1 行に組み立てて `WriteString` する |
+| `AfterStop() error` | `Spout.Stop()` の終了処理 | `logFile` をクローズする（nil にはしない） |
 
-> `LogPath` は公開フィールドで、実際にオープンしたファイルパスを公開するため、テストやトラブルシューティング時の特定が容易です。
+エラーテキストはそれぞれ `创建日志目录失败: %w`、`打开日志文件失败: %w`、`写入日志文件失败: %w`、`关闭日志文件失败: %w` です。
 
-### `LogInlet` — プロデューサ側
+### `LogWatcher` — イベントオブザーバ
 
 ```go
-type LogInlet struct {
-    funnel.Inlet[LogRecord]
+type LogWatcher struct {
+    spout    *funnel.Spout[LogRecord]
+    inlet    *funnel.Inlet[LogRecord]
+    metrics  *scarecrow.MetricsWatcher
     minLevel int
 }
 ```
 
-- `funnel.Inlet[LogRecord]` を埋め込み、同時に `minLevel`（すなわち `levelOrder[level]` の数値）を保持します。
-- 構築時は `NewLogInlet` を通じて文字列レベルを `minLevel` にマッピングします。**存在しないレベル文字列** は `INFO` に置き換えられ（`minLevel = levelOrder["INFO"]`）、エラーは返しません。
+| メソッド | 動作 |
+|------|------|
+| `NewLogWatcher(metrics *scarecrow.MetricsWatcher, level string) *LogWatcher` | デフォルトの `LogRecordHandler` で構築する。`level` は `levelOrder` で `minLevel` に変換され、未知のレベルは `INFO` にフォールバックする。バッファ 100、送信タイムアウト 1s |
+| `Start() error` | `spout.Start()` に委譲する：`BeforeStart` を発火してディレクトリ作成・ファイルオープンを行い、バックグラウンド消費 goroutine を起動する |
+| `Stop() error` | `spout.Stop()` に委譲する：チャネルを閉じ、キューを排出し（最大 1s）、最後に `AfterStop` でファイルを閉じる。タイムアウト時は `shutdown timeout` を返す |
+| `OnEvent(event scarecrow.Event) error` | イベント種別に応じて `log(level, message, at)` を呼ぶ。関心のないイベントはそのまま `nil` を返す |
 
-```go
-func NewLogInlet(ch chan<- LogRecord, timeout time.Duration, level string) *LogInlet
-```
+> `newLogWatcher(handler funnel.RecordHandler[LogRecord], metrics *scarecrow.MetricsWatcher, level string)` はパッケージ内コンストラクタで、テストはこれを使ってキャプチャ用 handler を注入します。
 
 ### レベル表 `levelOrder`
 
@@ -75,172 +85,169 @@ var levelOrder = map[string]int{
 }
 ```
 
-数値が小さいほど優先度は低くなります。しきい値 `minLevel` は、この値と「**等しいか高い**」場合にのみ通過させることを意味します。例えば `NewLogInlet(ch, 1*time.Second, "WARNING")` は `minLevel = 4` と等価で、`WARNING` / `ERROR` / `CRITICAL` の 3 種類だけがファイルに書き込まれます。
+数値が小さいほど優先度が低くなります。`log` はキュー投入前に `levelOrder[level] < minLevel` を判定し、成立した場合は**黙って破棄**して `nil` を返します。したがって `NewLogWatcher(metrics, "WARNING")` は `WARNING` / `ERROR` / `CRITICAL` のみを通します。
+
+## イベントからテキストへのマッピング
+
+| イベント | レベル | テキストテンプレート（`%.2fs` は経過秒数） |
+|------|------|-------------------------------|
+| `FarmStartEvent` | `INFO` | まず `Farm '<farm>' start. Structure:` を出力し、その後 `ev.Structure` の各項目を 1 行ずつ出力する |
+| `FarmEndEvent` | `INFO` | `Farm '<farm>' end. Use <elapsed>s.` |
+| `PlotStartEvent` | `INFO` | `Plot '<plot>' start with <tenders> tenders.` |
+| `PlotEndEvent` | `INFO` | `Plot '<plot>' end. Use <elapsed>s. <ripened> ripened, <withered> withered, <pruned> pruned.` |
+| `SeedInputEvent` | `DEBUG` | `In '<plot>', Seed <seedRepr> input. [<seedID>*]` |
+| `SeedRipenEvent` | `SUCCESS` | `In '<plot>', Seed <seedRepr> ripened. Fruit is <fruitRepr>. Use <elapsed>s. [<seedID>-><fruitID>*]` |
+| `SeedWitherEvent` | `ERROR` | `In '<plot>', Seed <seedRepr> withered: <err>. Use <elapsed>s. [<seedID>-><weedID>*]` |
+| `SeedPruneEvent` | `INFO` | `In '<plot>', Seed <seedRepr> pruned. Use <elapsed>s. [<seedID>-><pruneID>*]` |
+| `SeedReplantEvent` | `WARNING` | `In '<plot>', Seed <seedRepr> attempt <n> withered: <err>. Replanting. [<seedID>*]` |
+| `SealInputEvent` / `SealMergeEvent` | — | 無視され、ログを生成しない |
+
+要点：
+
+- `PlotEndEvent` の件数は `metrics.GetPlot(ev.Plot)` から取得し、`PlotMetrics.Succeeded` / `Failed` / `Skipped` を読みます。`metrics == nil` またはその Plot が未登録の場合は零値が返り、ログは `0 ripened, 0 withered, 0 pruned` と表示されます。`GetPlot` の `ok` は無視されます。
+- `FarmStartEvent` は唯一複数行を生成するマッピングです：まず見出し行を出力し、次に `Structure` の順に 1 行ずつ出力します。いずれかの行の送信に失敗すると直ちにエラーを返します。
+- 時刻はイベント自身のフィールド（`StartTime` / `EndTime` / `Time`）から取得し、ログ書き込み時の `time.Now()` ではありません。したがってイベントを再生すると元のタイムラインを再現できます。
+- `log` のシグネチャは `log(level, message string, at time.Time) error` です：フィルタに該当した場合は `nil` を返し、そうでなければ `inlet.Send` のエラーを返します（キューが満杯で 1s 経過すると `inlet send timeout after 1s`）。
 
 ## 主要フロー
-
-### ディレクトリとファイルの配置
-
-```text
-logs/
-└── grow_log(2026-09-24).log
-```
-
-- `BeforeStart` は `time.Now().Format("2006-01-02")` で日付を取得し、`logs/grow_log(YYYY-MM-DD).log` を組み立てます。
-- `O_APPEND` により、同一日の複数回の起動や同一ホスト上の複数プロセスの書き込みはすべて同じファイルへ追記されます。並行書き込みは OS によって原子化されます（POSIX では `write(2)` ≤ `PIPE_BUF` も同様に原子性を保証し、1 行のログはこの上限よりはるかに小さい）。
-- 明示的な「ローテーション」の手順はありません。日付が変われば自然に新しいファイル名になります。古いファイルはそのままの場所に残され、人手によるアーカイブや外部からの削除に委ねられます。
-
-### `pkg/funnel` の非同期消費との協調
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Caller as Plot / Farm
-    participant Inlet as LogInlet
-    participant Ch as chan LogRecord
-    participant Spout as Spout[LogRecord]
-    participant Handler as LogRecordHandler
+    participant Hub as scarecrow.Hub
+    participant M as MetricsWatcher
+    participant W as LogWatcher
+    participant In as funnel.Inlet
+    participant Q as chan LogRecord<br/>(バッファ 100)
+    participant Sp as funnel.Spout
+    participant H as LogRecordHandler
     participant FS as logs/grow_log(<date>).log
 
-    Note over Handler: Spout.Start()
-    Handler->>FS: MkdirAll("logs", 0755)
-    Handler->>FS: OpenFile(O_CREATE\|O_WRONLY\|O_APPEND, 0644)
+    Note over W,Sp: Start()
+    Sp->>H: BeforeStart()
+    H->>FS: MkdirAll("logs", 0755) + OpenFile(APPEND, 0644)
 
-    Caller->>Inlet: PlotStart("harvester", 4)
-    Inlet->>Inlet: log("INFO", "Plot 'harvester' start with 4 tenders.")
-    Inlet->>Inlet: levelOrder["INFO"] >= minLevel?
-    Inlet->>Ch: Inlet.Send(LogRecord{FormatTime, "INFO", ...})
-    Ch->>Spout: チャネルから読み出し
-    Spout->>Handler: HandleRecord(record)
-    Handler->>FS: WriteString("<time> INFO <msg>\n")
+    Hub->>M: OnEvent(PlotEndEvent)（登録順が先）
+    Hub->>W: OnEvent(PlotEndEvent)
+    W->>M: GetPlot(plot) で Succeeded/Failed/Skipped を読み取る
+    W->>W: log("INFO", "Plot 'x' end. ...")
+    W->>In: Send(LogRecord)
+    In->>Q: キュー投入（満杯なら 1s 後にエラー）
+    Q->>Sp: デキュー
+    Sp->>H: HandleRecord(record)
+    H->>FS: WriteString("<time> <level> <msg>\n")
 
-    Note over Spout,Handler: Spout.Stop()
-    Spout->>Handler: AfterStop()
-    Handler->>FS: logFile.Close()
+    Note over W,Sp: Stop()
+    Sp->>Q: close(ch)、残りの記録を排出
+    Sp->>H: AfterStop()
+    H->>FS: logFile.Close()
 ```
 
-要点：
+### ファイル配置と追記の意味論
 
-- `Inlet.Send` は `funnel.Inlet` の `select { case ch <- : case ctx.Done(): case time.After(timeout): }` を再利用するため、**チャネル満杯** の場合は `timeout` 後に `inlet send timeout after <d>` を返します。呼び出し側はそれを無視するか、上位へ投げるかを選べます。
-- `LogInlet.log` は内部でまず `levelOrder[level] < l.minLevel` を判定し、**しきい値に達していなければそのまま `return`** するため、`Send` は呼ばれずエラーも発生しません。
-- `LogRecordHandler` は `funnel.RecordHandler[LogRecord]` の実装であり、`Spout[LogRecord]` 内部の `spout()` goroutine が `HandleRecord` を直列に呼び出すため、単一プロセス内で行が混ざることはありません。
-
-### フィルタリングと構築
-
-```go
-func (l *LogInlet) log(level string, message string) {
-    if levelOrder[level] < l.minLevel {
-        return
-    }
-    l.Send(LogRecord{
-        FormatTime: time.Now().Format("2006-01-02 15:04:05"),
-        Level:      level,
-        Message:    message,
-    })
-}
+```text
+logs/
+└── grow_log(2026-11-13).log
 ```
 
-`FormatTime` は **送信前** に生成されるため、チャネルに一時的な滞留が起きても、ディスク書き込みの時刻は「いつ記録を決定したか」を反映し、「いつ処理されたか」は反映しません。
+- ファイル名は日付のみを含み（`time.Now().Format("2006-01-02")`）、同じ日の複数回の実行や複数プロセスの書き込みはすべて同じファイルへ追記されます。
+- ローテーションの仕組みはありません：日付が変われば自然に新しいファイルが生成され、古いファイルは外部アーカイブ用に残されます。
+- `HandleRecord` は 1 回の `WriteString` で 1 行全体を書きます。`Spout` が単一 goroutine で直列に呼ぶため、通常の使用では行内の混在は起きません。
 
-## 業務レベルの送信メソッド
+### 非同期とフラッシュ
 
-`LogInlet` は `log` の上に 8 つの業務メソッドを公開し、よく使う文言のフォーマットを `pkg/persist` に固定しています：
-
-| メソッド | レベル | 実際のフォーマット | 呼び出しタイミング |
-|------|------|----------|----------|
-| `FarmStart(farmName string, structureList []string)` | `INFO` | 先頭行は `Farm '<name>' start. Graph structure:`、その後 `structureList` の各要素を **1 行ずつ** 出力 | Farm 起動 |
-| `FarmEnd(farmName string, useTime float64)` | `INFO` | `Farm '<name>' end. Use <s>s.` | Farm 終了 |
-| `PlotStart(plotName string, numTenders int)` | `INFO` | `Plot '<name>' start with <n> tenders.` | Plot 起動 |
-| `PlotEnd(plotName string, useTime float64, fruitNum, weedNum int)` | `INFO` | `Plot '<name>' end. Use <s>s. <fruit> ripened, <weed> withered.` | Plot 終了 |
-| `SeedInput(plotName, seedRepr string, seedID int)` | `DEBUG` | `In '<plot>', Seed <seedRepr> input. [<seedID>*]` | 種子が Plot に入る |
-| `SeedRipen(plotName, seedRepr, fruitRepr string, useTime float64, seedID, fruitID int)` | `SUCCESS` | `In '<plot>', Seed <seedRepr> ripened. Fruit is <fruitRepr>. Use <s>s. [<seedID>-><fruitID>*]` | 種子の成功 |
-| `SeedWither(plotName, seedRepr string, err error, useTime float64, seedID, weedID int)` | `ERROR` | `In '<plot>', Seed <seedRepr> withered: <err>. Use <s>s. [<seedID>-><weedID>*]` | 種子が最終的に失敗 |
-| `SeedReplant(plotName, seedRepr string, attempt int, err error, seedID int)` | `WARNING` | `In '<plot>', Seed <seedRepr> attempt <n> withered: <err>. Replanting. [<seedID>*]` | 再試行の中間状態 |
-
-> 上記のメソッドはすべて `log(level, ...)` を経由するため、同様に `minLevel` によるフィルタリングを受けます。`FarmStart` だけが 1 回の呼び出しで複数行を出力するメソッドです。
->
-> `useTime` は呼び出し側が渡します（業務側では通常 `time.Since(start).Seconds()` を使用）。本ファイルは計時を行いません。`seedID` / `fruitID` / `weedID` は `runtime.EventClient` が採番したイベント ID です。
+- `OnEvent` はマッピング・フィルタリング・キュー投入のみを行い、実際の `WriteString` は `Spout` のバックグラウンド goroutine で実行されます。
+- `Stop` はまず `close(ch)` を行い、消費ループはバッファ内の残りの記録を読み終えてから終了します。1s 以内に排出できない場合、`Spout` はコンテキストをキャンセルして `shutdown timeout` を返します。
+- タイムアウトの有無にかかわらず `AfterStop` は実行されファイルハンドルを閉じるため、`Stop` が返った時点でログは永続化されハンドルも解放されています。
+- `pkg/assembly.Resources.Stop` は先にログを停止し、その後にライフサイクルオブザーバを停止するため、実行終了時に 2 種類のキューがどちらも空になります。
 
 ## 公開シンボル一覧
 
 | シンボル | 種別 | 用途 |
 |------|------|------|
-| `LogRecord` | 型 | チャネルペイロード |
-| `LogRecordHandler` | 型 | コンシューマ側の `funnel.RecordHandler[LogRecord]` 実装 |
-| `LogInlet` | 型 | プロデューサ側（`funnel.Inlet[LogRecord]` を埋め込み、`minLevel` フィルタを含む） |
-| `NewLogInlet` | 関数 | `LogInlet` を構築し、文字列レベルを `minLevel` にマッピングする。未知のレベルは `INFO` にフォールバック |
-| `(*LogInlet).FarmStart` | メソッド | `INFO` Farm 起動 + グラフ構造の行ごと出力 |
-| `(*LogInlet).FarmEnd` | メソッド | `INFO` Farm 終了 |
-| `(*LogInlet).PlotStart` | メソッド | `INFO` Plot 起動 |
-| `(*LogInlet).PlotEnd` | メソッド | `INFO` Plot 終了 |
-| `(*LogInlet).SeedInput` | メソッド | `DEBUG` 種子入力 |
-| `(*LogInlet).SeedRipen` | メソッド | `SUCCESS` 種子の成熟 |
-| `(*LogInlet).SeedWither` | メソッド | `ERROR` 種子の枯死 |
-| `(*LogInlet).SeedReplant` | メソッド | `WARNING` 再試行の中間状態 |
+| `LogRecord` | 型 | キューのペイロード |
+| `LogRecordHandler` | 型 | `funnel.RecordHandler[LogRecord]` 実装。ファイル書き込みを担当 |
+| `LogWatcher` | 型 | `scarecrow.Watcher` 実装。イベント変換とレベルフィルタリングを担当 |
+| `NewLogWatcher` | 関数 | オブザーバを作成する（デフォルト handler、バッファ 100、タイムアウト 1s） |
+| `(*LogWatcher).Start` | メソッド | 消費ループを起動しログファイルを開く |
+| `(*LogWatcher).Stop` | メソッド | 消費ループを停止し、フラッシュしてファイルを閉じる |
+| `(*LogWatcher).OnEvent` | メソッド | イベントの変換と送信 |
 
-> `levelOrder` と `log` 非公開メソッドはパッケージ内の実装詳細であり、外部に公開されません。
+> `levelOrder`、`newLogWatcher`、`(*LogWatcher).log` はパッケージ内の非公開シンボルです。
 
 ## 使用例
-
-`pkg/funnel` と組み合わせた最小の骨組み：
 
 ```go
 package main
 
 import (
-    "context"
+    "errors"
     "time"
 
-    "github.com/Mr-xiaotian/CelestialGrow/pkg/funnel"
     "github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
+    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 func main() {
-    handler := &persist.LogRecordHandler{}
-    spout := funnel.NewSpout[persist.LogRecord](handler, 100, time.Second)
-    if err := spout.Start(); err != nil {
+    hub := scarecrow.NewHub()
+    metrics := scarecrow.NewMetricsWatcher()
+    watcher := persist.NewLogWatcher(metrics, "DEBUG")
+
+    // 指标观察者需先注册，PlotEnd 时才能读到完整计数
+    if err := hub.AddWatcher(metrics); err != nil {
+        panic(err)
+    }
+    if err := hub.AddWatcher(watcher); err != nil {
+        panic(err)
+    }
+    if err := watcher.Start(); err != nil {
         panic(err)
     }
 
-    inlet := persist.NewLogInlet(spout.GetQueue(), time.Second, "INFO")
+    now := time.Now()
+    events := []scarecrow.Event{
+        scarecrow.FarmStartEvent{Farm: "demo", Structure: []string{"harvester -> packager"}, StartTime: now},
+        scarecrow.PlotStartEvent{Plot: "harvester", Tenders: 2, StartTime: now},
+        scarecrow.SeedInputEvent{Plot: "harvester", Seed: 1, SeedRepr: "1", SeedID: 1, Time: now},
+        scarecrow.SeedRipenEvent{Plot: "harvester", Seed: 1, SeedRepr: "1", Fruit: 2, FruitRepr: "2", SeedID: 1, FruitID: 2, Elapsed: 120 * time.Millisecond, Time: now},
+        scarecrow.SeedInputEvent{Plot: "harvester", Seed: 3, SeedRepr: "3", SeedID: 3, Time: now},
+        scarecrow.SeedWitherEvent{Plot: "harvester", Seed: 3, SeedRepr: "3", Err: errors.New("boom"), SeedID: 3, WeedID: 4, Elapsed: 400 * time.Millisecond, Time: now},
+        scarecrow.PlotEndEvent{Plot: "harvester", EndTime: now, Elapsed: 1230 * time.Millisecond},
+        scarecrow.FarmEndEvent{Farm: "demo", EndTime: now, Elapsed: 1400 * time.Millisecond},
+    }
+    for _, event := range events {
+        if err := hub.OnEvent(event); err != nil {
+            panic(err)
+        }
+    }
 
-    inlet.FarmStart("demo_farm", []string{"harvester -> packager"})
-    inlet.PlotStart("harvester", 4)
-
-    inlet.SeedInput("harvester", "{v:1}", 1)
-    inlet.SeedRipen("harvester", "{v:1}", "{v:2}", 0.12, 1, 2)
-
-    inlet.SeedInput("harvester", "{v:3}", 3)
-    inlet.SeedReplant("harvester", "{v:3}", 1, context.DeadlineExceeded, 3)
-    inlet.SeedWither("harvester", "{v:3}", context.DeadlineExceeded, 0.40, 3, 4)
-
-    inlet.PlotEnd("harvester", 1.23, 1, 1)
-    inlet.FarmEnd("demo_farm", 1.40)
-
-    if err := spout.Stop(); err != nil {
+    if err := watcher.Stop(); err != nil {
         panic(err)
     }
 }
 ```
 
-実行後の `logs/grow_log(2026-09-24).log` の内容（抜粋。`minLevel = INFO` のとき `SeedInput` の DEBUG 行はフィルタリングされます）：
+`logs/grow_log(<date>).log` に追記される内容：
 
 ```text
-2026-09-24 10:00:00 INFO Farm 'demo_farm' start. Graph structure:
-2026-09-24 10:00:00 INFO harvester -> packager
-2026-09-24 10:00:00 INFO Plot 'harvester' start with 4 tenders.
-2026-09-24 10:00:00 SUCCESS In 'harvester', Seed {v:1} ripened. Fruit is {v:2}. Use 0.12s. [1->2*]
-2026-09-24 10:00:00 WARNING In 'harvester', Seed {v:3} attempt 1 withered: context deadline exceeded. Replanting. [3*]
-2026-09-24 10:00:00 ERROR In 'harvester', Seed {v:3} withered: context deadline exceeded. Use 0.40s. [3->4*]
-2026-09-24 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered.
-2026-09-24 10:00:00 INFO Farm 'demo_farm' end. Use 1.40s.
+2026-11-13 10:00:00 INFO Farm 'demo' start. Structure:
+2026-11-13 10:00:00 INFO harvester -> packager
+2026-11-13 10:00:00 INFO Plot 'harvester' start with 2 tenders.
+2026-11-13 10:00:00 DEBUG In 'harvester', Seed 1 input. [1*]
+2026-11-13 10:00:00 SUCCESS In 'harvester', Seed 1 ripened. Fruit is 2. Use 0.12s. [1->2*]
+2026-11-13 10:00:00 DEBUG In 'harvester', Seed 3 input. [3*]
+2026-11-13 10:00:00 ERROR In 'harvester', Seed 3 withered: boom. Use 0.40s. [3->4*]
+2026-11-13 10:00:00 INFO Plot 'harvester' end. Use 1.23s. 1 ripened, 1 withered, 0 pruned.
+2026-11-13 10:00:00 INFO Farm 'demo' end. Use 1.40s.
 ```
 
 ## 注意事項
 
-- **レベルのフィルタリングはプロデューサ側で行われる**：`minLevel` のしきい値は `LogInlet.log` で判定され、しきい値に達しないログはチャネルに入りません。ログレベルを調整すると上流の `Send` 呼び出しも同時に止まるため、Spout 側でのフィルタリングに頼るよりもメモリを節約できます。デフォルトの構築（`"INFO"`）では `SeedInput` のような `DEBUG` ログは破棄されます。
-- **未知のレベルは `INFO` にフォールバック**：`NewLogInlet(ch, d, "VERBOSE")` はエラーを出さず、`minLevel` を `levelOrder["INFO"]` に設定します。`log` 内部は `levelOrder[level]` を直接読むため、未登録のレベルは map のゼロ値 `0` となり、最低優先度として扱われます（`minLevel > 0` の場合は破棄されます）。業務コードは上表の 7 つのレベル名だけを使用してください。
-- **明示的なローテーションはない**：日付をまたぐと自然にファイルが切り替わります。サイズによるローテーションが必要な場合は `LogRecordHandler` の外側で独自に実装する必要があります（現在は提供していません）。
-- **並行書き込みの保護はない**：`LogRecordHandler` は `HandleRecord` が `Spout` の単一 goroutine から直列に呼ばれることを前提としています。`Spout` を迂回して複数の goroutine から同じ `LogRecordHandler` に書き込む場合、`os.File.WriteString` は依然として OS によって原子化されます（≤ `PIPE_BUF`）が、行と行の間に明示的なロックはなく、極端な場合には混ざります。
-- **ログディレクトリの権限 `0755`**：`lifecycles/<date>/` と同じ方針です。複数ユーザーのホストで権限を絞る必要がある場合は、外側で `BeforeStart` をラップしてください。
-- **エラーの伝播は `HandleRecord` / `BeforeStart` / `AfterStop` からのみ**：`LogInlet` 自身はエラーを返しません。`Send` がタイムアウトで失敗した場合のエラーは `funnel.Inlet` が記録しますが、現在の業務レベルメソッド（`FarmStart` など）はいずれも `l.Send` の戻り値をそのまま捨てています。
+- **フィルタリングはオブザーバ側、キュー投入前**：`minLevel` に達しないイベントはチャネルに入らず、エラーも発生しません。したがってデフォルトの `INFO` では `SeedInputEvent`（`DEBUG`）が破棄されます。
+- **未知のレベルは `INFO` にフォールバック**：`NewLogWatcher(metrics, "VERBOSE")` はエラーにならず、`minLevel = levelOrder["INFO"]` となります。ただし `log` 内部は `levelOrder[level]` で直接表を引くため、未登録のレベルは零値 `0` となり、`minLevel > 0` の場合は黙って破棄されます——内部コードは 7 つの正規レベル名のみを使うべきです。
+- **`PlotEndEvent` は指標オブザーバに依存**：`metrics` が `nil` またはその Plot が未登録の場合、件数はすべて 0 になります。`pkg/assembly` は `MetricsWatcher` を `LogWatcher` より先に同じ Hub へ登録することを保証するため、`PlotEndEvent` が到達した時点で件数は最新です。
+- **`OnEvent` は呼び出し元をブロックする**：キュー容量 100、タイムアウト 1s です。キューが満杯になると `inlet send timeout after 1s` を返し、`Hub` がそれを `ErrorHandler` に渡しますが、他のオブザーバは中断されません。
+- **`FormatTime` はイベント時刻由来**：`at.Format("2006-01-02 15:04:05")` で生成されます。イベント時刻が零値の場合、ログには `0001-01-01 00:00:00` と表示されます。
+- **ファイルは日単位で追記され、ローテーションはない**：同じ日のすべての実行が 1 つのファイルを共有します。サイズで分割する必要がある場合は本ファイルの外側で実装しなければなりません。
+- **`AfterStop` は `logFile` を nil にしない**：ハンドルを閉じるだけで、`LogPath` は調査しやすいように残ります。`Stop` を繰り返すとチャネルを二重に閉じて panic するため、`assembly.Resources.Stop`（内部で `sync.Once`）からのみ統一的に呼ぶべきです。
+- **エラーの伝播**：`BeforeStart` / `HandleRecord` / `AfterStop` のエラーは `Start` / `Stop` を経由して返されます。`HandleRecord` のエラーは `Spout` 内部で破棄され、`OnEvent` の呼び出し元へは戻りません。

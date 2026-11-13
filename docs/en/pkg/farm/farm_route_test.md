@@ -1,6 +1,6 @@
 # pkg/farm/farm_route_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
 ## Purpose
 
@@ -9,7 +9,7 @@
 ## Test Focus
 
 - **Directed forwarding**: the same upstream seed is dispatched to different downstreams according to the keys of the `map[string]Y` routing table.
-- **Downstream seed counting**: the `GetSeedNum` of `left` / `right` comes from upstream yield counters (neither sows seeds locally in this case), verifying the cross-edge yield counter wiring of `ConnectTo`.
+- **Downstream seed counting**: the `GetSeedNum` of `left` / `right` comes from `MetricsWatcher`'s accumulation of `SeedInputEvent` (neither sows seeds locally in this case), verifying that cross-edge forwarding really produces input events pointing at the downstreams.
 - **Unconnected targets silently skipped**: routing to an unconnected downstream does not affect the other routing entries and does not block the upstream.
 - **Order-independent assertions**: downstream receive order is not assumed under concurrent forwarding.
 
@@ -24,7 +24,7 @@
 
 - **Locking around concurrent collection**: both cases protect the downstream `received` map / slice with a `sync.Mutex`, because `RoutePlot.ripenSeed` runs concurrently across multiple tender goroutines.
 - **The `assertSeeds` helper**: sorts the actually received set first and then compares item by item, avoiding dependence on the downstream's concurrent receive order.
-- **Depends on upstream yield counting**: `left` / `right` have no local `Seed`, and their `GetSeedNum` is contributed entirely by the counters registered upstream in `upstreamYieldCounter`; this is a direct regression for the "per-edge downstream yield counting" refactor.
+- **Depends on cross-edge counting**: `left` / `right` have no local `Seed`, and their `GetSeedNum` is contributed entirely by the `SeedInputEvent`s produced by upstream forwarding; this is a direct regression for the "Plot event → MetricsWatcher" chain.
 - **`WithTenders(2)`**: both the routing node and the downstreams explicitly configure 2 tenders, increasing concurrency coverage.
 
 ## Related Source
@@ -32,8 +32,8 @@
 - `Connect` / `Run` in `pkg/farm/farm.go`
 - `SourceNodes` / `AddEdge` in `pkg/farm/graph.go`
 - `RoutePlot.ripenSeed` in `pkg/plot/plot_route.go` (skips unconnected downstreams)
-- `ConnectTo` in `pkg/plot/plot_base.go` (bidirectional yield counter wiring)
-- `GetSeedNum` / `GetFruitNum` in `pkg/plot/counter.go`
+- `ConnectTo` in `pkg/plot/plot.go` (registers the downstream yield channel) and `GetSeedNum` (reads metrics)
+- `MetricsWatcher` in `pkg/scarecrow/metrics.go` (counts `SeedInputEvent`)
 
 ## How to Run
 

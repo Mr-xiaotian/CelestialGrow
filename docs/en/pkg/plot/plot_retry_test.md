@@ -1,8 +1,8 @@
 # pkg/plot/plot_retry_test.go
 
-> 📅 Last Updated: 2026/09/24
+> 📅 Last Updated: 2026/11/13
 
-`plot_retry_test.go` focuses on the **retry semantics** of `Plot`: it verifies how the three options `WithMaxRetries` / `WithRetryDelay` / `WithRetryIf` affect the retry loop in `basePlot.tend`, and finally solidifies the results into lifecycle snapshots through `Plot.Harvest`.
+`plot_retry_test.go` focuses on the **retry semantics** of `SinglePlot`: it verifies how the three options `WithMaxRetries` / `WithRetryDelay` / `WithRetryIf` affect the retry loop in `basePlot.tend`, and finally solidifies the results into lifecycle snapshots through `Harvest`.
 
 ## Cases
 
@@ -18,7 +18,7 @@
       return seed * 10, nil
   }
   ```
-- **Configuration**: `plot.NewPlot("test_retry_success", cultivator, plot.WithTenders(1), plot.WithMaxRetries(3))`
+- **Configuration**: `plot.NewSinglePlot("test_retry_success", cultivator, plot.WithTenders(1), plot.WithMaxRetries(3))`
 - **seeds**: `[]int{1}`
 
 Verifies:
@@ -27,12 +27,12 @@ Verifies:
 2. `Status == "ripen"`, `FruitJSON == "10"`;
 3. `attempts.Load() == 3` (the first 2 attempts fail + the 3rd succeeds).
 
-> Coverage points: with the default `retryDelay = 0`, a transient error can eventually succeed after several retries, and the `SeedRipen` lifecycle is written correctly.
+> Coverage points: with the default `retryDelay = 0`, a transient error can eventually succeed after several retries, and `SeedRipenEvent` is emitted correctly and recorded as a `ripen` entry.
 
 ### `TestPlot_RetryExhausted` — retries exhausted and still failing
 
 - **cultivator**: `func(seed int) (int, error) { attempts.Add(1); return 0, errors.New("permanent error") }` (always fails)
-- **Configuration**: `plot.NewPlot("test_retry_exhausted", cultivator, plot.WithTenders(1), plot.WithMaxRetries(2))`
+- **Configuration**: `plot.NewSinglePlot("test_retry_exhausted", cultivator, plot.WithTenders(1), plot.WithMaxRetries(2))`
 - **seeds**: `[]int{1}`
 
 Verifies:
@@ -40,12 +40,12 @@ Verifies:
 1. 1 record: `Status == "wither"`, `WitherMessage == "permanent error"`;
 2. `attempts.Load() == 3` (1 original attempt + 2 retries).
 
-> Coverage points: after `maxRetries+1` attempts the loop exits and enters `witherSeed`; the last failure does **not** write a `SeedReplant` log (that log is written only when `attempt <= maxRetries`).
+> Coverage points: after `maxRetries+1` attempts the loop exits and enters `witherSeed`; the last failure does **not** emit `SeedReplantEvent` (that event is emitted only when `attempt <= maxRetries`).
 
 ### `TestPlot_RetryIf` — the error filter blocks retries
 
 - **cultivator**: always returns `errors.New("permanent")`.
-- **Configuration**: `plot.NewPlot("test_retry_if", cultivator, plot.WithTenders(1), plot.WithMaxRetries(3), plot.WithRetryIf(func(err error) bool { return !errors.Is(err, permanent) }))`
+- **Configuration**: `plot.NewSinglePlot("test_retry_if", cultivator, plot.WithTenders(1), plot.WithMaxRetries(3), plot.WithRetryIf(func(err error) bool { return !errors.Is(err, permanent) }))`
 - **seeds**: `[]int{1}`
 
 Verifies:
@@ -67,7 +67,7 @@ Verifies:
       return seed, nil
   }
   ```
-- **Configuration**: `plot.NewPlot("test_retry_delay", cultivator, plot.WithTenders(1), plot.WithMaxRetries(2), plot.WithRetryDelay(func(attempt int) time.Duration { return 100 * time.Millisecond }))`
+- **Configuration**: `plot.NewSinglePlot("test_retry_delay", cultivator, plot.WithTenders(1), plot.WithMaxRetries(2), plot.WithRetryDelay(func(attempt int) time.Duration { return 100 * time.Millisecond }))`
 - **seeds**: `[]int{1}`
 - **Extra**: `start := time.Now()`, and `elapsed := time.Since(start)` after `Run` finishes.
 
@@ -76,13 +76,13 @@ Verifies:
 1. 1 record: `Status == "ripen"`, `FruitJSON == "1"`;
 2. `elapsed >= 100*time.Millisecond`, proving that it really waited 100ms before retrying.
 
-> Coverage points: `retryDelay(attempt)` is passed to `time.Sleep` when `attempt <= maxRetries`; it is commonly used to implement exponential backoff or fixed-interval throttling.
+> Coverage points: `retryDelay(attempt)` is passed to `time.Sleep` after every failure; it is commonly used to implement exponential backoff or fixed-interval throttling.
 
 ## Common preconditions
 
-- Test package: `package plot_test` (black-box); it does not access the unexported fields of `Plot` directly;
+- Test package: `package plot_test` (black-box); it does not access the unexported fields of `SinglePlot` directly;
 - `attempts` uses `sync/atomic.Int32` for goroutine-safe accumulation, ensuring that the retry-count assertions are not affected by concurrency;
-- It reuses `mustHarvest(t, plot harvestable)` defined in `plot_harvest_test.go` (`harvestable` being the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`) to fetch snapshots, thereby implicitly verifying the wiring of `Harvest` + `lifecycleSpout`;
+- It reuses `mustHarvest(t, plot harvestable)` defined in `plot_harvest_test.go` (`harvestable` being the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`) to fetch snapshots, thereby implicitly verifying the wiring between the `LifecycleWatcher` assembled by `assembly.StartPlotResources` in `Run` and `Harvest`;
 - All four cases use `WithTenders(1)`: concurrent tenders would not change the total number of calls, but they would make the timing of `attempts.Add(1)` hard to assert; only after serialization is the retry count deterministic.
 
 ## How to run
@@ -102,5 +102,5 @@ go test ./pkg/plot/... -v
 - The status strings follow the source code: `"ripen"` for success and `"wither"` for failure; the result field is `FruitJSON` and the error field is `WitherMessage`.
 - `TestPlot_RetryDelay` uses `elapsed >= 100*time.Millisecond` as a lower bound and does **not** assert strict equality; CI jitter or scheduling delays will make the actual elapsed time slightly larger, which is expected behavior.
 - `TestPlot_RetryIf` relies on `errors.Is` semantics; if `retryIf` later switches to `==` comparison internally, this test must be adjusted accordingly.
-- These cases do not explicitly assert how many times the `SeedReplant` log was called; they only infer it from the total of `attempts` and the final state. If you need to assert the log count, you must use the test utilities of `pkg/persist`.
+- These cases do not explicitly assert how many times `SeedReplantEvent` was emitted; they only infer it from the total of `attempts` and the final state. If you need to assert the event count, you can additionally register a custom `scarecrow.Watcher`.
 - `TestPlot_RetryExhausted` asserts `attempts.Load() == 3`, i.e. `1 + maxRetries`; changing the default `maxRetries` does not affect this case (the case explicitly passes `WithMaxRetries(2)`).

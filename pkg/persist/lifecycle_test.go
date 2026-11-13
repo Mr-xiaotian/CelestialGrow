@@ -65,8 +65,11 @@ func TestLifecycleWatcherTranslatesEvents(t *testing.T) {
 		t.Fatalf("records = %d, want 5: %#v", len(records), records)
 	}
 
-	seed := records[0]
-	if seed.Kind != lifecycleSeed || seed.InputEventID != 1 || seed.CurrentEventID != 1 {
+	seed, ok := records[0].(SeedRecord)
+	if !ok {
+		t.Fatalf("records[0] = %T, want SeedRecord", records[0])
+	}
+	if seed.InputEventID != 1 || seed.CurrentEventID != 1 {
 		t.Fatalf("seed record = %#v", seed)
 	}
 	if seed.PlotName != "a" || seed.SeedJSON != "1" || seed.ParentIDs != nil {
@@ -76,32 +79,44 @@ func TestLifecycleWatcherTranslatesEvents(t *testing.T) {
 		t.Fatalf("seed TS = %v, want 1700000000.123", seed.TS)
 	}
 
-	ripen := records[1]
-	if ripen.Kind != lifecycleRipen || ripen.InputEventID != 1 || ripen.CurrentEventID != 2 {
+	ripen, ok := records[1].(RipenRecord)
+	if !ok {
+		t.Fatalf("records[1] = %T, want RipenRecord", records[1])
+	}
+	if ripen.InputEventID != 1 || ripen.CurrentEventID != 2 {
 		t.Fatalf("ripen record = %#v", ripen)
 	}
 	if ripen.FruitJSON != "2" || len(ripen.ParentIDs) != 1 || ripen.ParentIDs[0] != 1 {
 		t.Fatalf("ripen record = %#v", ripen)
 	}
 
-	upstream := records[2]
-	if upstream.Kind != lifecycleSeed || upstream.PlotName != "b" || upstream.InputEventID != 3 {
+	upstream, ok := records[2].(SeedRecord)
+	if !ok {
+		t.Fatalf("records[2] = %T, want SeedRecord", records[2])
+	}
+	if upstream.PlotName != "b" || upstream.InputEventID != 3 {
 		t.Fatalf("upstream record = %#v", upstream)
 	}
 	if upstream.SeedJSON != "2" || len(upstream.ParentIDs) != 1 || upstream.ParentIDs[0] != 2 {
 		t.Fatalf("upstream record = %#v", upstream)
 	}
 
-	wither := records[3]
-	if wither.Kind != lifecycleWither || wither.CurrentEventID != 4 {
+	wither, ok := records[3].(WitherRecord)
+	if !ok {
+		t.Fatalf("records[3] = %T, want WitherRecord", records[3])
+	}
+	if wither.CurrentEventID != 4 {
 		t.Fatalf("wither record = %#v", wither)
 	}
 	if wither.WitherMessage != "boom" || wither.WitherType == "" {
 		t.Fatalf("wither record = %#v", wither)
 	}
 
-	prune := records[4]
-	if prune.Kind != lifecyclePrune || prune.CurrentEventID != 6 {
+	prune, ok := records[4].(PruneRecord)
+	if !ok {
+		t.Fatalf("records[4] = %T, want PruneRecord", records[4])
+	}
+	if prune.CurrentEventID != 6 {
 		t.Fatalf("prune record = %#v", prune)
 	}
 }

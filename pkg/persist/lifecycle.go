@@ -19,19 +19,60 @@ const (
 	lifecyclePrune  = "prune"
 )
 
-// LifecycleRecord 表示一条生命周期持久化操作。
-type LifecycleRecord struct {
-	Kind           string
+// LifecycleRecord 是生命周期记录的封闭类型联合，仅由 SeedRecord、RipenRecord、
+// WitherRecord、PruneRecord 实现。具体类型决定写入 events 表的 event_type，
+// 不再依赖运行期 Kind 字段。
+type LifecycleRecord interface {
+	lifecycleRecord()
+}
+
+// SeedRecord 表示一次种子输入。
+type SeedRecord struct {
 	InputEventID   int
 	CurrentEventID int
 	ParentIDs      []int
 	PlotName       string
 	SeedJSON       string
+	TS             float64
+}
+
+func (SeedRecord) lifecycleRecord() {}
+
+// RipenRecord 表示一次种子成熟。
+type RipenRecord struct {
+	InputEventID   int
+	CurrentEventID int
+	ParentIDs      []int
+	PlotName       string
 	FruitJSON      string
+	TS             float64
+}
+
+func (RipenRecord) lifecycleRecord() {}
+
+// WitherRecord 表示一次种子枯萎。
+type WitherRecord struct {
+	InputEventID   int
+	CurrentEventID int
+	ParentIDs      []int
+	PlotName       string
 	WitherType     string
 	WitherMessage  string
 	TS             float64
 }
+
+func (WitherRecord) lifecycleRecord() {}
+
+// PruneRecord 表示一次种子剪枝。
+type PruneRecord struct {
+	InputEventID   int
+	CurrentEventID int
+	ParentIDs      []int
+	PlotName       string
+	TS             float64
+}
+
+func (PruneRecord) lifecycleRecord() {}
 
 // LifecycleRecordHandler 消费生命周期操作并将其写入 sqlite。
 type LifecycleRecordHandler struct {
@@ -57,47 +98,52 @@ func (l *LifecycleRecordHandler) BeforeStart() error {
 	return nil
 }
 
-// HandleRecord 执行一条 seed 生命周期操作。
+// HandleRecord 将一条生命周期记录写入 events 表，并推进对应的 status 快照。
+// 记录类型直接决定 event_type，无需再校验 Kind 与字段是否匹配。
 func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
 	if l.sqliteDB == nil {
 		return fmt.Errorf("生命周期 sqlite 未初始化")
 	}
 
-	switch record.Kind {
-	case lifecycleSeed:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+	insertEvent := func(eventID int, eventType string, plot string, ts float64, parentIDs []int) error {
+		return InsertLifecycleEvent(l.sqliteDB, eventID, eventType, plot, ts, parentIDs)
+	}
+
+	switch rec := record.(type) {
+	case SeedRecord:
+		if err := insertEvent(rec.CurrentEventID, lifecycleSeed, rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
 			return err
 		}
 		return UpsertLifecycleStatusSeed(l.sqliteDB,
-			record.InputEventID,
-			record.SeedJSON,
-			record.PlotName,
-			record.TS,
+			rec.InputEventID,
+			rec.SeedJSON,
+			rec.PlotName,
+			rec.TS,
 		)
-	case lifecycleRipen:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+	case RipenRecord:
+		if err := insertEvent(rec.CurrentEventID, lifecycleRipen, rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusRipen(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.FruitJSON, record.TS)
-	case lifecycleWither:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+		return PromoteLifecycleStatusRipen(l.sqliteDB, rec.InputEventID, rec.CurrentEventID, rec.FruitJSON, rec.TS)
+	case WitherRecord:
+		if err := insertEvent(rec.CurrentEventID, lifecycleWither, rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
 			return err
 		}
 		return PromoteLifecycleStatusWither(
 			l.sqliteDB,
-			record.InputEventID,
-			record.CurrentEventID,
-			record.WitherType,
-			record.WitherMessage,
-			record.TS,
+			rec.InputEventID,
+			rec.CurrentEventID,
+			rec.WitherType,
+			rec.WitherMessage,
+			rec.TS,
 		)
-	case lifecyclePrune:
-		if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+	case PruneRecord:
+		if err := insertEvent(rec.CurrentEventID, lifecyclePrune, rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
 			return err
 		}
-		return PromoteLifecycleStatusPrune(l.sqliteDB, record.InputEventID, record.CurrentEventID, record.TS)
+		return PromoteLifecycleStatusPrune(l.sqliteDB, rec.InputEventID, rec.CurrentEventID, rec.TS)
 	default:
-		return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
+		return fmt.Errorf("unsupported lifecycle record: %T", record)
 	}
 }
 
@@ -118,8 +164,8 @@ func (l *LifecycleRecordHandler) AfterStop() error {
 
 // LifecycleWatcher 将观察者事件转换为生命周期记录并异步写入 sqlite。
 //
-// 种子输入、成熟、枯萎与剪枝事件分别映射为 seed / ripen / wither / prune 记录；
-// 事件携带的事件 ID 与父事件 ID 直接用于重建生命周期图。
+// 种子输入、成熟、枯萎与剪枝事件分别映射为 SeedRecord / RipenRecord /
+// WitherRecord / PruneRecord；事件携带的事件 ID 与父事件 ID 直接用于重建生命周期图。
 type LifecycleWatcher struct {
 	spout *funnel.Spout[LifecycleRecord]
 	inlet *funnel.Inlet[LifecycleRecord]
@@ -162,8 +208,7 @@ func (l *LifecycleWatcher) DBPath() string {
 func (l *LifecycleWatcher) OnEvent(event scarecrow.Event) error {
 	switch ev := event.(type) {
 	case scarecrow.SeedInputEvent:
-		return l.inlet.Send(LifecycleRecord{
-			Kind:           lifecycleSeed,
+		return l.inlet.Send(SeedRecord{
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.SeedID,
 			ParentIDs:      ev.Parents,
@@ -173,8 +218,7 @@ func (l *LifecycleWatcher) OnEvent(event scarecrow.Event) error {
 		})
 
 	case scarecrow.SeedRipenEvent:
-		return l.inlet.Send(LifecycleRecord{
-			Kind:           lifecycleRipen,
+		return l.inlet.Send(RipenRecord{
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.FruitID,
 			ParentIDs:      []int{ev.SeedID},
@@ -184,8 +228,7 @@ func (l *LifecycleWatcher) OnEvent(event scarecrow.Event) error {
 		})
 
 	case scarecrow.SeedWitherEvent:
-		return l.inlet.Send(LifecycleRecord{
-			Kind:           lifecycleWither,
+		return l.inlet.Send(WitherRecord{
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.WeedID,
 			ParentIDs:      []int{ev.SeedID},
@@ -196,8 +239,7 @@ func (l *LifecycleWatcher) OnEvent(event scarecrow.Event) error {
 		})
 
 	case scarecrow.SeedPruneEvent:
-		return l.inlet.Send(LifecycleRecord{
-			Kind:           lifecyclePrune,
+		return l.inlet.Send(PruneRecord{
 			InputEventID:   ev.SeedID,
 			CurrentEventID: ev.PruneID,
 			ParentIDs:      []int{ev.SeedID},

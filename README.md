@@ -1,5 +1,7 @@
 # CelestialGrow
 
+> 📅 最后更新日期: 2026/11/13
+
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Go-00ADD8">
   <img src="https://img.shields.io/badge/Architecture-Plot%20%2F%20Farm-7c3aed">
@@ -10,15 +12,16 @@
 
 它把任务处理拆成两个层次：
 
-- **Plot**: 泛型并发处理节点，负责消费 seed、执行 cultivator、产出 fruit
-- **Farm**: 由多个 Plot 组成的静态有向图，负责注册、连接、启动与全局调度
+- **Plot**：泛型并发处理节点，负责消费 seed、执行 cultivator、产出 fruit。按产出方式分为 `SinglePlot[S, F]`（单进单出）、`SplitPlot[S, F]`（一拆多）与 `RoutePlot[S, Y]`（按名称定向转发）
+- **Farm**：由多个 Plot 组成的静态有向图，负责注册、连接、启动与全局调度
 
 除了执行编排本身，CelestialGrow 还内置了：
 
 - 基于事件 ID 的任务生命周期追踪
 - 基于 SQLite 的状态快照持久化
 - 基于文件的结构化运行日志
-- 终端进度条观察器
+- 事件驱动的可观测性（`pkg/scarecrow` 的 `Hub`、`MetricsWatcher`、`PrintWatcher`）
+- 运行期资源装配层 `pkg/assembly`
 - 一个统一的对外入口包 `pkg/api`
 
 如果你希望在 Go 中用一种比“零散 goroutine + channel”更结构化的方式表达任务流，但又不想引入过重的工作流系统，CelestialGrow 就是为这个场景准备的。
@@ -29,28 +32,36 @@
 flowchart LR
     subgraph F[Farm]
         direction LR
-        P1[Plot A]
-        P2[Plot B]
-        P3[Plot C]
+        P1[SinglePlot A]
+        P2[SinglePlot B]
+        P3[RoutePlot C]
         P1 --> P2 --> P3
         P1 --> P3
     end
 
-    F --> L[logs/*.log]
-    F --> S[lifecycles/*.sqlite3]
+    F --> H[scarecrow.Hub]
+    H --> M[MetricsWatcher]
+    H --> L[LogWatcher]
+    H --> S[LifecycleWatcher]
+    H --> P[PrintWatcher]
+
+    L --> LF[logs/*.log]
+    S --> DB[lifecycles/*.sqlite3]
 
     style F fill:#eef2ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b
-    style L fill:#ecfeff,stroke:#0891b2,stroke-width:2px
-    style S fill:#ecfdf5,stroke:#059669,stroke-width:2px
+    style H fill:#fdf4ff,stroke:#a855f7,stroke-width:2px,color:#4a044e
+    style LF fill:#ecfeff,stroke:#0891b2,stroke-width:2px
+    style DB fill:#ecfdf5,stroke:#059669,stroke-width:2px
 ```
 
 CelestialGrow 的核心数据流可以概括为：
 
 1. 外部输入 seed
-2. Plot 并发执行 cultivator
+2. Plot 的 tender 协程并发执行 cultivator
 3. 成功时产出 fruit 并转发给下游 Plot
-4. 失败时记录 weed / error 生命周期
-5. 全流程写入日志与生命周期 SQLite
+4. 失败时记录 weed / wither 生命周期；命中修剪谓词时记录 prune 并跳过培育
+5. 执行过程中的每个阶段都发出 `scarecrow.Event`，由 `Hub` 分发给已注册的 watcher
+6. 日志与生命周期 watcher 把事件写入 `logs/` 与 `lifecycles/`
 
 ## 快速开始（Quick Start）
 
@@ -62,39 +73,38 @@ go get github.com/Mr-xiaotian/CelestialGrow@latest
 
 推荐从统一入口 `pkg/api` 开始使用。
 
-一个最小的 `Farm` 示例：
+一个最小的 `Farm` 示例（与 `demo/demo_farm/main.go` 完全一致）：
 
 ```go
 package main
 
-import (
-	"fmt"
+import grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
 
-	grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
-)
+// double 将种子翻倍。
+func double(num int) (int, error) {
+	return num * 2, nil
+}
 
+// addOne 为种子加一。
+func addOne(num int) (int, error) {
+	return num + 1, nil
+}
+
+// main 演示一条 Farm 流水线：root 将种子翻倍后传给 head 加一。
 func main() {
-	double := grow.NewPlot("double", func(seed int) (int, error) {
-		return seed * 2, nil
-	}, grow.WithTenders(2))
+	root := grow.NewSinglePlot("root", double, grow.WithTenders(2))
+	head := grow.NewSinglePlot("head", addOne, grow.WithTenders(2))
 
-	format := grow.NewPlot("format", func(seed int) (string, error) {
-		return fmt.Sprintf("result=%d", seed), nil
-	})
-
-	format.AddObserver(grow.NewProgressBar("format"))
-
-	farm := grow.NewFarm("demo_farm", "INFO")
-	if err := farm.AddPlot(double, format); err != nil {
+	farm := grow.NewFarm("demo_farm")
+	if err := farm.AddPlot(root, head); err != nil {
 		panic(err)
 	}
-	if err := farm.Connect([]grow.PlotNode{double}, []grow.PlotNode{format}); err != nil {
+	if err := farm.Connect([]grow.PlotNode{root}, []grow.PlotNode{head}); err != nil {
 		panic(err)
 	}
-
 	if err := farm.Run(map[string][]any{
-		"double": {1, 2, 3, 4},
-	}); err != nil {
+		"root": {1, 2, 3},
+	}, "INFO"); err != nil {
 		panic(err)
 	}
 }
@@ -102,8 +112,8 @@ func main() {
 
 运行后会得到两类产物：
 
-- `logs/grow_log(YYYY-MM-DD).log`: 运行日志
-- `lifecycles/YYYY-MM-DD/grow_lifecycle(...).sqlite3`: 生命周期事件与状态快照
+- `logs/grow_log(YYYY-MM-DD).log`：运行日志
+- `lifecycles/YYYY-MM-DD/grow_lifecycle(...).sqlite3`：生命周期事件与状态快照
 
 如果你只想单独运行一个 `Plot`，也可以直接使用 standalone 模式：
 
@@ -117,67 +127,177 @@ import (
 )
 
 func main() {
-	plot := grow.NewPlot("double", func(seed int) (int, error) {
+	plot := grow.NewSinglePlot("double", func(seed int) (int, error) {
 		return seed * 2, nil
 	}, grow.WithTenders(4))
 
-	plot.AddObserver(grow.NewProgressBar("double"))
-	plot.Run([]int{1, 2, 3, 4, 5})
+	plot.Run([]int{1, 2, 3, 4, 5}, "INFO")
+
+	fmt.Printf("seed=%d fruit=%d weed=%d prune=%d\n",
+		plot.GetSeedNum(), plot.GetFruitNum(), plot.GetWeedNum(), plot.GetPruneNum())
 
 	records, err := plot.Harvest()
 	if err != nil {
 		panic(err)
 	}
-
 	for _, record := range records {
-		fmt.Println(record.TaskJSON, record.Status, record.ResultJSON)
+		fmt.Println(record.SeedJSON, record.Status, record.FruitJSON)
 	}
 }
 ```
 
+需要跳过部分种子时，用 `WithPruneIf` 在培育前做判定；命中谓词的种子会被记为 prune，既不重试也不向下游产出：
+
+```go
+package main
+
+import (
+	"fmt"
+
+	grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+)
+
+func main() {
+	plot := grow.NewSinglePlot("dedup", func(seed int) (int, error) {
+		return seed * 2, nil
+	},
+		grow.WithTenders(3),
+		grow.WithPruneIf(func(seed int) bool { return seed%2 == 0 }),
+	)
+
+	plot.Run([]int{1, 2, 3, 4, 5}, "INFO")
+
+	fmt.Printf("fruit=%d prune=%d\n", plot.GetFruitNum(), plot.GetPruneNum())
+}
+```
+
+更多组合见 [`docs/zh-CN/demo/demo_prune/main.md`](docs/zh-CN/demo/demo_prune/main.md)：它用互斥锁保护的已见集合做并发安全去重，同时演示了单 Plot 与 Farm 两种接入位置。
+
 ## 核心能力（Core Features）
 
-- **泛型 Plot 节点**：`Plot[S, F]` 明确表达输入 seed 类型与输出 fruit 类型
-- **类型安全连接**：上游 `F` 与下游 `S` 不匹配时，`Connect` 会直接报错
-- **并发培育模型**：通过 `WithTenders` 控制并发照料协程（tender）数
-- **失败重试机制**：支持 `WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`
-- **图级调度**：`Farm` 统一管理节点注册、连边、源节点 seal 与整体运行
+- **泛型 Plot 节点**：`SinglePlot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]` 明确表达输入 seed 类型与输出 fruit 类型
+- **类型安全连接**：上游 `Y` 与下游 `S` 不匹配时，`Connect` 会直接报错
+- **并发培育模型**：通过 `WithTenders` 控制并发照料协程（tender）数，`WithChanSize` 控制通道缓冲
+- **失败重试机制**：支持 `WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`；cultivator 内的 panic 会被捕获并按失败处理
+- **修剪机制**：`WithPruneIf` 在培育前跳过指定种子
+- **图级调度**：`Farm` 统一管理节点注册、连边、源节点 seal 与整体运行；`Run` 阻塞式跑完整图，`Start` 则把控制权交给调用方
+- **运行期注入**：`Farm.InjectTasks` / `Farm.InjectTerminations` 可在 `Start` 阻塞期间动态加种子或终止节点
 - **生命周期持久化**：默认将事件图和状态快照写入 SQLite
-- **可观测性**：支持文件日志与进度条观察器
+- **可观测性**：`scarecrow.Hub` 统一分发事件，内置 `MetricsWatcher`（指标）、`PrintWatcher`（标准输出进度）以及由 `assembly` 装配的日志 / 生命周期 watcher
 
 ## 包说明（Packages）
 
-- `pkg/api`: 对外统一入口，封装 `Farm`、`Plot`、`PlotNode` 以及常用配置项
-- `pkg/farm`: 图结构、节点注册、连边与整体调度
-- `pkg/plot`: 泛型任务节点、并发执行、重试、上下游数据传播
-- `pkg/observer`: 观察器接口与终端进度条实现
-- `pkg/persist`: 日志与生命周期 SQLite 持久化
-- `pkg/funnel`: 通用异步记录生产/消费基础设施
-- `pkg/runtime`: Payload、事件 ID、控制信号等运行时基础类型
+- `pkg/api`: 对外统一入口，封装 `Farm`、`SinglePlot`、`SplitPlot`、`RoutePlot`、`PlotNode` 以及全部配置项（含泛型 `WithPruneIf`）
+- `pkg/farm`: 图结构（`OrderGraph`）、节点注册、超边连接、结构渲染与整体调度
+- `pkg/plot`: 泛型任务节点（`SinglePlot`/`SplitPlot`/`RoutePlot`）、共享运行骨架 `basePlot`、并发执行、重试、修剪与上下游数据传播
+- `pkg/scarecrow`: 运行期事件模型（`Event` 及 Farm/Plot/Seed/Seal 事件）、`Watcher` 接口、分发中心 `Hub`、`MetricsWatcher` 指标与 `PrintWatcher` 打印观察者
+- `pkg/assembly`: 运行期资源装配，创建并启动指标 / 生命周期 / 日志观察者并注册到 `Hub`，通过 `Resources.Stop` 统一回收
+- `pkg/persist`: 生命周期 SQLite 与结构化运行日志的 watcher、记录处理器与查询接口
+- `pkg/funnel`: 通用异步记录生产 / 消费基础设施（`Inlet` / `Spout`）
+- `pkg/runtime`: `Payload`、事件 ID 分配（`EventClient`）与控制信号等运行时基础类型
+
+## 可观测性（Observability）
+
+运行期事件由 `scarecrow.Hub` 统一分发。指标、生命周期与日志观察者由 `pkg/assembly` 在每次 `Run` / `Start` 时自动装配；`PrintWatcher` 需要自行注册，适合本地调试：
+
+```go
+package main
+
+import (
+	grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
+)
+
+func main() {
+	root := grow.NewSinglePlot("root", func(seed int) (int, error) {
+		return seed * 2, nil
+	})
+	head := grow.NewSinglePlot("head", func(seed int) (int, error) {
+		return seed + 1, nil
+	})
+
+	farm := grow.NewFarm("demo_farm")
+	if err := farm.AddPlot(root, head); err != nil {
+		panic(err)
+	}
+	if err := farm.Connect([]grow.PlotNode{root}, []grow.PlotNode{head}); err != nil {
+		panic(err)
+	}
+	if err := farm.AddWatcher(scarecrow.NewPrintWatcher("farm")); err != nil {
+		panic(err)
+	}
+	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO"); err != nil {
+		panic(err)
+	}
+}
+```
+
+Farm 级 watcher 注册在 Farm 自己的 Hub 上，而该 Hub 又会被挂到每个 Plot 的 Hub，因此既能收到 `FarmStartEvent` / `FarmEndEvent`，也能收到全部 Plot 的种子事件。运行结束后，指标与持久化观察者仍留在 Hub 中，可通过 `scarecrow.Find` 取回（`SinglePlot.Harvest` 即基于该机制查询生命周期 SQLite）。
+
+> `Plot` 与 `Farm` 本身只持有 `scarecrow.Hub`，不直接持有 spout 或持久化观察者实例；日志、生命周期等运行期资源统一由 `pkg/assembly` 创建、注册、启动与回收。
 
 ## 典型使用方式（Typical Usage）
 
 比较推荐的调用顺序是：
 
-1. 用 `api.NewPlot(...)` 定义若干处理节点
-2. 用 `api.NewFarm(...)` 创建调度图
+1. 用 `api.NewSinglePlot(...)` / `api.NewSplitPlot(...)` / `api.NewRoutePlot(...)` 定义处理节点
+2. 用 `api.NewFarm(name)` 创建调度图
 3. 调用 `farm.AddPlot(...)` 注册节点
 4. 调用 `farm.Connect(...)` 建立上下游关系
-5. 调用 `farm.Run(...)` 注入初始输入并执行
+5. （可选）调用 `farm.AddWatcher(...)` 挂载 `PrintWatcher` 等自建观察者
+6. 调用 `farm.Run(inputs, logLevel)` 注入初始输入并执行
 
-其中 `Farm.Connect` 使用的是“组到组的全连接”语义，也就是源组与目标组之间建立笛卡尔积式连接。
+其中 `Farm.Connect` 使用的是“组到组的全连接”语义，也就是源组与目标组之间建立笛卡尔积式连接。如果需要一个 seed 派生多个下游任务，可以改用 `api.NewSplitPlot(...)`（一拆多）或 `api.NewRoutePlot(...)`（按名称定向转发）。
+
+需要外部驱动任务流时，改用 `Start` / `InjectTasks` / `InjectTerminations`：
+
+```go
+package main
+
+import grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+
+func main() {
+	plot := grow.NewSinglePlot("double", func(seed int) (int, error) {
+		return seed * 2, nil
+	})
+
+	farm := grow.NewFarm("external_driver")
+	if err := farm.AddPlot(plot); err != nil {
+		panic(err)
+	}
+
+	go func() {
+		if err := farm.InjectTasks(map[string][]any{"double": {1, 2, 3}}); err != nil {
+			panic(err)
+		}
+		// 没有外部终止信号时 Start 不会返回。
+		if err := farm.InjectTerminations([]string{"double"}); err != nil {
+			panic(err)
+		}
+	}()
+
+	if err := farm.Start("INFO"); err != nil {
+		panic(err)
+	}
+}
+```
 
 ## 文件结构（File Structure）
 
 ```text
 pkg/
-  api/       # 对外统一入口
-  farm/      # 图结构与调度
-  funnel/    # 通用异步消费基础设施
-  observer/  # 进度观察器
-  persist/   # 日志与生命周期持久化
-  plot/      # 泛型并发节点
-  runtime/   # 事件、信号与运行时载体
+  api/        # 对外统一入口
+  assembly/   # 运行期资源装配
+  farm/       # 图结构与调度
+  funnel/     # 通用异步消费基础设施
+  persist/    # 日志与生命周期持久化
+  plot/       # 泛型并发节点
+  runtime/    # 事件、信号与运行时载体
+  scarecrow/  # 事件模型、分发 Hub 与观察者
+
+demo/
+  demo_farm/  # 最小 Farm 流水线
+  demo_prune/ # prune 去重（单 Plot 与 Farm）
 ```
 
 ## 环境要求（Requirements）
@@ -192,7 +312,6 @@ pkg/
 | 依赖 | 说明 |
 | --- | --- |
 | `modernc.org/sqlite` | 纯 Go SQLite 驱动，用于生命周期持久化 |
-| `github.com/schollz/progressbar/v3` | 终端进度条观察器 |
 
 ## 开发（Development）
 
@@ -202,3 +321,82 @@ go test ./pkg/...
 ```
 
 如果你修改了 `pkg/**/*.go`，建议运行对应包的相关测试，优先验证本次改动影响到的那部分行为。
+
+## 文档索引（Documentation Index）
+
+本仓库的详细中文文档按 `pkg/<name>/<file>.go` → `docs/zh-CN/pkg/<name>/<file>.md` 的镜像方式组织。当前已生成的中文子文档如下：
+
+### pkg/api
+
+- [`docs/zh-CN/pkg/api/api.md`](docs/zh-CN/pkg/api/api.md) — 对外统一入口包
+
+### pkg/assembly
+
+- [`docs/zh-CN/pkg/assembly/assembly.md`](docs/zh-CN/pkg/assembly/assembly.md) — 运行期资源装配（`StartPlotResources` / `StartFarmResources` / `Resources.Stop`）
+- [`docs/zh-CN/pkg/assembly/assembly_test.md`](docs/zh-CN/pkg/assembly/assembly_test.md) — 资源装配测试重点
+
+### pkg/farm
+
+- [`docs/zh-CN/pkg/farm/farm.md`](docs/zh-CN/pkg/farm/farm.md) — Farm 调度器
+- [`docs/zh-CN/pkg/farm/graph.md`](docs/zh-CN/pkg/farm/graph.md) — 拓扑图（OrderGraph）
+- [`docs/zh-CN/pkg/farm/render.md`](docs/zh-CN/pkg/farm/render.md) — 图结构文本渲染（RenderStructureList）
+- [`docs/zh-CN/pkg/farm/farm_structure_test.md`](docs/zh-CN/pkg/farm/farm_structure_test.md) — Farm 结构测试重点
+- [`docs/zh-CN/pkg/farm/farm_connect_test.md`](docs/zh-CN/pkg/farm/farm_connect_test.md) — Farm Connect 测试重点
+- [`docs/zh-CN/pkg/farm/farm_start_test.md`](docs/zh-CN/pkg/farm/farm_start_test.md) — Farm Start 测试重点
+- [`docs/zh-CN/pkg/farm/farm_inject_test.md`](docs/zh-CN/pkg/farm/farm_inject_test.md) — Farm 运行期注入测试重点
+- [`docs/zh-CN/pkg/farm/farm_harvest_test.md`](docs/zh-CN/pkg/farm/farm_harvest_test.md) — Farm 运行后生命周期查询测试重点
+- [`docs/zh-CN/pkg/farm/farm_split_test.md`](docs/zh-CN/pkg/farm/farm_split_test.md) — Farm SplitPlot 端到端测试重点
+- [`docs/zh-CN/pkg/farm/farm_route_test.md`](docs/zh-CN/pkg/farm/farm_route_test.md) — Farm RoutePlot 端到端测试重点
+- [`docs/zh-CN/pkg/farm/graph_test.md`](docs/zh-CN/pkg/farm/graph_test.md) — OrderGraph 测试重点
+- [`docs/zh-CN/pkg/farm/render_test.md`](docs/zh-CN/pkg/farm/render_test.md) — 图结构渲染测试重点
+
+### pkg/plot
+
+- [`docs/zh-CN/pkg/plot/plot.md`](docs/zh-CN/pkg/plot/plot.md) — 共享运行骨架（`basePlot` / `PlotNode`）与 standalone 执行
+- [`docs/zh-CN/pkg/plot/plot_single.md`](docs/zh-CN/pkg/plot/plot_single.md) — 单进单出节点（SinglePlot）
+- [`docs/zh-CN/pkg/plot/plot_split.md`](docs/zh-CN/pkg/plot/plot_split.md) — 一拆多节点（SplitPlot）
+- [`docs/zh-CN/pkg/plot/plot_route.md`](docs/zh-CN/pkg/plot/plot_route.md) — 定向转发节点（RoutePlot）
+- [`docs/zh-CN/pkg/plot/option.md`](docs/zh-CN/pkg/plot/option.md) — Plot 可选配置（Option）
+- [`docs/zh-CN/pkg/plot/constant.md`](docs/zh-CN/pkg/plot/constant.md) — Plot 常量与信号定义
+- [`docs/zh-CN/pkg/plot/helper.md`](docs/zh-CN/pkg/plot/helper.md) — Plot 内部辅助函数
+- [`docs/zh-CN/pkg/plot/plot_harvest_test.md`](docs/zh-CN/pkg/plot/plot_harvest_test.md) — Plot Harvest 测试重点
+- [`docs/zh-CN/pkg/plot/plot_prune_test.md`](docs/zh-CN/pkg/plot/plot_prune_test.md) — Plot 修剪机制测试重点
+- [`docs/zh-CN/pkg/plot/plot_retry_test.md`](docs/zh-CN/pkg/plot/plot_retry_test.md) — Plot 重试测试重点
+- [`docs/zh-CN/pkg/plot/plot_split_test.md`](docs/zh-CN/pkg/plot/plot_split_test.md) — SplitPlot 测试重点
+- [`docs/zh-CN/pkg/plot/plot_route_test.md`](docs/zh-CN/pkg/plot/plot_route_test.md) — RoutePlot 测试重点
+
+### pkg/scarecrow
+
+- [`docs/zh-CN/pkg/scarecrow/event.md`](docs/zh-CN/pkg/scarecrow/event.md) — 运行期事件定义
+- [`docs/zh-CN/pkg/scarecrow/watcher.md`](docs/zh-CN/pkg/scarecrow/watcher.md) — Watcher 接口与函数适配器
+- [`docs/zh-CN/pkg/scarecrow/hub.md`](docs/zh-CN/pkg/scarecrow/hub.md) — 事件分发中心 Hub
+- [`docs/zh-CN/pkg/scarecrow/metrics.md`](docs/zh-CN/pkg/scarecrow/metrics.md) — 指标观察者（MetricsWatcher）
+- [`docs/zh-CN/pkg/scarecrow/print.md`](docs/zh-CN/pkg/scarecrow/print.md) — 标准输出进度观察者（PrintWatcher）
+- [`docs/zh-CN/pkg/scarecrow/event_test.md`](docs/zh-CN/pkg/scarecrow/event_test.md) — 事件定义测试重点
+- [`docs/zh-CN/pkg/scarecrow/hub_test.md`](docs/zh-CN/pkg/scarecrow/hub_test.md) — Hub 分发与环检测测试重点
+- [`docs/zh-CN/pkg/scarecrow/metrics_test.md`](docs/zh-CN/pkg/scarecrow/metrics_test.md) — 指标重建测试重点
+- [`docs/zh-CN/pkg/scarecrow/print_test.md`](docs/zh-CN/pkg/scarecrow/print_test.md) — 打印观察者测试重点
+
+### pkg/persist
+
+- [`docs/zh-CN/pkg/persist/lifecycle.md`](docs/zh-CN/pkg/persist/lifecycle.md) — 生命周期事件记录
+- [`docs/zh-CN/pkg/persist/log.md`](docs/zh-CN/pkg/persist/log.md) — 结构化运行日志
+- [`docs/zh-CN/pkg/persist/sqlite.md`](docs/zh-CN/pkg/persist/sqlite.md) — SQLite 状态快照
+- [`docs/zh-CN/pkg/persist/lifecycle_test.md`](docs/zh-CN/pkg/persist/lifecycle_test.md) — 生命周期持久化测试重点
+- [`docs/zh-CN/pkg/persist/log_test.md`](docs/zh-CN/pkg/persist/log_test.md) — 日志持久化测试重点
+- [`docs/zh-CN/pkg/persist/sqlite_test.md`](docs/zh-CN/pkg/persist/sqlite_test.md) — SQLite 持久化测试重点
+
+### pkg/funnel
+
+- [`docs/zh-CN/pkg/funnel/inlet.md`](docs/zh-CN/pkg/funnel/inlet.md) — 通用 Inlet 消费接口
+- [`docs/zh-CN/pkg/funnel/spout.md`](docs/zh-CN/pkg/funnel/spout.md) — 通用 Spout 生产接口
+
+### pkg/runtime
+
+- [`docs/zh-CN/pkg/runtime/event.md`](docs/zh-CN/pkg/runtime/event.md) — 事件 ID 分配与流转
+- [`docs/zh-CN/pkg/runtime/type.md`](docs/zh-CN/pkg/runtime/type.md) — 运行时基础类型
+
+### demo
+
+- [`docs/zh-CN/demo/demo_farm/main.md`](docs/zh-CN/demo/demo_farm/main.md) — 最小 Farm 示例解析
+- [`docs/zh-CN/demo/demo_prune/main.md`](docs/zh-CN/demo/demo_prune/main.md) — prune 去重示例解析

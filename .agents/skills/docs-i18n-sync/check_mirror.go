@@ -14,7 +14,11 @@
 // 用法：
 //
 //	go run .agents/skills/docs-i18n-sync/check_mirror.go \
-//	    --project-root . --source docs/zh-CN --targets "en:docs/en ja:docs/ja"
+//	    --project-root . --source docs/zh-CN --targets "en:docs/en ja:docs/ja" \
+//	    --root-file README.md
+//
+// --root-file 用于项目根的中文 README：它不在 docs/zh-CN 内，需映射到
+// docs/{lang}/<name>（如 docs/en/README.md）再比对。
 //
 // 退出码：有任一问题返回 1，否则 0。
 package main
@@ -60,6 +64,18 @@ func (t *targetList) Set(v string) error {
 	*t = append(*t, strings.FieldsFunc(v, func(r rune) bool {
 		return r == ' ' || r == ',' || r == '\t'
 	})...)
+	return nil
+}
+
+// fileList 收集可重复传入的 --root-file 值。
+type fileList []string
+
+// String 实现 flag.Value。
+func (f *fileList) String() string { return strings.Join(*f, " ") }
+
+// Set 实现 flag.Value，每次传入追加一个项目根文件。
+func (f *fileList) Set(v string) error {
+	*f = append(*f, v)
 	return nil
 }
 
@@ -165,11 +181,13 @@ func main() {
 	source := fs.String("source", "docs/zh-CN", "源语言文档目录")
 	var rawTargets targetList
 	fs.Var(&rawTargets, "targets", "目标语言配对 lang:dir，空格/逗号分隔或重复传入")
+	var rootFiles fileList
+	fs.Var(&rootFiles, "root-file", "项目根下额外比对的 .md 文件（如 README.md），映射到 docs/{lang}/<name>；可重复传入")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, `用法：check_mirror --project-root <root> --source <dir> --targets "<lang:dir> [<lang:dir> ...]"
+		fmt.Fprintf(os.Stderr, `用法：check_mirror --project-root <root> --source <dir> --targets "<lang:dir> [<lang:dir> ...]" [--root-file <file> ...]
 
 示例：
-  check_mirror --project-root . --source docs/zh-CN --targets "en:docs/en ja:docs/ja"
+  check_mirror --project-root . --source docs/zh-CN --targets "en:docs/en ja:docs/ja" --root-file README.md
 `)
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -216,7 +234,29 @@ func main() {
 		}
 	}
 
-	fmt.Printf("检查 %d 个源文件 × %d 个目标语言\n", len(srcFiles), len(targets))
+	// 项目根文件（如中文 README）不在 docs/zh-CN 内，映射到 docs/{lang}/<name>。
+	for _, rootFile := range rootFiles {
+		rel := filepath.ToSlash(rootFile)
+		src, err := readLines(filepath.Join(*projectRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			problems = append(problems, "[读取失败] "+rel+": "+err.Error())
+			continue
+		}
+		srcDate := ""
+		if len(src) > 2 {
+			srcDate = dateOf(src[2], "zh-CN")
+		}
+		if srcDate == "" {
+			problems = append(problems, fmt.Sprintf("[源日期行] %s: 缺少或格式不符", rel))
+		}
+		name := filepath.Base(filepath.FromSlash(rel))
+		for _, tgt := range targets {
+			tgtPath := filepath.Join(*projectRoot, filepath.FromSlash(tgt.dir), name)
+			problems = append(problems, checkPair(tgtPath, name, tgt, src, srcDate)...)
+		}
+	}
+
+	fmt.Printf("检查 %d 个源文件 × %d 个目标语言\n", len(srcFiles)+len(rootFiles), len(targets))
 	if len(problems) == 0 {
 		fmt.Println("逐文件镜像（行数 / H1 / 日期行）：全部一致 ✅")
 		return

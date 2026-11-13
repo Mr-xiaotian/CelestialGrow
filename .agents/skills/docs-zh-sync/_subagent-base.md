@@ -34,13 +34,13 @@
 | `docs/zh-CN/pkg/<name>/<file>.md` | `# pkg/<name>/<file>.go` |
 | `docs/zh-CN/pkg/<name>/<file>_test.md` | `# pkg/<name>/<file>_test.go` |
 | `docs/zh-CN/demo/<file>.md` | `# demo/<file>.go` |
-| `docs/zh-CN/README.md` | `# CelestialGrow`（顶层 README 例外） |
 
 禁止：包级别短名（`# pkg/api`）、符号名（`# funnel.Inlet`）、追加后缀（`# pkg/plot/option.go — 配置函数`）、中文别名。审计时若发现不合规，按 🔴 极高优先级修复。
 
-### 总览文档
+### 总览文档与中文 README
 
-`docs/zh-CN/README.md` 以及镜像目录内可能存在的 `README.md` 均为**无 1:1 源码的总览文档**：保留、勿删，不套用上面的 H1 规范（顶层 README 固定为 `# CelestialGrow`）。扫描脚本会将其列入 `overviews` 表而不是 `orphans`。
+`docs/zh-CN/README.md` 已删除，**不得重建**；中文 README 只保留项目根 `README.md`，它不属于 `docs/zh-CN` 镜像，本 skill 不处理。
+镜像目录内可能存在的 `README.md` 仍是**无 1:1 源码的总览文档**：保留、勿删，不套用上面的 H1 规范。扫描脚本会将其列入 `overviews` 表而不是 `orphans`。
 
 ---
 

@@ -4,7 +4,9 @@
 > 本文件只有四条本项目红线。
 
 1. **H1 逐字镜像**：zh-CN 的 H1 是源码路径，译文原样复制，不得翻译/改写/加后缀：
-   `# pkg/<name>/<file>.go`、`# demo/<file>.go`；`docs/zh-CN/README.md` 固定为 `# CelestialGrow`。
+   `# pkg/<name>/<file>.go`、`# demo/<file>.go`；根 `README.md` 及其译文
+   `docs/en/README.md`、`docs/ja/README.md` 固定为 `# CelestialGrow`。
+   `docs/zh-CN/README.md` 已删除，不得重建。
 
 2. **en 正文不得出现汉字**：通用规则里的「术语首现可附原文（如 `TaskGraph (任务图)`）」在本项目
    **不能照做**——那会让 en 文档混入中文、直接违反校验。确需对照原文时只能放进反引号行内代码。
@@ -17,4 +19,4 @@
    多插空的 `>` 行。代码围栏内容（含中文注释）按通用规则**原样保留**，只有 `mermaid` 的标签要翻译。
    逐文件写完即落盘，别攒到最后一次性写入。
 
-交付前跑一次 `.agents/skills/docs-i18n-sync/check_mirror.go`（`go run`），并忽略缺失列表中属于其他批次的文件。
+交付前跑一次 `.agents/skills/docs-i18n-sync/check_mirror.go`（`go run`，带 `--root-file README.md`），并忽略缺失列表中属于其他批次的文件。

@@ -20,8 +20,12 @@ description: "CelestialGrow 项目专属配置。Defines project-specific path m
 |---------|---------|
 | `pkg/...` | `docs/zh-CN/pkg/...` |
 | `demo/...` | `docs/zh-CN/demo/...` |
-| `README.md`（项目根） | `docs/zh-CN/README.md` |
+| `README.md`（项目根） | （**不镜像**到 `docs/zh-CN`；中文 README 只保留根目录这一个） |
 | `AGENTS.md`（项目根） | （**不纳入**文档同步范围，仅为开发规范） |
+
+> `docs/zh-CN/README.md` 已删除且**不得重建**。根 `README.md` 由用户直接维护，
+> 其它语言的翻译由 `docs-i18n-sync` 从根 README 生成到
+> `docs/en/README.md`、`docs/ja/README.md`。
 
 ### 后缀映射
 
@@ -34,9 +38,9 @@ description: "CelestialGrow 项目专属配置。Defines project-specific path m
 
 ### 同步源与同步目标
 
-- `docs/zh-CN/**`（含顶层 `docs/zh-CN/README.md`）是**同步目标**。
-- 根 `README.md` 是 `docs/zh-CN/README.md` 的**同步源**，它自身也可能过期。
-- `pkg/**`、`demo/**` 源码是唯一事实来源。若根 README 与源码不一致，**只修改 `docs/zh-CN/README.md`**，并在最终汇总中列出根 README 的漂移点，不直接改根 README。
+- `docs/zh-CN/**` 是**同步目标**；它只镜像 `pkg/**`、`demo/**` 与根 README 无关。
+- 根 `README.md` 是**中文 README 的唯一位置**，不参与 `docs/zh-CN` 镜像，也不由本 skill 自动更新；如需修改，按用户明确要求直接改根 README。
+- `pkg/**`、`demo/**` 源码是唯一事实来源。若根 README 与源码不一致，在最终汇总中列出漂移点，由用户决定是否更新根 README。
 
 ### 排除项
 
@@ -54,14 +58,14 @@ description: "CelestialGrow 项目专属配置。Defines project-specific path m
 go run .agents/skills/docs-zh-sync/scan_manifest.go \
     --project-root . \
     --pairs "pkg/api:docs/zh-CN/pkg/api" \
+            "pkg/assembly:docs/zh-CN/pkg/assembly" \
             "pkg/farm:docs/zh-CN/pkg/farm" \
             "pkg/plot:docs/zh-CN/pkg/plot" \
-            "pkg/observer:docs/zh-CN/pkg/observer" \
+            "pkg/scarecrow:docs/zh-CN/pkg/scarecrow" \
             "pkg/persist:docs/zh-CN/pkg/persist" \
             "pkg/funnel:docs/zh-CN/pkg/funnel" \
             "pkg/runtime:docs/zh-CN/pkg/runtime" \
             "demo:docs/zh-CN/demo" \
-    --top-level docs/zh-CN \
     --output tmp_manifest.md
 ```
 
@@ -81,23 +85,26 @@ go run .agents/skills/docs-zh-sync/scan_manifest.go \
 | A1 | `pkg/api` | `pkg/api` | `docs/zh-CN/pkg/api` | 对外统一入口 |
 | A2 | `pkg/farm` | `pkg/farm` | `docs/zh-CN/pkg/farm` | 图结构与调度 |
 | A3 | `pkg/plot` | `pkg/plot` | `docs/zh-CN/pkg/plot` | 泛型并发节点 |
-| A4 | `pkg/observer` | `pkg/observer` | `docs/zh-CN/pkg/observer` | 进度观察器 |
+| A4 | `pkg/scarecrow` | `pkg/scarecrow` | `docs/zh-CN/pkg/scarecrow` | 事件观察基础设施 |
 | A5 | `pkg/persist` | `pkg/persist` | `docs/zh-CN/pkg/persist` | 日志与生命周期持久化 |
 | A6 | `pkg/funnel` | `pkg/funnel` | `docs/zh-CN/pkg/funnel` | 异步消费基础设施 |
 | A7 | `pkg/runtime` | `pkg/runtime` | `docs/zh-CN/pkg/runtime` | 运行时基础类型 |
-| A8 | `demo` | `demo` | `docs/zh-CN/demo` | 示例程序 |
-| A9 | 顶层 README | （无源码） | `docs/zh-CN/README.md` | 由根 `README.md` 同步并对齐代码现状 |
+| A8 | `pkg/assembly` | `pkg/assembly` | `docs/zh-CN/pkg/assembly` | 运行期资源装配 |
+| A9 | `demo` | `demo` | `docs/zh-CN/demo` | 示例程序 |
 
-并行度建议：1 个批次并行 A1–A7（共 7 个），第二批 A8–A9。
+并行度建议：第一批并行 A1–A8，第二批 A9。
 
 > **退化策略**：若环境不支持并行 subagent，则按 A1→A2→…→A9 顺序串行执行。
+>
+> 根 `README.md` 与 `docs/zh-CN/README.md` **不属于任何子任务**：前者由用户维护，
+> 后者已删除；其它语言 README 的翻译走 `docs-i18n-sync`。
 
 ## 5. 文档写作规范（Go 适配）
 
 通用写作规范遵循 `~/.agents/skills/docs-zh-sync/_subagent-writing.md`。Go 项目的特别之处：
 
 - **公开符号**：`type`、`func`、`const`、`var` 中**首字母大写**的即为公开。文档聚焦这些符号。
-- **泛型**：`Plot[S any, F any]` 等泛型参数需明确说明 S/F 的语义。
+- **泛型**：`SinglePlot[S any, F any]` 等泛型参数需明确说明 S/F 的语义。
 - **接口契约**：Go 的隐式接口需在文档中显式列出接口方法、典型实现。
 - **并发模型**：重点说明 `chan`、`sync.WaitGroup`、`context.Context` 等的传递与关闭点。
 - **错误处理**：列出函数可能返回的 error 场景，而非仅说「返回 error」。
@@ -108,14 +115,14 @@ go run .agents/skills/docs-zh-sync/scan_manifest.go \
 
 所有子代理完成后，在项目根依次执行：
 
-1. **重跑扫描**：执行 §3 的命令，确认 `missing`、`orphans` 均为空，`overviews` 仅剩预期条目（如 `docs/zh-CN/README.md`）。
-2. **H1 全量校验**：确认每个镜像文档的首个一级标题等于「源码相对项目根路径」（`docs/zh-CN/README.md` 例外，固定为 `# CelestialGrow`）：
+1. **重跑扫描**：执行 §3 的命令，确认 `missing`、`orphans` 均为空；`overviews` 应为空（镜像目录内若存在 `README.md` 会被列入，属保留项）。
+2. **H1 全量校验**：确认每个镜像文档的首个一级标题等于「源码相对项目根路径」：
 
    ```bash
    grep -rn --include="*.md" -m 1 "^# " docs/zh-CN
    ```
 
-3. **旧名残留扫描**：把各子代理汇总的旧名集合拼成正则，在**整个** `docs/zh-CN/`（含顶层文档）上搜索，修复命中项：
+3. **旧名残留扫描**：把各子代理汇总的旧名集合拼成正则，在**整个** `docs/zh-CN/` 上搜索，修复命中项：
 
    ```bash
    grep -rnE "Old1|Old2|Old3" docs/zh-CN

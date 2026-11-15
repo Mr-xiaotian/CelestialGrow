@@ -457,11 +457,10 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
 // 运行期资源由 assembly 统一装配，在所有输入完成后阻塞等待退出。
 func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
-	resources, err := assembly.StartPlotResources(p.hub, logLevel)
-	if err != nil {
+	if err := assembly.StartPlotResources(p.hub, logLevel); err != nil {
 		return
 	}
-	defer resources.Stop()
+	defer func() { _ = p.hub.Stop() }()
 
 	p.StartAsync()
 	for _, seed := range seeds {

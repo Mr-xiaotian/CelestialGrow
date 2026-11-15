@@ -251,11 +251,10 @@ func (f *Farm) InjectTerminations(nodes []string) error {
 func (f *Farm) start(logLevel string, prepare func() error) error {
 	startTime := time.Now()
 
-	resources, err := assembly.StartFarmResources(f.hub, logLevel)
-	if err != nil {
+	if err := assembly.StartFarmResources(f.hub, logLevel); err != nil {
 		return err
 	}
-	defer resources.Stop()
+	defer func() { _ = f.hub.Stop() }()
 
 	f.emit(scarecrow.FarmStartEvent{
 		Farm:        f.name,

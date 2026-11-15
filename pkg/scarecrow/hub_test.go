@@ -257,6 +257,251 @@ func TestZeroValueHubIsUsable(t *testing.T) {
 	}
 }
 
+// ==== Lifecycle ====
+
+// lifecycleRecorder 记录测试观察者的生命周期调用顺序。
+type lifecycleRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+// record 追加一次调用记录。
+func (r *lifecycleRecorder) record(call string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, call)
+}
+
+// snapshot 返回调用记录副本。
+func (r *lifecycleRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// lifecycleWatcherStub 是可注入启动/停止错误的 Lifecycle 测试桩。
+type lifecycleWatcherStub struct {
+	name     string
+	recorder *lifecycleRecorder
+	startErr error
+	stopErr  error
+}
+
+func (s *lifecycleWatcherStub) OnEvent(Event) error { return nil }
+
+// Start 记录启动调用；注入错误时直接返回且不记录。
+func (s *lifecycleWatcherStub) Start() error {
+	if s.startErr != nil {
+		return s.startErr
+	}
+	s.recorder.record("start:" + s.name)
+	return nil
+}
+
+// Stop 记录停止调用并返回注入的错误。
+func (s *lifecycleWatcherStub) Stop() error {
+	s.recorder.record("stop:" + s.name)
+	return s.stopErr
+}
+
+func TestHubStartsAndStopsLifecycleInOrder(t *testing.T) {
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := hub.AddWatcher(&lifecycleWatcherStub{name: name, recorder: recorder}); err != nil {
+			t.Fatalf("AddWatcher(%q) = %v", name, err)
+		}
+	}
+
+	if err := hub.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := hub.Start(); err != nil {
+		t.Fatalf("second Start() = %v", err)
+	}
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("second Stop() = %v", err)
+	}
+
+	want := []string{"start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a"}
+	if got := recorder.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v", got, want)
+	}
+}
+
+func TestHubSkipsNonLifecycleWatcher(t *testing.T) {
+	var events int
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	if err := hub.AddWatcher(WatcherFunc(func(Event) error {
+		events++
+		return nil
+	})); err != nil {
+		t.Fatalf("AddWatcher() = %v", err)
+	}
+	if err := hub.AddWatcher(&lifecycleWatcherStub{name: "a", recorder: recorder}); err != nil {
+		t.Fatalf("AddWatcher(lifecycle) = %v", err)
+	}
+
+	if err := hub.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if events != 0 {
+		t.Fatalf("events = %d, want 0", events)
+	}
+	if got, want := recorder.snapshot(), []string{"start:a", "stop:a"}; !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v", got, want)
+	}
+
+	// 停止后观察者仍参与事件分发。
+	if err := hub.OnEvent(PlotStartEvent{}); err != nil {
+		t.Fatalf("OnEvent() = %v", err)
+	}
+	if events != 1 {
+		t.Fatalf("events = %d, want 1", events)
+	}
+}
+
+func TestHubRollsBackOnStartFailure(t *testing.T) {
+	boom := errors.New("boom")
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	for _, watcher := range []*lifecycleWatcherStub{
+		{name: "a", recorder: recorder},
+		{name: "b", recorder: recorder, startErr: boom},
+		{name: "c", recorder: recorder},
+	} {
+		if err := hub.AddWatcher(watcher); err != nil {
+			t.Fatalf("AddWatcher(%q) = %v", watcher.name, err)
+		}
+	}
+
+	err := hub.Start()
+	if err == nil {
+		t.Fatal("Start() = nil, want error")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("Start() error = %v, want wrap boom", err)
+	}
+	if !strings.Contains(err.Error(), "start") {
+		t.Fatalf("Start() error lacks context: %v", err)
+	}
+
+	want := []string{"start:a", "stop:a"}
+	if got := recorder.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v", got, want)
+	}
+
+	// 启动失败即终态：Stop 无副作用，且不可再次启动。
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := hub.Start(); err == nil {
+		t.Fatal("Start() after failed Start = nil, want error")
+	}
+	if got := recorder.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls after Stop = %v, want %v", got, want)
+	}
+}
+
+func TestHubStopBeforeStartIsNoop(t *testing.T) {
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	if err := hub.AddWatcher(&lifecycleWatcherStub{name: "a", recorder: recorder}); err != nil {
+		t.Fatalf("AddWatcher() = %v", err)
+	}
+
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if calls := recorder.snapshot(); len(calls) != 0 {
+		t.Fatalf("lifecycle calls = %v, want none", calls)
+	}
+}
+
+func TestHubRejectsStartAfterStop(t *testing.T) {
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	if err := hub.AddWatcher(&lifecycleWatcherStub{name: "a", recorder: recorder}); err != nil {
+		t.Fatalf("AddWatcher() = %v", err)
+	}
+
+	if err := hub.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := hub.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := hub.Start(); err == nil {
+		t.Fatal("Start() after Stop = nil, want error")
+	}
+
+	want := []string{"start:a", "stop:a"}
+	if got := recorder.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v", got, want)
+	}
+}
+
+func TestHubStartsNestedHub(t *testing.T) {
+	recorder := &lifecycleRecorder{}
+	child := NewHub()
+	if err := child.AddWatcher(&lifecycleWatcherStub{name: "child", recorder: recorder}); err != nil {
+		t.Fatalf("child.AddWatcher() = %v", err)
+	}
+
+	parent := NewHub()
+	if err := parent.AddWatcher(child); err != nil {
+		t.Fatalf("AddWatcher(child) = %v", err)
+	}
+	if err := parent.AddWatcher(&lifecycleWatcherStub{name: "parent", recorder: recorder}); err != nil {
+		t.Fatalf("AddWatcher(parent) = %v", err)
+	}
+
+	if err := parent.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := parent.Start(); err != nil {
+		t.Fatalf("second Start() = %v", err)
+	}
+	if err := parent.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+
+	want := []string{"start:child", "start:parent", "stop:parent", "stop:child"}
+	if got := recorder.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v", got, want)
+	}
+}
+
+func TestHubJoinsStopErrors(t *testing.T) {
+	errA := errors.New("a boom")
+	errB := errors.New("b boom")
+	recorder := &lifecycleRecorder{}
+	hub := NewHub()
+	for _, watcher := range []*lifecycleWatcherStub{
+		{name: "a", recorder: recorder, stopErr: errA},
+		{name: "b", recorder: recorder, stopErr: errB},
+	} {
+		if err := hub.AddWatcher(watcher); err != nil {
+			t.Fatalf("AddWatcher(%q) = %v", watcher.name, err)
+		}
+	}
+
+	if err := hub.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	err := hub.Stop()
+	if !errors.Is(err, errA) || !errors.Is(err, errB) {
+		t.Fatalf("Stop() error = %v, want both stop errors", err)
+	}
+}
+
 // ==== Lookup ====
 
 // markerWatcher 用于类型查找测试。

@@ -14,6 +14,17 @@ type Watcher interface {
 	OnEvent(event Event) error
 }
 
+// Lifecycle 是可被统一启动与停止的资源能力接口。
+//
+// Hub 会在注册的 Watcher 中识别实现该接口的观察者：Start 按注册顺序启动它们，
+// Stop 按相反顺序停止。未实现该接口的 Watcher 只参与事件分发。
+//
+// 该接口不要求实现方是 Watcher，因此也可用于纯粹的启停型资源。
+type Lifecycle interface {
+	Start() error
+	Stop() error
+}
+
 // ==== Adapter ====
 
 // WatcherFunc 将普通函数适配为 Watcher。

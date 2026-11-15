@@ -10,7 +10,7 @@ import (
 )
 
 // startFunc 描述一个运行期资源装配入口。
-type startFunc func(hub *scarecrow.Hub, logLevel string) (*assembly.Resources, error)
+type startFunc func(hub *scarecrow.Hub, logLevel string) error
 
 // starters 覆盖 Plot 级与 Farm 级两个入口，确保两者行为一致。
 var starters = []struct {
@@ -28,8 +28,7 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 				t.Errorf("unexpected watcher error: %v", err)
 			}))
 
-			resources, err := starter.start(hub, "DEBUG")
-			if err != nil {
+			if err := starter.start(hub, "DEBUG"); err != nil {
 				t.Fatalf("%s() = %v", starter.name, err)
 			}
 
@@ -44,8 +43,12 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 				t.Fatalf("OnEvent() = %v", err)
 			}
 
-			resources.Stop()
-			resources.Stop() // 幂等
+			if err := hub.Stop(); err != nil {
+				t.Fatalf("Stop() = %v", err)
+			}
+			if err := hub.Stop(); err != nil {
+				t.Fatalf("second Stop() = %v", err)
+			}
 
 			lifecycle, ok := scarecrow.Find[*persist.LifecycleWatcher](hub)
 			if !ok {
@@ -73,12 +76,8 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 func TestStartResourcesRejectNilHub(t *testing.T) {
 	for _, starter := range starters {
 		t.Run(starter.name, func(t *testing.T) {
-			resources, err := starter.start(nil, "INFO")
-			if err == nil {
+			if err := starter.start(nil, "INFO"); err == nil {
 				t.Fatalf("%s(nil) = nil, want error", starter.name)
-			}
-			if resources != nil {
-				t.Fatalf("%s(nil) resources = %#v, want nil", starter.name, resources)
 			}
 		})
 	}

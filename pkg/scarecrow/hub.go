@@ -1,6 +1,7 @@
 package scarecrow
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -30,11 +31,27 @@ func WithErrorHandler(handler func(error)) HubOption {
 // Watcher 列表采用写时复制语义：AddWatcher 在写锁下追加切片，OnEvent 仅在
 // 读锁下取一次切片快照，随后在锁外遍历。append 只会替换底层数组而不会修改
 // 已发布的元素，因此快照在并发追加下依然完整，遍历也无需持锁。
+//
+// Hub 同时管理实现 Lifecycle 的子项：Start 按注册顺序启动它们，Stop 按相反
+// 顺序停止。嵌套的 Hub 本身也实现 Lifecycle，因此生命周期会沿层级递归。
 type Hub struct {
 	mu        sync.RWMutex
 	listeners []Watcher
 	onError   func(error)
+
+	lifecycleMu sync.Mutex
+	state       hubState
+	lifecycle   []Lifecycle
 }
+
+// hubState 表示 Hub 的生命周期状态。
+type hubState int
+
+const (
+	hubIdle    hubState = iota // 尚未启动
+	hubRunning                 // 已启动，子项正在运行
+	hubStopped                 // 已停止，不可再次启动
+)
 
 // NewHub 创建一个分发中心。
 func NewHub(opts ...HubOption) *Hub {
@@ -107,6 +124,82 @@ func (h *Hub) rejectCycle(candidate Watcher) error {
 		}
 	}
 	return nil
+}
+
+// ==== Lifecycle ====
+
+// Start 按注册顺序启动 hub 中实现 Lifecycle 的观察者。
+//
+// 未实现 Lifecycle 的观察者只参与事件分发，会被跳过。某个观察者启动失败时，
+// 本次已启动的观察者会按相反顺序停止，Hub 转为已停止状态（不可再次启动），
+// 返回的错误包含失败者类型。已启动时重复调用无副作用。
+func (h *Hub) Start() error {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	switch h.state {
+	case hubRunning:
+		return nil
+	case hubStopped:
+		return fmt.Errorf("scarecrow: hub already stopped")
+	}
+
+	h.mu.RLock()
+	listeners := h.listeners
+	h.mu.RUnlock()
+
+	started := make([]Lifecycle, 0, len(listeners))
+	for _, listener := range listeners {
+		lifecycle, ok := listener.(Lifecycle)
+		if !ok {
+			continue
+		}
+		if err := lifecycle.Start(); err != nil {
+			startErr := fmt.Errorf("scarecrow: start %T: %w", listener, err)
+			stopErr := stopReversed(started)
+			// 已停止的子项无法重新启动（如 spout 的通道已关闭），因此失败即终态。
+			h.state = hubStopped
+			if stopErr != nil {
+				return errors.Join(startErr, stopErr)
+			}
+			return startErr
+		}
+		started = append(started, lifecycle)
+	}
+
+	h.lifecycle = started
+	h.state = hubRunning
+	return nil
+}
+
+// Stop 按启动的相反顺序停止 hub 管理的观察者，并汇总所有错误。
+//
+// 未启动或已停止时调用无副作用，可安全重复调用。停止后观察者仍留在 hub 中，
+// 事件分发与 Find 查找不受影响。
+func (h *Hub) Stop() error {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	if h.state != hubRunning {
+		return nil
+	}
+
+	started := h.lifecycle
+	h.lifecycle = nil
+	h.state = hubStopped
+
+	return stopReversed(started)
+}
+
+// stopReversed 逆序停止观察者，并用 errors.Join 汇总错误。
+func stopReversed(lifecycles []Lifecycle) error {
+	errs := make([]error, 0, len(lifecycles))
+	for i := len(lifecycles) - 1; i >= 0; i-- {
+		if err := lifecycles[i].Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("scarecrow: stop %T: %w", lifecycles[i], err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ==== Dispatch ====

@@ -5,6 +5,7 @@ import (
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // Farm 是对外暴露的农场类型。
@@ -25,6 +26,9 @@ type PlotNode = plot.PlotNode
 // Option 是 Plot 节点的可选配置。
 type Option = plot.Option
 
+// PrintWatcher 是对外暴露的标准输出进度观察者类型。
+type PrintWatcher = scarecrow.PrintWatcher
+
 // NewFarm 创建一个 Farm。
 func NewFarm(name string) *Farm {
 	return farm.NewFarm(name)
@@ -43,6 +47,11 @@ func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts
 // NewRoutePlot 创建一个 RoutePlot。
 func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y] {
 	return plot.NewRoutePlot(name, cultivator, opts...)
+}
+
+// NewPrintWatcher 创建一个把事件进度打印到标准输出的观察者，name 用作输出前缀。
+func NewPrintWatcher(name string) *PrintWatcher {
+	return scarecrow.NewPrintWatcher(name)
 }
 
 var (

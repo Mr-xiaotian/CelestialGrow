@@ -59,7 +59,7 @@ func TestPushWatcherPushesFarmStartSnapshotAndShutdown(t *testing.T) {
 		Farm:        "demo",
 		IsDAG:       true,
 		Plots:       []string{"root"},
-		Edges:       map[string][]string{"root": {"leaf"}},
+		Edges:       map[string][]string{"root": {"leaf"}, "leaf": {}},
 		SourcePlots: []string{"root"},
 		NodeMeta: map[string]scarecrow.NodeMeta{
 			"root": {ClassName: "SinglePlot", MaxWorkers: 2},
@@ -113,6 +113,14 @@ func TestPushWatcherPushesFarmStartSnapshotAndShutdown(t *testing.T) {
 	nodeMeta, ok := meta["node_meta"].(map[string]any)
 	if !ok || nodeMeta["root"] == nil {
 		t.Fatalf("graph meta node_meta = %#v", meta["node_meta"])
+	}
+
+	edges, ok := meta["edges"].(map[string]any)
+	if !ok {
+		t.Fatalf("graph meta edges = %#v", meta["edges"])
+	}
+	if leaf, ok := edges["leaf"].([]any); !ok || len(leaf) != 0 {
+		t.Fatalf("leaf edges = %#v, want []", edges["leaf"])
 	}
 
 	var failure map[string]any

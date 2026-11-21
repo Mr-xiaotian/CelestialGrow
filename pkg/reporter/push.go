@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -74,7 +75,7 @@ func (h *pushHandler) BeforeStart() error {
 
 func (h *pushHandler) HandleRecord(record pushRecord) error {
 	if err := h.handle(record); err != nil {
-		log.Printf("reporter: %v", err)
+		log.Print(err)
 	}
 	return nil
 }
@@ -136,7 +137,7 @@ func (h *pushHandler) post(path string, payload map[string]any) error {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("reporter: marshal %s payload: %w", path, err)
 	}
 	res, err := client.Post(
 		h.baseURL+path,
@@ -144,11 +145,15 @@ func (h *pushHandler) post(path string, payload map[string]any) error {
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("reporter: push %s: %w", path, err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode/100 != 2 {
+		detail, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		if message := strings.TrimSpace(string(detail)); message != "" {
+			return fmt.Errorf("reporter: push %s failed: %s: %s", path, res.Status, message)
+		}
 		return fmt.Errorf("reporter: push %s failed: %s", path, res.Status)
 	}
 	return nil
@@ -217,9 +222,9 @@ func (w *PushWatcher) OnEvent(event scarecrow.Event) error {
 			GraphMode:   defaultGraphMode,
 			StartTime:   unixSeconds(item.StartTime),
 			IsDAG:       item.IsDAG,
-			Nodes:       append([]string(nil), item.Plots...),
+			Nodes:       append([]string{}, item.Plots...),
 			Edges:       copyEdges(item.Edges),
-			SourceNodes: append([]string(nil), item.SourcePlots...),
+			SourceNodes: append([]string{}, item.SourcePlots...),
 			NodeMeta:    copyNodeMeta(item.NodeMeta),
 		})
 	case scarecrow.SeedWitherEvent:
@@ -260,7 +265,8 @@ func (w *PushWatcher) pushSnapshotAt(
 func copyEdges(edges map[string][]string) map[string][]string {
 	result := make(map[string][]string, len(edges))
 	for from, targets := range edges {
-		result[from] = append([]string(nil), targets...)
+		// 使用非 nil 的空切片，保证无出边的节点编码为 [] 而不是 null。
+		result[from] = append([]string{}, targets...)
 	}
 	return result
 }

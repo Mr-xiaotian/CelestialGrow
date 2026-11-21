@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/metronome"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
@@ -31,6 +32,8 @@ type PlotNode interface {
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
 	AddWatcher(listener scarecrow.Watcher) error
+	AddTicker(ticker metronome.Ticker) error
+	GetTickerHub() *metronome.Hub
 	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
@@ -54,7 +57,8 @@ type basePlot[S any, F any, Y any] struct {
 	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
-	hub         *scarecrow.Hub
+	watcherHub  *scarecrow.Hub
+	tickerHub   *metronome.Hub
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -70,6 +74,10 @@ func newBasePlot[S any, F any, Y any](name string, cultivator func(S) (F, error)
 	for _, opt := range opts {
 		opt(&o)
 	}
+	tickerHub, err := metronome.NewHub()
+	if err != nil {
+		panic(fmt.Sprintf("plot: create ticker hub: %v", err))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &basePlot[S, F, Y]{
@@ -83,23 +91,29 @@ func newBasePlot[S any, F any, Y any](name string, cultivator func(S) (F, error)
 		upstreams:  make(map[string]struct{}),
 
 		eventClient: runtime.NewLocalEventClient(),
-		hub:         scarecrow.NewHub(),
+		watcherHub:  scarecrow.NewHub(),
+		tickerHub:   tickerHub,
 
 		ctx:    ctx,
 		cancel: cancel,
 	}
 }
 
-// ==== Watcher Registration ====
+// ==== Watcher/Ticker Registration ====
 
 // AddWatcher 注册一个观察者。重复注册会重复收到事件。
 func (p *basePlot[S, F, Y]) AddWatcher(listener scarecrow.Watcher) error {
-	return p.hub.AddWatcher(listener)
+	return p.watcherHub.AddWatcher(listener)
 }
 
-// emit 将事件分发给所有观察者。观察者故障由 Hub 的错误处理器消费，不影响执行。
-func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
-	_ = p.hub.OnEvent(event)
+// AddTicker 注册一个 plot 级 ticker。
+func (p *basePlot[S, F, Y]) AddTicker(ticker metronome.Ticker) error {
+	return p.tickerHub.AddTicker(ticker)
+}
+
+// GetTickerHub 返回 plot 持有的节拍 hub。
+func (p *basePlot[S, F, Y]) GetTickerHub() *metronome.Hub {
+	return p.tickerHub
 }
 
 // ==== Initialization ====
@@ -151,7 +165,7 @@ func (p *basePlot[S, F, Y]) GetSeedChanAny() any {
 
 // currentMetrics 返回当前 plot 的指标快照；未装配指标观察者时 ok 为 false。
 func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
-	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.hub)
+	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.watcherHub)
 	if !ok {
 		return scarecrow.PlotMetrics{}, false
 	}
@@ -218,13 +232,13 @@ func (p *basePlot[S, F, Y]) IsFinish() bool {
 // notifyStart 将状态设为 running 并发出 Plot 启动事件。
 func (p *basePlot[S, F, Y]) notifyStart(startTime time.Time) {
 	p.state.Store(1)
-	p.emit(scarecrow.PlotStartEvent{Plot: p.name, Tenders: p.numTenders, StartTime: startTime})
+	p.watcherHub.OnEvent(scarecrow.PlotStartEvent{Plot: p.name, Tenders: p.numTenders, StartTime: startTime})
 }
 
 // notifyFinish 将状态设为 done 并发出 Plot 结束事件。
 func (p *basePlot[S, F, Y]) notifyFinish(startTime time.Time) {
 	p.state.Store(2)
-	p.emit(scarecrow.PlotEndEvent{Plot: p.name, EndTime: time.Now(), Elapsed: time.Since(startTime)})
+	p.watcherHub.OnEvent(scarecrow.PlotEndEvent{Plot: p.name, EndTime: time.Now(), Elapsed: time.Since(startTime)})
 }
 
 // ==== Result Handling ====
@@ -236,7 +250,7 @@ func (p *basePlot[S, F, Y]) witherSeed(seedPayload runtime.Payload[S], err error
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	weedID := p.eventClient.Emit("weed", []int{seedID})
 
-	p.emit(scarecrow.SeedWitherEvent{
+	p.watcherHub.OnEvent(scarecrow.SeedWitherEvent{
 		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
@@ -255,7 +269,7 @@ func (p *basePlot[S, F, Y]) pruneSeed(seedPayload runtime.Payload[S], startTime 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	pruneID := p.eventClient.Emit("prune", []int{seedID})
 
-	p.emit(scarecrow.SeedPruneEvent{
+	p.watcherHub.OnEvent(scarecrow.SeedPruneEvent{
 		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
@@ -291,7 +305,7 @@ func (p *basePlot[S, F, Y]) sprout() {
 				parentIDs = append(parentIDs, sealID)
 			}
 			sealID := p.eventClient.Emit("seal", parentIDs)
-			p.emit(scarecrow.SealMergeEvent{
+			p.watcherHub.OnEvent(scarecrow.SealMergeEvent{
 				Plot:      p.name,
 				ParentIDs: parentIDs,
 				SealID:    sealID,
@@ -373,7 +387,7 @@ func (p *basePlot[S, F, Y]) tend(seedPayload runtime.Payload[S], sem chan struct
 			break
 		}
 		if attempt <= p.maxRetries {
-			p.emit(scarecrow.SeedReplantEvent{
+			p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{
 				Plot:     p.name,
 				Seed:     seed,
 				SeedRepr: seedRepr,
@@ -412,7 +426,7 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 	seedID := p.eventClient.Emit("seed", []int{})
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 
-	p.emit(scarecrow.SeedInputEvent{
+	p.watcherHub.OnEvent(scarecrow.SeedInputEvent{
 		Plot:     p.name,
 		Seed:     seed,
 		SeedRepr: seedRepr,
@@ -427,7 +441,7 @@ func (p *basePlot[S, F, Y]) Seed(seed S) {
 // plot，这同样会触发强终止，而不是继续等待剩余上游 seal。
 func (p *basePlot[S, F, Y]) Seal() {
 	sealID := p.eventClient.Emit("seal", []int{})
-	p.emit(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
+	p.watcherHub.OnEvent(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
 	p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
 }
 
@@ -457,10 +471,16 @@ func (p *basePlot[S, F, Y]) WaitAsync() {
 // logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
 // 运行期资源由 assembly 统一装配，在所有输入完成后阻塞等待退出。
 func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
-	if err := assembly.StartPlotResources(p.hub, logLevel); err != nil {
+	stop, err := assembly.StartLocalResources(
+		p.watcherHub,
+		p.tickerHub,
+		logLevel,
+		metronome.DefaultInterval,
+	)
+	if err != nil {
 		return
 	}
-	defer func() { _ = p.hub.Stop() }()
+	defer func() { _ = stop() }()
 
 	p.StartAsync()
 	for _, seed := range seeds {
@@ -471,10 +491,10 @@ func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string) {
 }
 
 // Harvest 读取当前 plot 已持久化的全部种子状态快照。
-// 生命周期观察者在调用时从 hub（含嵌套 hub）中查找，因此运行结束后可直接查询，
+// 生命周期观察者在调用时从 watcher hub（含嵌套 hub）中查找，因此运行结束后可直接查询，
 // 不需要在 plot 上保存数据库路径。
 func (p *basePlot[S, F, Y]) Harvest() ([]persist.LifecycleStatusRecord, error) {
-	lifecycle, ok := scarecrow.Find[*persist.LifecycleWatcher](p.hub)
+	lifecycle, ok := scarecrow.Find[*persist.LifecycleWatcher](p.watcherHub)
 	if !ok {
 		return nil, fmt.Errorf("plot %q lifecycle watcher is not registered", p.name)
 	}

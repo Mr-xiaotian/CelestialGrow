@@ -44,7 +44,7 @@ func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, 
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	fruitRepr := trunc(fmt.Sprintf("%+v", fruits), 25)
-	p.emit(scarecrow.SeedRipenEvent{
+	p.watcherHub.OnEvent(scarecrow.SeedRipenEvent{
 		Plot:      p.name,
 		Seed:      seed,
 		SeedRepr:  seedRepr,
@@ -61,7 +61,7 @@ func (p *SplitPlot[S, F]) ripenSeed(seedPayload runtime.Payload[S], fruits []F, 
 			downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 			yieldRepr := trunc(fmt.Sprintf("%+v", fruit), 50)
 
-			p.emit(scarecrow.SeedInputEvent{
+			p.watcherHub.OnEvent(scarecrow.SeedInputEvent{
 				Plot:     nextPlot,
 				From:     p.name,
 				Seed:     fruit,

@@ -163,6 +163,19 @@ func (h *Hub) RemoveTicker(ticker Ticker) error {
 	return nil
 }
 
+// Contains 返回某个 ticker 是否直接注册在当前 hub 上。
+func (h *Hub) Contains(ticker Ticker) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, existing := range h.tickers {
+		if sameTicker(existing, ticker) {
+			return true
+		}
+	}
+	return false
+}
+
 // Start 按注册顺序启动 hub 中实现 Lifecycle 的 ticker。
 func (h *Hub) Start() error {
 	h.lifecycleMu.Lock()

@@ -47,7 +47,7 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 
 	seedRepr := trunc(fmt.Sprintf("%+v", seed), 50)
 	routesRepr := trunc(fmt.Sprintf("%+v", routes), 25)
-	p.emit(scarecrow.SeedRipenEvent{
+	p.watcherHub.OnEvent(scarecrow.SeedRipenEvent{
 		Plot:      p.name,
 		Seed:      seed,
 		SeedRepr:  seedRepr,
@@ -68,7 +68,7 @@ func (p *RoutePlot[S, Y]) ripenSeed(seedPayload runtime.Payload[S], routes map[s
 		downstreamSeedID := p.eventClient.Emit("seed", []int{fruitID})
 		yieldRepr := trunc(fmt.Sprintf("%+v", yield), 50)
 
-		p.emit(scarecrow.SeedInputEvent{
+		p.watcherHub.OnEvent(scarecrow.SeedInputEvent{
 			Plot:     nextPlot,
 			From:     p.name,
 			Seed:     yield,

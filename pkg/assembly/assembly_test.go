@@ -5,20 +5,26 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/metronome"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/persist"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // startFunc 描述一个运行期资源装配入口。
-type startFunc func(hub *scarecrow.Hub, logLevel string) error
+type startFunc func(
+	watcherHub *scarecrow.Hub,
+	tickerHub *metronome.Hub,
+	logLevel string,
+	interval time.Duration,
+) (assembly.StopFunc, error)
 
 // starters 覆盖 Plot 级与 Farm 级两个入口，确保两者行为一致。
 var starters = []struct {
 	name  string
 	start startFunc
 }{
-	{"StartPlotResources", assembly.StartPlotResources},
-	{"StartFarmResources", assembly.StartFarmResources},
+	{"StartLocalResources", assembly.StartLocalResources},
+	{"StartReportResources", assembly.StartReportResources},
 }
 
 func TestStartResourcesAssembleLifecycle(t *testing.T) {
@@ -27,8 +33,15 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 			hub := scarecrow.NewHub(scarecrow.WithErrorHandler(func(err error) {
 				t.Errorf("unexpected watcher error: %v", err)
 			}))
+			tickerHub, err := metronome.NewHub(metronome.WithErrorHandler(func(err error) {
+				t.Errorf("unexpected ticker error: %v", err)
+			}))
+			if err != nil {
+				t.Fatalf("NewHub() = %v", err)
+			}
 
-			if err := starter.start(hub, "DEBUG"); err != nil {
+			stop, err := starter.start(hub, tickerHub, "DEBUG", metronome.DefaultInterval)
+			if err != nil {
 				t.Fatalf("%s() = %v", starter.name, err)
 			}
 
@@ -43,11 +56,11 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 				t.Fatalf("OnEvent() = %v", err)
 			}
 
-			if err := hub.Stop(); err != nil {
-				t.Fatalf("Stop() = %v", err)
+			if err := stop(); err != nil {
+				t.Fatalf("stop() = %v", err)
 			}
-			if err := hub.Stop(); err != nil {
-				t.Fatalf("second Stop() = %v", err)
+			if err := stop(); err != nil {
+				t.Fatalf("second stop() = %v", err)
 			}
 
 			lifecycle, ok := scarecrow.Find[*persist.LifecycleWatcher](hub)
@@ -76,8 +89,23 @@ func TestStartResourcesAssembleLifecycle(t *testing.T) {
 func TestStartResourcesRejectNilHub(t *testing.T) {
 	for _, starter := range starters {
 		t.Run(starter.name, func(t *testing.T) {
-			if err := starter.start(nil, "INFO"); err == nil {
-				t.Fatalf("%s(nil) = nil, want error", starter.name)
+			tickerHub, err := metronome.NewHub()
+			if err != nil {
+				t.Fatalf("NewHub() = %v", err)
+			}
+			if _, err := starter.start(nil, tickerHub, "INFO", metronome.DefaultInterval); err == nil {
+				t.Fatalf("%s(nil, tickerHub) = nil, want error", starter.name)
+			}
+		})
+	}
+}
+
+func TestStartResourcesRejectNilTickerHub(t *testing.T) {
+	for _, starter := range starters {
+		t.Run(starter.name, func(t *testing.T) {
+			watcherHub := scarecrow.NewHub()
+			if _, err := starter.start(watcherHub, nil, "INFO", metronome.DefaultInterval); err == nil {
+				t.Fatalf("%s(watcherHub, nil) = nil, want error", starter.name)
 			}
 		})
 	}

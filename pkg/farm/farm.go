@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/metronome"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
@@ -23,20 +24,27 @@ type Farm struct {
 	*OrderGraph
 
 	eventClient runtime.EventClient
-	hub         *scarecrow.Hub
+	watcherHub  *scarecrow.Hub
+	tickerHub   *metronome.Hub
 }
 
 // ==== Construction ====
 
 // NewFarm 创建一个 Farm 实例。name 为 farm 名称（用于日志标识）。
 func NewFarm(name string) *Farm {
+	tickerHub, err := metronome.NewHub()
+	if err != nil {
+		panic(fmt.Sprintf("farm: create ticker hub: %v", err))
+	}
+
 	return &Farm{
 		name:       name,
 		plots:      make(map[string]plot.PlotNode),
 		OrderGraph: NewOrderGraph(),
 
 		eventClient: runtime.NewLocalEventClient(),
-		hub:         scarecrow.NewHub(),
+		watcherHub:  scarecrow.NewHub(),
+		tickerHub:   tickerHub,
 	}
 }
 
@@ -159,12 +167,32 @@ func (f *Farm) Connect(fromPlots []plot.PlotNode, toPlots []plot.PlotNode) error
 	return nil
 }
 
-// ==== Watcher Registration ====
+// ==== Watcher/Ticker Registration ====
 
 // AddWatcher 注册一个 Farm 级 watcher，可接收 Farm 事件与所有 Plot 事件。
 // 可在 Run/Start 前注册；Hub 支持运行期追加，之后的事件才会送达新 watcher。
 func (f *Farm) AddWatcher(watcher scarecrow.Watcher) error {
-	return f.hub.AddWatcher(watcher)
+	return f.watcherHub.AddWatcher(watcher)
+}
+
+// AddTicker 注册一个 Farm 级 ticker，可接收整个 Farm 运行期间的节拍。
+func (f *Farm) AddTicker(ticker metronome.Ticker) error {
+	return f.tickerHub.AddTicker(ticker)
+}
+
+// injectTickerHubs 将各 plot 的 ticker hub 收进 Farm 的 ticker hub。
+//
+// 这样 Farm 级时钟即可驱动整棵 ticker 树；重复调用时会忽略已注册的 hub。
+func (f *Farm) injectTickerHubs() error {
+	for _, plot := range f.plots {
+		if f.tickerHub.Contains(plot.GetTickerHub()) {
+			continue
+		}
+		if err := f.tickerHub.AddTicker(plot.GetTickerHub()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ==== Execution ====
@@ -181,7 +209,7 @@ func (f *Farm) validateRunInputs(inputs map[string][]any) error {
 
 // emit 将事件分发给 farm 级观察者。观察者故障由 Hub 的错误处理器消费。
 func (f *Farm) emit(event scarecrow.Event) {
-	_ = f.hub.OnEvent(event)
+	_ = f.watcherHub.OnEvent(event)
 }
 
 // Run 同步运行整张 Farm：先启动所有 Plot，再注入初始种子，并向源 Plot
@@ -251,10 +279,20 @@ func (f *Farm) InjectTerminations(nodes []string) error {
 func (f *Farm) start(logLevel string, prepare func() error) error {
 	startTime := time.Now()
 
-	if err := assembly.StartFarmResources(f.hub, logLevel); err != nil {
+	if err := f.injectTickerHubs(); err != nil {
 		return err
 	}
-	defer func() { _ = f.hub.Stop() }()
+
+	stop, err := assembly.StartLocalResources(
+		f.watcherHub,
+		f.tickerHub,
+		logLevel,
+		metronome.DefaultInterval,
+	)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stop() }()
 
 	f.emit(scarecrow.FarmStartEvent{
 		Farm:        f.name,
@@ -274,7 +312,7 @@ func (f *Farm) start(logLevel string, prepare func() error) error {
 	}()
 
 	for _, plot := range f.plots {
-		if err := plot.AddWatcher(f.hub); err != nil {
+		if err := plot.AddWatcher(f.watcherHub); err != nil {
 			return err
 		}
 	}

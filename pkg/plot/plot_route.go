@@ -35,6 +35,13 @@ func NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, e
 	return p
 }
 
+// ==== Getters ====
+
+// GetMeta 返回节点的构建期元信息。
+func (p *RoutePlot[S, Y]) GetMeta() scarecrow.NodeMeta {
+	return p.meta("RoutePlot")
+}
+
 // ==== Result Handling ====
 
 // ripenSeed 处理路由成功的种子：发出种子成熟事件，

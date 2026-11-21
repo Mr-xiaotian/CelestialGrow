@@ -56,7 +56,7 @@ func TestFarmStructure121(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": inputs,
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -146,7 +146,7 @@ func TestFarmStructure121PartialFailure(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": inputs,
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -274,7 +274,7 @@ func TestFarmStructureDisconnectedComponents(t *testing.T) {
 		"rootA":  inputsA,
 		"rootB1": inputsB1,
 		"rootB2": inputsB2,
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestFarmStructure21FaninDifferentSpeed(t *testing.T) {
 	if err := farm.Run(map[string][]any{
 		"rootFast": fastInputs,
 		"rootSlow": slowInputs,
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

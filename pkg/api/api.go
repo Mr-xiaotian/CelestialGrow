@@ -5,6 +5,7 @@ import (
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/farm"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/reporter"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
@@ -28,6 +29,9 @@ type Option = plot.Option
 
 // PrintWatcher 是对外暴露的标准输出进度观察者类型。
 type PrintWatcher = scarecrow.PrintWatcher
+
+// Report 是对外暴露的远程上报配置类型。
+type Report = reporter.Config
 
 // NewFarm 创建一个 Farm。
 func NewFarm(name string) *Farm {

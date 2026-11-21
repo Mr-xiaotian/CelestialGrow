@@ -72,7 +72,7 @@ func farmDedup() {
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

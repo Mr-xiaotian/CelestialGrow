@@ -33,6 +33,13 @@ func NewSinglePlot[S any, F any](name string, cultivator func(S) (F, error), opt
 	return p
 }
 
+// ==== Getters ====
+
+// GetMeta 返回节点的构建期元信息。
+func (p *SinglePlot[S, F]) GetMeta() scarecrow.NodeMeta {
+	return p.meta("SinglePlot")
+}
+
 // ==== Result Handling ====
 
 // ripenSeed 处理培育成功的种子：发出种子成熟事件，并逐颗向下游投递果实。

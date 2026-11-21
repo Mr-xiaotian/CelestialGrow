@@ -42,7 +42,7 @@ func TestFarmRunRoutePlot(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"route": {1, 2, 3, 4},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestFarmRunRoutePlotSkipsUnconnectedTarget(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"route": {1},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

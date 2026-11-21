@@ -2,11 +2,13 @@ package farm
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/assembly"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/metronome"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/plot"
+	"github.com/Mr-xiaotian/CelestialGrow/pkg/reporter"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/runtime"
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
@@ -70,6 +72,15 @@ func (f *Farm) GetPlot(name string) (plot.PlotNode, bool) {
 // getStructureList 返回渲染成文本行列表的 Farm 结构。
 func (f *Farm) getStructureList() []string {
 	return RenderStructureList(f.Nodes(), f.OutEdges(), f.sourceNodes)
+}
+
+// getNodeMeta 返回全部 Plot 的构建期元信息，按 Plot 名称索引。
+func (f *Farm) getNodeMeta() map[string]scarecrow.NodeMeta {
+	meta := make(map[string]scarecrow.NodeMeta, len(f.plots))
+	for name, p := range f.plots {
+		meta[name] = p.GetMeta()
+	}
+	return meta
 }
 
 // ==== Registration ====
@@ -214,14 +225,16 @@ func (f *Farm) emit(event scarecrow.Event) {
 
 // Run 同步运行整张 Farm：先启动所有 Plot，再注入初始种子，并向源 Plot
 // 发送终止信号，最后等待全部 Plot 退出。
-// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
-func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
+//
+// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。report 为远程上报
+// 配置；传 nil 表示本地运行，不装配上报与注入拉取。
+func (f *Farm) Run(inputs map[string][]any, logLevel string, report *reporter.Config) error {
 	if err := f.validateRunInputs(inputs); err != nil {
 		return err
 	}
 
 	f.sourceNodes = SourceNodes(f.OrderGraph)
-	return f.start(logLevel, func() error {
+	return f.start(logLevel, report, func() error {
 		if err := f.InjectTasks(inputs); err != nil {
 			return err
 		}
@@ -234,10 +247,12 @@ func (f *Farm) Run(inputs map[string][]any, logLevel string) error {
 // 与 Run 不同，Start 不注入任何初始种子或终止信号，适合外部驱动场景
 // （如 reporter）：调用方可在 Start 阻塞期间通过 InjectTasks /
 // InjectTerminations 动态控制任务流。若没有外部注入终止信号，Start 不会返回。
-// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。
-func (f *Farm) Start(logLevel string) error {
+//
+// logLevel 为本次运行的日志最低级别，空字符串按 INFO 处理。report 为远程上报
+// 配置；传 nil 表示本地运行，否则远程注入的任务也会通过 Start 驱动本 Farm。
+func (f *Farm) Start(logLevel string, report *reporter.Config) error {
 	f.sourceNodes = SourceNodes(f.OrderGraph)
-	return f.start(logLevel, nil)
+	return f.start(logLevel, report, nil)
 }
 
 // InjectTasks 向指定 Plot 注入种子。可在 Start/Run 运行期间调用。
@@ -274,21 +289,51 @@ func (f *Farm) InjectTerminations(nodes []string) error {
 	return nil
 }
 
+// normalizeReport 补齐本次运行的上报会话标识。
+//
+// report 为 nil 表示本地运行。会话标识为空时按 Farm 名称与启动时刻生成，
+// 避免不同运行在服务端互相覆盖。
+func (f *Farm) normalizeReport(report *reporter.Config) *reporter.Config {
+	if report == nil || strings.TrimSpace(report.SessionID) != "" {
+		return report
+	}
+
+	copied := *report
+	copied.SessionID = fmt.Sprintf("%s@%d", f.name, time.Now().UnixNano())
+	return &copied
+}
+
 // start 是 Run 与 Start 共用的执行流程。
 // prepare 在 Plot 启动后、等待退出前调用，用于注入初始任务与终止信号。
-func (f *Farm) start(logLevel string, prepare func() error) error {
+func (f *Farm) start(logLevel string, report *reporter.Config, prepare func() error) error {
 	startTime := time.Now()
+	report = f.normalizeReport(report)
 
 	if err := f.injectTickerHubs(); err != nil {
 		return err
 	}
 
-	stop, err := assembly.StartLocalResources(
-		f.watcherHub,
-		f.tickerHub,
-		logLevel,
-		metronome.DefaultInterval,
+	var (
+		stop assembly.StopFunc
+		err  error
 	)
+	if report == nil {
+		stop, err = assembly.StartLocalResources(
+			f.watcherHub,
+			f.tickerHub,
+			logLevel,
+			metronome.DefaultInterval,
+		)
+	} else {
+		stop, err = assembly.StartReportResources(
+			f.watcherHub,
+			f.tickerHub,
+			f,
+			logLevel,
+			metronome.DefaultInterval,
+			report,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -300,6 +345,7 @@ func (f *Farm) start(logLevel string, prepare func() error) error {
 		Plots:       f.Nodes(),
 		Edges:       f.OutEdges(),
 		SourcePlots: f.sourceNodes,
+		NodeMeta:    f.getNodeMeta(),
 		Structure:   f.getStructureList(),
 		StartTime:   startTime,
 	})

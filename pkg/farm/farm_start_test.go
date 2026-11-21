@@ -33,7 +33,7 @@ func TestFarmRunLinear(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

@@ -47,7 +47,7 @@ func TestFarmStartWithInjection(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- f.Start("INFO")
+		errCh <- f.Start("INFO", nil)
 	}()
 
 	if err := f.InjectTasks(map[string][]any{"root": {1, 2, 3}}); err != nil {

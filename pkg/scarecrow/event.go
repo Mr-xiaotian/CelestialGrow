@@ -15,6 +15,15 @@ type Event interface {
 
 // ==== Farm ====
 
+// NodeMeta 描述单个 Plot 的构建期元信息。
+//
+// 这些字段在运行期固定不变，随 FarmStartEvent 一次性上报，不进入每拍状态快照。
+type NodeMeta struct {
+	ClassName     string `json:"class_name"`     // Plot 类型名
+	ExecutionMode string `json:"execution_mode"` // 执行模式
+	MaxWorkers    int    `json:"max_workers"`    // 最大并发数
+}
+
 // FarmStartEvent Farm 启动事件。
 type FarmStartEvent struct {
 	Farm        string              // Farm 名称
@@ -22,6 +31,7 @@ type FarmStartEvent struct {
 	Plots       []string            // Plot 名称列表
 	Edges       map[string][]string // 出边邻接表
 	SourcePlots []string            // 源 Plot 名称列表
+	NodeMeta    map[string]NodeMeta // Plot 名称 -> 构建期元信息
 	Structure   []string            // 预先渲染的结构行
 	StartTime   time.Time           // 启动时间
 }

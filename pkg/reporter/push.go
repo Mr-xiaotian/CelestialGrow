@@ -26,14 +26,14 @@ type pushRecord interface {
 }
 
 type graphMetaRecord struct {
-	Graph       string                    `json:"graph"`
-	GraphMode   string                    `json:"graph_mode"`
-	StartTime   float64                   `json:"start_time"`
-	IsDAG       bool                      `json:"is_dag"`
-	Nodes       []string                  `json:"nodes"`
-	Edges       map[string][]string       `json:"edges"`
-	SourceNodes []string                  `json:"source_nodes"`
-	NodeMeta    map[string]map[string]any `json:"node_meta"`
+	Graph       string                        `json:"graph"`
+	GraphMode   string                        `json:"graph_mode"`
+	StartTime   float64                       `json:"start_time"`
+	IsDAG       bool                          `json:"is_dag"`
+	Nodes       []string                      `json:"nodes"`
+	Edges       map[string][]string           `json:"edges"`
+	SourceNodes []string                      `json:"source_nodes"`
+	NodeMeta    map[string]scarecrow.NodeMeta `json:"node_meta"`
 }
 
 func (graphMetaRecord) isPushRecord() {}
@@ -44,6 +44,17 @@ type snapshotRecord struct {
 }
 
 func (snapshotRecord) isPushRecord() {}
+
+type taskFailRecord struct {
+	EventID      int
+	Node         string
+	Task         any
+	ErrorType    string
+	ErrorMessage string
+	Timestamp    float64
+}
+
+func (taskFailRecord) isPushRecord() {}
 
 type shutdownRecord struct{}
 
@@ -98,6 +109,16 @@ func (h *pushHandler) handle(record pushRecord) error {
 			"timestamp":  item.Timestamp,
 			"snapshot":   item.Snapshot,
 		})
+	case taskFailRecord:
+		return h.post("/api/push_error", map[string]any{
+			"session_id":    h.sessionID,
+			"event_id":      item.EventID,
+			"node":          item.Node,
+			"task_json":     item.Task,
+			"error_type":    item.ErrorType,
+			"error_message": item.ErrorMessage,
+			"ts":            item.Timestamp,
+		})
 	case shutdownRecord:
 		return h.post("/api/shutdown_session", map[string]any{
 			"session_id": h.sessionID,
@@ -135,9 +156,10 @@ func (h *pushHandler) post(path string, payload map[string]any) error {
 
 // PushWatcher 将 Farm 事件与周期快照翻译为远程上报请求。
 //
-// 事件侧只处理 FarmStartEvent / FarmEndEvent：前者上报图元信息，后者先补推一次
-// 终态快照，再通知会话下线。周期状态快照由 SnapshotTicker 调用 PushSnapshot 送入
-// 后台 spout，实际网络请求在独立 goroutine 中执行。
+// 事件侧处理 FarmStartEvent / FarmEndEvent / SeedWitherEvent：启动事件上报图元
+// 信息，最终枯萎事件上报单条错误，结束事件先补推一次终态快照再通知会话下线。
+// 周期状态快照由 SnapshotTicker 调用 PushSnapshot 送入后台 spout，实际网络请求
+// 在独立 goroutine 中执行。
 type PushWatcher struct {
 	sessionID   string
 	metricsView MetricsView
@@ -193,12 +215,21 @@ func (w *PushWatcher) OnEvent(event scarecrow.Event) error {
 		return w.inlet.Send(graphMetaRecord{
 			Graph:       item.Farm,
 			GraphMode:   defaultGraphMode,
-			StartTime:   float64(item.StartTime.UnixNano()) / 1e9,
+			StartTime:   unixSeconds(item.StartTime),
 			IsDAG:       item.IsDAG,
 			Nodes:       append([]string(nil), item.Plots...),
 			Edges:       copyEdges(item.Edges),
 			SourceNodes: append([]string(nil), item.SourcePlots...),
-			NodeMeta:    map[string]map[string]any{},
+			NodeMeta:    copyNodeMeta(item.NodeMeta),
+		})
+	case scarecrow.SeedWitherEvent:
+		return w.inlet.Send(taskFailRecord{
+			EventID:      item.WeedID,
+			Node:         item.Plot,
+			Task:         toJSONValue(item.Seed),
+			ErrorType:    fmt.Sprintf("%T", item.Err),
+			ErrorMessage: fmt.Sprintf("%v", item.Err),
+			Timestamp:    unixSeconds(item.Time),
 		})
 	case scarecrow.FarmEndEvent:
 		snapshot := toStatusSnapshot(w.metricsView.GetPlots())
@@ -221,7 +252,7 @@ func (w *PushWatcher) pushSnapshotAt(
 	ts time.Time,
 ) error {
 	return w.inlet.Send(snapshotRecord{
-		Timestamp: float64(ts.UnixNano()) / 1e9,
+		Timestamp: unixSeconds(ts),
 		Snapshot:  copySnapshot(snapshot),
 	})
 }
@@ -244,4 +275,28 @@ func copySnapshot(snapshot map[string]map[string]any) map[string]map[string]any 
 		result[name] = copied
 	}
 	return result
+}
+
+func copyNodeMeta(meta map[string]scarecrow.NodeMeta) map[string]scarecrow.NodeMeta {
+	result := make(map[string]scarecrow.NodeMeta, len(meta))
+	for name, fields := range meta {
+		result[name] = fields
+	}
+	return result
+}
+
+// unixSeconds 将时间转换为 Unix 秒。
+func unixSeconds(at time.Time) float64 {
+	return float64(at.Unix()) + float64(at.Nanosecond())/1e9
+}
+
+// toJSONValue 将任意值转换为可安全编码为 JSON 的载荷。
+//
+// 可被 encoding/json 直接编码的值原样返回；否则退化为可读字符串，保证单条
+// 错误上报不会因任务载荷不可序列化而整体失败。
+func toJSONValue(value any) any {
+	if _, err := json.Marshal(value); err == nil {
+		return value
+	}
+	return fmt.Sprintf("%+v", value)
 }

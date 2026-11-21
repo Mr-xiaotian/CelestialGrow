@@ -34,6 +34,13 @@ func NewSplitPlot[S any, F any](name string, splitter func(S) ([]F, error), opts
 	return p
 }
 
+// ==== Getters ====
+
+// GetMeta 返回节点的构建期元信息。
+func (p *SplitPlot[S, F]) GetMeta() scarecrow.NodeMeta {
+	return p.meta("SplitPlot")
+}
+
 // ==== Result Handling ====
 
 // ripenSeed 处理拆分成功的种子：发出种子成熟事件，并逐项向下游投递产出。

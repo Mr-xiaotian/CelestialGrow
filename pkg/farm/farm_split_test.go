@@ -40,7 +40,7 @@ func TestFarmRunSplitPlot(t *testing.T) {
 	}
 	if err := f.Run(map[string][]any{
 		"split": {"1,2,3", "4,5"},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

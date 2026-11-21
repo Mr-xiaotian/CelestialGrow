@@ -22,11 +22,12 @@ import (
 
 // PlotNode 是 Farm 管理 plot 时使用的统一接口。
 // 它擦除了泛型参数，使 Farm 可以用同一类型持有 SinglePlot/SplitPlot/RoutePlot。
-// 接口覆盖图连接、运行装配
-// 以及执行控制（StartAsync、WaitAsync、SeedAny、Seal）所需的最小能力。
+// 接口覆盖图连接、构建期元信息、运行装配以及执行控制
+// （StartAsync、WaitAsync、SeedAny、Seal）所需的最小能力。
 type PlotNode interface {
 	GetName() string
 	GetState() int32
+	GetMeta() scarecrow.NodeMeta
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
@@ -154,6 +155,17 @@ func (p *basePlot[S, F, Y]) GetName() string {
 // GetState 返回当前状态：0=idle, 1=running, 2=done。
 func (p *basePlot[S, F, Y]) GetState() int32 {
 	return p.state.Load()
+}
+
+// meta 组装节点的构建期元信息，className 由具体 Plot 类型提供。
+//
+// 这些字段在运行期固定不变，随 Farm 启动事件一次性交给上层观察者。
+func (p *basePlot[S, F, Y]) meta(className string) scarecrow.NodeMeta {
+	return scarecrow.NodeMeta{
+		ClassName:     className,
+		ExecutionMode: "thread",
+		MaxWorkers:    p.numTenders,
+	}
 }
 
 // GetSeedChanAny 以 any 类型返回 seedChan，供 Farm 连接时做类型断言。

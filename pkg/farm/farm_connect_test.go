@@ -75,7 +75,7 @@ func TestFarmConnectHyperEdge(t *testing.T) {
 
 	if err := farm.Run(map[string][]any{
 		"source": {1},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

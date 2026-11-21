@@ -104,7 +104,7 @@ func main() {
 	}
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -194,6 +194,8 @@ func main() {
 - `pkg/assembly`: 运行期资源装配，创建并启动指标 / 生命周期 / 日志观察者并注册到 `Hub`，通过 `Resources.Stop` 统一回收
 - `pkg/persist`: 生命周期 SQLite 与结构化运行日志的 watcher、记录处理器与查询接口
 - `pkg/funnel`: 通用异步记录生产 / 消费基础设施（`Inlet` / `Spout`）
+- `pkg/reporter`: 远程上报与注入，包含图元/快照/错误推送、周期快照 ticker 与注入拉取 ticker
+- `pkg/metronome`: 节拍时钟、分发 hub 与 ticker 抽象
 - `pkg/runtime`: `Payload`、事件 ID 分配（`EventClient`）与控制信号等运行时基础类型
 
 ## 可观测性（Observability）
@@ -226,7 +228,7 @@ func main() {
 	if err := farm.AddWatcher(scarecrow.NewPrintWatcher("farm")); err != nil {
 		panic(err)
 	}
-	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO"); err != nil {
+	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -235,6 +237,22 @@ func main() {
 Farm 级 watcher 注册在 Farm 自己的 Hub 上，而该 Hub 又会被挂到每个 Plot 的 Hub，因此既能收到 `FarmStartEvent` / `FarmEndEvent`，也能收到全部 Plot 的种子事件。运行结束后，指标与持久化观察者仍留在 Hub 中，可通过 `scarecrow.Find` 取回（`SinglePlot.Harvest` 即基于该机制查询生命周期 SQLite）。
 
 > `Plot` 与 `Farm` 本身只持有 `scarecrow.Hub`，不直接持有 spout 或持久化观察者实例；日志、生命周期等运行期资源统一由 `pkg/assembly` 创建、注册、启动与回收。
+
+需要把运行状态推到 `celestialflow-web` 时，给 `Run` / `Start` 传入上报配置：
+
+```go
+if err := farm.Run(map[string][]any{
+	"root": {1, 2, 3},
+}, "INFO", &grow.Report{
+	URL: "http://127.0.0.1:5005",
+}); err != nil {
+	panic(err)
+}
+```
+
+`URL` 指向 web 服务地址；`SessionID` 留空时按 Farm 名称与启动时刻生成。启用上报后，`assembly` 会额外装配推送观察者、周期快照 ticker 与远程注入 ticker：图元信息、状态快照、任务错误和会话下线会推送到 web，web 上提交的注入任务也会拉回当前 Farm。传 `nil` 表示本地运行，不装配上报资源。
+
+完整示例见 [`demo/demo_web/main.go`](demo/demo_web/main.go)：先用 `celestialflow-web` 启动服务，再运行 `go run ./demo/demo_web`，即可在页面中观察图结构、节点状态、周期快照与错误信息。
 
 ## 典型使用方式（Typical Usage）
 
@@ -245,7 +263,7 @@ Farm 级 watcher 注册在 Farm 自己的 Hub 上，而该 Hub 又会被挂到�
 3. 调用 `farm.AddPlot(...)` 注册节点
 4. 调用 `farm.Connect(...)` 建立上下游关系
 5. （可选）调用 `farm.AddWatcher(...)` 挂载 `PrintWatcher` 等自建观察者
-6. 调用 `farm.Run(inputs, logLevel)` 注入初始输入并执行
+6. 调用 `farm.Run(inputs, logLevel, report)` 注入初始输入并执行（`report` 传 `nil` 表示本地运行）
 
 其中 `Farm.Connect` 使用的是“组到组的全连接”语义，也就是源组与目标组之间建立笛卡尔积式连接。如果需要一个 seed 派生多个下游任务，可以改用 `api.NewSplitPlot(...)`（一拆多）或 `api.NewRoutePlot(...)`（按名称定向转发）。
 
@@ -276,7 +294,7 @@ func main() {
 		}
 	}()
 
-	if err := farm.Start("INFO"); err != nil {
+	if err := farm.Start("INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -290,14 +308,17 @@ pkg/
   assembly/   # 运行期资源装配
   farm/       # 图结构与调度
   funnel/     # 通用异步消费基础设施
+  metronome/  # 节拍时钟与 ticker 分发
   persist/    # 日志与生命周期持久化
   plot/       # 泛型并发节点
+  reporter/   # 远程上报与注入
   runtime/    # 事件、信号与运行时载体
   scarecrow/  # 事件模型、分发 Hub 与观察者
 
 demo/
   demo_farm/  # 最小 Farm 流水线
   demo_prune/ # prune 去重（单 Plot 与 Farm）
+  demo_web/   # 远程上报到 celestialflow-web
 ```
 
 ## 环境要求（Requirements）

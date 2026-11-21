@@ -36,6 +36,7 @@ type SeedRecord struct {
 	TS             float64
 }
 
+// lifecycleRecord 标记 SeedRecord 实现 LifecycleRecord。
 func (SeedRecord) lifecycleRecord() {}
 
 // RipenRecord 表示一次种子成熟。
@@ -48,6 +49,7 @@ type RipenRecord struct {
 	TS             float64
 }
 
+// lifecycleRecord 标记 RipenRecord 实现 LifecycleRecord。
 func (RipenRecord) lifecycleRecord() {}
 
 // WitherRecord 表示一次种子枯萎。
@@ -61,6 +63,7 @@ type WitherRecord struct {
 	TS             float64
 }
 
+// lifecycleRecord 标记 WitherRecord 实现 LifecycleRecord。
 func (WitherRecord) lifecycleRecord() {}
 
 // PruneRecord 表示一次种子剪枝。
@@ -72,6 +75,7 @@ type PruneRecord struct {
 	TS             float64
 }
 
+// lifecycleRecord 标记 PruneRecord 实现 LifecycleRecord。
 func (PruneRecord) lifecycleRecord() {}
 
 // LifecycleRecordHandler 消费生命周期操作并将其写入 sqlite。

@@ -36,6 +36,7 @@ type FarmStartEvent struct {
 	StartTime   time.Time           // 启动时间
 }
 
+// isEvent 标记 FarmStartEvent 实现 Event。
 func (FarmStartEvent) isEvent() {}
 
 // FarmEndEvent Farm 结束事件。
@@ -45,6 +46,7 @@ type FarmEndEvent struct {
 	Elapsed time.Duration // 运行耗时
 }
 
+// isEvent 标记 FarmEndEvent 实现 Event。
 func (FarmEndEvent) isEvent() {}
 
 // ==== Plot ====
@@ -56,6 +58,7 @@ type PlotStartEvent struct {
 	StartTime time.Time // 启动时间
 }
 
+// isEvent 标记 PlotStartEvent 实现 Event。
 func (PlotStartEvent) isEvent() {}
 
 // PlotEndEvent Plot 结束事件。
@@ -65,6 +68,7 @@ type PlotEndEvent struct {
 	Elapsed time.Duration // 运行耗时
 }
 
+// isEvent 标记 PlotEndEvent 实现 Event。
 func (PlotEndEvent) isEvent() {}
 
 // ==== Seed ====
@@ -81,6 +85,7 @@ type SeedInputEvent struct {
 	Time     time.Time // 输入时间
 }
 
+// isEvent 标记 SeedInputEvent 实现 Event。
 func (SeedInputEvent) isEvent() {}
 
 // SeedRipenEvent 种子成熟（培育成功）事件。
@@ -96,6 +101,7 @@ type SeedRipenEvent struct {
 	Time      time.Time     // 完成时间
 }
 
+// isEvent 标记 SeedRipenEvent 实现 Event。
 func (SeedRipenEvent) isEvent() {}
 
 // SeedWitherEvent 种子枯萎（培育失败）事件。
@@ -110,6 +116,7 @@ type SeedWitherEvent struct {
 	Time     time.Time     // 完成时间
 }
 
+// isEvent 标记 SeedWitherEvent 实现 Event。
 func (SeedWitherEvent) isEvent() {}
 
 // SeedPruneEvent 种子剪枝（跳过培育）事件。
@@ -123,6 +130,7 @@ type SeedPruneEvent struct {
 	Time     time.Time     // 完成时间
 }
 
+// isEvent 标记 SeedPruneEvent 实现 Event。
 func (SeedPruneEvent) isEvent() {}
 
 // SeedReplantEvent 种子补种（重试）事件。
@@ -136,6 +144,7 @@ type SeedReplantEvent struct {
 	Time     time.Time // 重试时间
 }
 
+// isEvent 标记 SeedReplantEvent 实现 Event。
 func (SeedReplantEvent) isEvent() {}
 
 // ==== Seal ====
@@ -147,6 +156,7 @@ type SealInputEvent struct {
 	Time   time.Time // 收到时间
 }
 
+// isEvent 标记 SealInputEvent 实现 Event。
 func (SealInputEvent) isEvent() {}
 
 // SealMergeEvent 终止信号合并事件。
@@ -157,4 +167,5 @@ type SealMergeEvent struct {
 	Time      time.Time // 合并时间
 }
 
+// isEvent 标记 SealMergeEvent 实现 Event。
 func (SealMergeEvent) isEvent() {}

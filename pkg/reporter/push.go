@@ -22,10 +22,12 @@ const (
 	defaultGraphMode = "grow"
 )
 
+// pushRecord 是推送记录的封闭类型集合，仅由本文件中的记录类型实现。
 type pushRecord interface {
 	isPushRecord()
 }
 
+// graphMetaRecord 表示图元信息推送记录。
 type graphMetaRecord struct {
 	Graph       string                        `json:"graph"`
 	GraphMode   string                        `json:"graph_mode"`
@@ -37,15 +39,19 @@ type graphMetaRecord struct {
 	NodeMeta    map[string]scarecrow.NodeMeta `json:"node_meta"`
 }
 
+// isPushRecord 标记 graphMetaRecord 实现 pushRecord。
 func (graphMetaRecord) isPushRecord() {}
 
+// snapshotRecord 表示图级状态快照推送记录。
 type snapshotRecord struct {
 	Timestamp float64                   `json:"timestamp"`
 	Snapshot  map[string]map[string]any `json:"snapshot"`
 }
 
+// isPushRecord 标记 snapshotRecord 实现 pushRecord。
 func (snapshotRecord) isPushRecord() {}
 
+// taskFailRecord 表示单条任务失败推送记录。
 type taskFailRecord struct {
 	EventID      int
 	Node         string
@@ -55,12 +61,16 @@ type taskFailRecord struct {
 	Timestamp    float64
 }
 
+// isPushRecord 标记 taskFailRecord 实现 pushRecord。
 func (taskFailRecord) isPushRecord() {}
 
+// shutdownRecord 表示会话下线推送记录。
 type shutdownRecord struct{}
 
+// isPushRecord 标记 shutdownRecord 实现 pushRecord。
 func (shutdownRecord) isPushRecord() {}
 
+// pushHandler 实现 funnel.RecordHandler，把推送记录逐条发送到远程服务。
 type pushHandler struct {
 	sessionID string
 	baseURL   string
@@ -68,11 +78,13 @@ type pushHandler struct {
 	client    *http.Client
 }
 
+// BeforeStart 在消费循环启动前创建可复用的 HTTP 客户端。
 func (h *pushHandler) BeforeStart() error {
 	h.client = &http.Client{Timeout: h.timeout}
 	return nil
 }
 
+// HandleRecord 推送单条记录；失败只记录日志，不中断消费循环。
 func (h *pushHandler) HandleRecord(record pushRecord) error {
 	if err := h.handle(record); err != nil {
 		log.Print(err)
@@ -80,6 +92,7 @@ func (h *pushHandler) HandleRecord(record pushRecord) error {
 	return nil
 }
 
+// AfterStop 关闭 HTTP 客户端持有的空闲连接。
 func (h *pushHandler) AfterStop() error {
 	if h.client != nil {
 		if transport, ok := h.client.Transport.(interface{ CloseIdleConnections() }); ok {
@@ -90,6 +103,7 @@ func (h *pushHandler) AfterStop() error {
 	return nil
 }
 
+// handle 按记录类型分发到对应的远程端点。
 func (h *pushHandler) handle(record pushRecord) error {
 	switch item := record.(type) {
 	case graphMetaRecord:
@@ -129,6 +143,7 @@ func (h *pushHandler) handle(record pushRecord) error {
 	}
 }
 
+// post 将 payload 编码为 JSON 并 POST 到指定端点；非 2xx 时返回带响应体的错误。
 func (h *pushHandler) post(path string, payload map[string]any) error {
 	client := h.client
 	if client == nil {
@@ -252,6 +267,7 @@ func (w *PushWatcher) PushSnapshot(snapshot map[string]map[string]any) error {
 	return w.pushSnapshotAt(snapshot, time.Now())
 }
 
+// pushSnapshotAt 将状态快照以指定时间戳送入后台推送队列。
 func (w *PushWatcher) pushSnapshotAt(
 	snapshot map[string]map[string]any,
 	ts time.Time,
@@ -262,6 +278,7 @@ func (w *PushWatcher) pushSnapshotAt(
 	})
 }
 
+// copyEdges 深拷贝边邻接表，并保证空邻接表编码为 [] 而不是 null。
 func copyEdges(edges map[string][]string) map[string][]string {
 	result := make(map[string][]string, len(edges))
 	for from, targets := range edges {
@@ -271,6 +288,7 @@ func copyEdges(edges map[string][]string) map[string][]string {
 	return result
 }
 
+// copySnapshot 深拷贝状态快照，避免入队后仍被调用方修改。
 func copySnapshot(snapshot map[string]map[string]any) map[string]map[string]any {
 	result := make(map[string]map[string]any, len(snapshot))
 	for name, status := range snapshot {
@@ -283,6 +301,7 @@ func copySnapshot(snapshot map[string]map[string]any) map[string]map[string]any 
 	return result
 }
 
+// copyNodeMeta 复制节点元信息表，避免入队后仍被调用方修改。
 func copyNodeMeta(meta map[string]scarecrow.NodeMeta) map[string]scarecrow.NodeMeta {
 	result := make(map[string]scarecrow.NodeMeta, len(meta))
 	for name, fields := range meta {

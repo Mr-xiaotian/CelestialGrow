@@ -73,6 +73,12 @@ func TestNewInjectionTickerRejectsInvalidArguments(t *testing.T) {
 	if _, err := NewInjectionTicker("http://example.com", "demo@1", nil, 1, time.Second); err == nil {
 		t.Fatal("nil target must be rejected")
 	}
+	if _, err := NewInjectionTicker("127.0.0.1:5005", "demo@1", &injectionTargetProbe{}, 1, time.Second); err == nil {
+		t.Fatal("base url without scheme must be rejected")
+	}
+	if _, err := NewInjectionTicker("ftp://example.com", "demo@1", &injectionTargetProbe{}, 1, time.Second); err == nil {
+		t.Fatal("non-http base url must be rejected")
+	}
 }
 
 type injectionTargetProbe struct {

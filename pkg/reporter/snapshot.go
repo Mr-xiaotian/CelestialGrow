@@ -14,9 +14,26 @@ type MetricsView interface {
 	GetPlots() map[string]scarecrow.PlotMetrics
 }
 
+// NodeStatus 描述单个 Plot 在 Web 端的状态快照。
+//
+// 字段名与 celestialflow-web 的 NodeStatus 契约保持一致。
+type NodeStatus struct {
+	Status           int            `json:"status"`
+	TasksInput       int            `json:"tasks_input"`
+	TasksProcessed   int            `json:"tasks_processed"`
+	TasksPending     int            `json:"tasks_pending"`
+	TasksSucceeded   int            `json:"tasks_succeeded"`
+	TasksFailed      int            `json:"tasks_failed"`
+	TasksSkipped     int            `json:"tasks_skipped"`
+	UpstreamCounts   map[string]int `json:"upstream_counts"`
+	DownstreamCounts map[string]int `json:"downstream_counts"`
+	StartTime        float64        `json:"start_time"`
+	EndTime          float64        `json:"end_time"`
+}
+
 // SnapshotSink 描述状态快照的写入目标。
 type SnapshotSink interface {
-	PushSnapshot(snapshot map[string]map[string]any) error
+	PushSnapshot(snapshot map[string]NodeStatus) error
 }
 
 // SnapshotTicker 按拍读取图级指标快照并交给写入目标。

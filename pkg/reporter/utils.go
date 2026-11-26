@@ -3,6 +3,9 @@ package reporter
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
@@ -14,8 +17,8 @@ import (
 // 不包含每拍都变化的派生耗时，避免服务端把等价快照误判为更新。
 func toStatusSnapshot(
 	metrics map[string]scarecrow.PlotMetrics,
-) map[string]map[string]any {
-	snapshot := make(map[string]map[string]any, len(metrics))
+) map[string]NodeStatus {
+	snapshot := make(map[string]NodeStatus, len(metrics))
 	for name, item := range metrics {
 		startTime := 0.0
 		if !item.StartTime.IsZero() {
@@ -27,18 +30,18 @@ func toStatusSnapshot(
 			endTime = unixSeconds(item.EndTime)
 		}
 
-		snapshot[name] = map[string]any{
-			"status":            int(item.Status),
-			"tasks_input":       item.InputTotal,
-			"tasks_processed":   item.Processed,
-			"tasks_pending":     item.Pending,
-			"tasks_succeeded":   item.Succeeded,
-			"tasks_failed":      item.Failed,
-			"tasks_skipped":     item.Skipped,
-			"upstream_counts":   item.UpstreamCounts,
-			"downstream_counts": item.DownstreamCounts,
-			"start_time":        startTime,
-			"end_time":          endTime,
+		snapshot[name] = NodeStatus{
+			Status:           int(item.Status),
+			TasksInput:       item.InputTotal,
+			TasksProcessed:   item.Processed,
+			TasksPending:     item.Pending,
+			TasksSucceeded:   item.Succeeded,
+			TasksFailed:      item.Failed,
+			TasksSkipped:     item.Skipped,
+			UpstreamCounts:   item.UpstreamCounts,
+			DownstreamCounts: item.DownstreamCounts,
+			StartTime:        startTime,
+			EndTime:          endTime,
 		}
 	}
 	return snapshot
@@ -55,14 +58,21 @@ func copyEdges(edges map[string][]string) map[string][]string {
 }
 
 // copySnapshot 深拷贝状态快照，避免入队后仍被调用方修改。
-func copySnapshot(snapshot map[string]map[string]any) map[string]map[string]any {
-	result := make(map[string]map[string]any, len(snapshot))
+func copySnapshot(snapshot map[string]NodeStatus) map[string]NodeStatus {
+	result := make(map[string]NodeStatus, len(snapshot))
 	for name, status := range snapshot {
-		copied := make(map[string]any, len(status))
-		for key, value := range status {
-			copied[key] = value
-		}
-		result[name] = copied
+		status.UpstreamCounts = copyIntMap(status.UpstreamCounts)
+		status.DownstreamCounts = copyIntMap(status.DownstreamCounts)
+		result[name] = status
+	}
+	return result
+}
+
+// copyIntMap 深拷贝 string -> int 映射，并保证空映射编码为 {} 而不是 null。
+func copyIntMap(source map[string]int) map[string]int {
+	result := make(map[string]int, len(source))
+	for key, value := range source {
+		result[key] = value
 	}
 	return result
 }
@@ -74,6 +84,37 @@ func copyNodeMeta(meta map[string]scarecrow.NodeMeta) map[string]scarecrow.NodeM
 		result[name] = fields
 	}
 	return result
+}
+
+// newHTTPClient 创建持有独立 Transport 的 HTTP 客户端。
+//
+// 使用克隆的 Transport 可以避免关闭空闲连接时影响进程内其他客户端。
+func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport
+	if base, ok := transport.(*http.Transport); ok {
+		transport = base.Clone()
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+}
+
+// normalizeBaseURL 校验并规范化上报服务的基础地址。
+func normalizeBaseURL(raw string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return "", fmt.Errorf("reporter: base url is empty")
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("reporter: invalid base url %q", raw)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("reporter: base url must use http or https, got %q", raw)
+	}
+	return trimmed, nil
 }
 
 // unixSeconds 将时间转换为 Unix 秒。

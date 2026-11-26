@@ -68,8 +68,8 @@ func TestPushWatcherPushesFarmStartSnapshotAndShutdown(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("OnEvent(FarmStartEvent) = %v", err)
 	}
-	if err := watcher.PushSnapshot(map[string]map[string]any{
-		"root": {"status": 1},
+	if err := watcher.PushSnapshot(map[string]NodeStatus{
+		"root": {Status: 1},
 	}); err != nil {
 		t.Fatalf("PushSnapshot() = %v", err)
 	}
@@ -170,6 +170,12 @@ func TestNewPushWatcherRejectsInvalidArguments(t *testing.T) {
 	}
 	if _, err := NewPushWatcher("demo@1", "http://example.com", nil); err == nil {
 		t.Fatal("nil metrics view must be rejected")
+	}
+	if _, err := NewPushWatcher("demo@1", "127.0.0.1:5005", metricsView); err == nil {
+		t.Fatal("base url without scheme must be rejected")
+	}
+	if _, err := NewPushWatcher("demo@1", "ftp://example.com", metricsView); err == nil {
+		t.Fatal("non-http base url must be rejected")
 	}
 }
 

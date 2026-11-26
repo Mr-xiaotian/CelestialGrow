@@ -52,9 +52,6 @@ func NewInjectionTicker(
 	if target == nil {
 		return nil, fmt.Errorf("reporter: injection target is nil")
 	}
-	if strings.TrimSpace(baseURL) == "" {
-		return nil, fmt.Errorf("reporter: base url is empty")
-	}
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, fmt.Errorf("reporter: session id is empty")
 	}
@@ -71,8 +68,13 @@ func NewInjectionTicker(
 		return nil, fmt.Errorf("reporter: pull timeout must be non-negative, got %s", timeout)
 	}
 
+	baseURL, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+
 	return &InjectionTicker{
-		baseURL:   strings.TrimRight(baseURL, "/"),
+		baseURL:   baseURL,
 		sessionID: sessionID,
 		target:    target,
 		period:    period,
@@ -88,7 +90,7 @@ func (t *InjectionTicker) TickPeriod() int {
 // Start 建立用于拉取注入的 HTTP 客户端。
 func (t *InjectionTicker) Start() error {
 	if t.client == nil {
-		t.client = &http.Client{Timeout: t.timeout}
+		t.client = newHTTPClient(t.timeout)
 	}
 	return nil
 }
@@ -96,9 +98,7 @@ func (t *InjectionTicker) Start() error {
 // Stop 关闭 HTTP 客户端持有的空闲连接。
 func (t *InjectionTicker) Stop() error {
 	if t.client != nil {
-		if transport, ok := t.client.Transport.(interface{ CloseIdleConnections() }); ok {
-			transport.CloseIdleConnections()
-		}
+		t.client.CloseIdleConnections()
 		t.client = nil
 	}
 	return nil
@@ -114,7 +114,7 @@ func (t *InjectionTicker) OnTick(event metronome.TickEvent) error {
 	endpoint := t.baseURL + "/api/pull_injection?session_id=" + url.QueryEscape(t.sessionID)
 	res, err := client.Get(endpoint)
 	if err != nil {
-		return err
+		return fmt.Errorf("reporter: pull injection: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -127,7 +127,7 @@ func (t *InjectionTicker) OnTick(event metronome.TickEvent) error {
 		Terminations: []string{},
 	}
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return err
+		return fmt.Errorf("reporter: decode injection payload: %w", err)
 	}
 	if payload.Tasks == nil {
 		payload.Tasks = map[string][]any{}

@@ -1,6 +1,7 @@
 package reporter
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -48,14 +49,14 @@ func TestSnapshotTickerPushesProjectedSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("stage_a snapshot is missing")
 	}
-	if got["status"] != int(scarecrow.PlotStopped) {
-		t.Fatalf("status = %v, want %d", got["status"], int(scarecrow.PlotStopped))
+	if got.Status != int(scarecrow.PlotStopped) {
+		t.Fatalf("status = %d, want %d", got.Status, int(scarecrow.PlotStopped))
 	}
-	if got["tasks_input"] != 7 || got["tasks_processed"] != 6 || got["tasks_pending"] != 1 {
-		t.Fatalf("task counters = %v", got)
+	if got.TasksInput != 7 || got.TasksProcessed != 6 || got.TasksPending != 1 {
+		t.Fatalf("task counters = %+v", got)
 	}
-	if got["start_time"] != 10.0 || got["end_time"] != 20.0 {
-		t.Fatalf("times = start %v end %v, want 10/20", got["start_time"], got["end_time"])
+	if got.StartTime != 10.0 || got.EndTime != 20.0 {
+		t.Fatalf("times = start %v end %v, want 10/20", got.StartTime, got.EndTime)
 	}
 }
 
@@ -102,21 +103,50 @@ func (m stubMetricsView) GetPlots() map[string]scarecrow.PlotMetrics {
 }
 
 type snapshotSinkProbe struct {
-	snapshot map[string]map[string]any
+	snapshot map[string]NodeStatus
 	err      error
 }
 
-func (s *snapshotSinkProbe) PushSnapshot(snapshot map[string]map[string]any) error {
+func (s *snapshotSinkProbe) PushSnapshot(snapshot map[string]NodeStatus) error {
 	s.snapshot = copySnapshot(snapshot)
 	return s.err
 }
 
-func copyIntMap(source map[string]int) map[string]int {
-	result := make(map[string]int, len(source))
-	for key, value := range source {
-		result[key] = value
+func TestNodeStatusJSONContract(t *testing.T) {
+	snapshot := map[string]NodeStatus{
+		"a": {
+			Status:           1,
+			TasksInput:       2,
+			TasksProcessed:   3,
+			TasksPending:     4,
+			TasksSucceeded:   5,
+			TasksFailed:      6,
+			TasksSkipped:     7,
+			UpstreamCounts:   map[string]int{"b": 8},
+			DownstreamCounts: map[string]int{"c": 9},
+			StartTime:        10.5,
+			EndTime:          11.5,
+		},
 	}
-	return result
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("Marshal() = %v", err)
+	}
+
+	var decoded map[string]map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() = %v", err)
+	}
+	for _, key := range []string{
+		"status", "tasks_input", "tasks_processed", "tasks_pending",
+		"tasks_succeeded", "tasks_failed", "tasks_skipped",
+		"upstream_counts", "downstream_counts", "start_time", "end_time",
+	} {
+		if _, ok := decoded["a"][key]; !ok {
+			t.Fatalf("snapshot JSON is missing %q: %s", key, data)
+		}
+	}
 }
 
 func TestToStatusSnapshotPreservesNodeSet(t *testing.T) {

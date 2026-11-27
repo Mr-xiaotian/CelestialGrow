@@ -1,6 +1,6 @@
 # pkg/scarecrow/metrics.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -26,6 +26,8 @@ const (
 | `PlotRunning` | 1 | `running` |
 | `PlotStopped` | 2 | `stopped` |
 | 其他值 | — | `not_started`（`String()` 的 `default` 分支） |
+
+`PlotStatus` 实现了 `fmt.Stringer`：`func (s PlotStatus) String() string` 返回 `running` / `stopped` / `not_started`，日志与 `fmt.Println` 会直接使用该名称。
 
 > `PlotStatus` 与 `plot.GetState()` 的 `0=idle / 1=running / 2=done` 数值一致，但它们是两套独立类型，不要互相赋值。
 
@@ -98,6 +100,33 @@ func NewMetricsWatcher() *MetricsWatcher
 |------|------|------|
 | `GetPlot` | `func (m *MetricsWatcher) GetPlot(name string) (PlotMetrics, bool)` | 未登记时返回零值与 `false`；已登记返回拷贝快照 |
 | `GetPlots` | `func (m *MetricsWatcher) GetPlots() map[string]PlotMetrics` | 返回全部已登记 Plot 的新映射；无数据时返回空映射（非 nil） |
+
+## 与 `pkg/reporter` 的契约
+
+`pkg/reporter` 通过最小接口消费本文件，不依赖 `*MetricsWatcher` 具体类型：
+
+```go
+type MetricsView interface {
+    GetPlots() map[string]scarecrow.PlotMetrics
+}
+```
+
+`NewSnapshotTicker` / `NewPushWatcher` 都接收 `MetricsView`；`snapshot.go` 的 `toStatusSnapshot` 把 `PlotMetrics` 投影为 Web 端 `NodeStatus`：
+
+| `PlotMetrics` 字段 | `NodeStatus` 字段 | 转换 |
+|--------------------|-------------------|------|
+| `Status` | `Status` | `int(item.Status)`，即 `0/1/2` |
+| `InputTotal` | `TasksInput` | 直接赋值 |
+| `Processed` | `TasksProcessed` | 直接赋值 |
+| `Pending` | `TasksPending` | 直接赋值 |
+| `Succeeded` | `TasksSucceeded` | 直接赋值 |
+| `Failed` | `TasksFailed` | 直接赋值 |
+| `Skipped` | `TasksSkipped` | 直接赋值 |
+| `UpstreamCounts` | `UpstreamCounts` | 直接赋值（快照已重建映射） |
+| `DownstreamCounts` | `DownstreamCounts` | 直接赋值（快照已重建映射） |
+| `StartTime` / `EndTime` | `StartTime` / `EndTime` | 转为 Unix 秒；零值时间输出 `0` |
+
+`NodeStatus` 不包含 Plot 名称（名称是外层 `map[string]NodeStatus` 的键）与 `NodeMeta`；节点的构建期元信息由 `FarmStartEvent.NodeMeta` 单独上报，见 [`event.md`](./event.md) 的 `NodeMeta` 一节。
 
 ## 关键事件映射
 

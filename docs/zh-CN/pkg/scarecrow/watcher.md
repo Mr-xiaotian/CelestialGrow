@@ -1,10 +1,10 @@
 # pkg/scarecrow/watcher.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
-`pkg/scarecrow/watcher.go` 是 `scarecrow` 包的文件入口（包注释所在文件），同时定义运行期事件的**接收方契约** `Watcher` 与轻量适配器 `WatcherFunc`。`Hub` 只认这一个接口，因此指标统计、日志落盘、生命周期记录、终端打印可以统一注册、统一分发。
+`pkg/scarecrow/watcher.go` 是 `scarecrow` 包的文件入口（包注释所在文件），同时定义运行期事件的**接收方契约** `Watcher`、可被 `Hub` 统一启停的资源契约 `Lifecycle`，以及轻量适配器 `WatcherFunc`。`Hub` 用 `Watcher` 分发事件、用 `Lifecycle` 管理需要后台循环的观察者，因此指标统计、日志落盘、生命周期记录、终端打印、远程上报可以统一注册、统一启停。
 
 ## 核心对象
 
@@ -26,6 +26,24 @@ type Watcher interface {
 2. **快速返回**：`Hub` 同步调用 `OnEvent`，Watcher 的耗时直接串在执行路径上。需要慢速 I/O 的实现（如 `persist.LogWatcher`、`persist.LifecycleWatcher`）应把记录投递到 `funnel` 队列，由后台 Spout 消费。
 3. **只读事件**：`Event` 以值传递，但内部切片/映射与生产方共享，不得修改。
 
+### `Lifecycle` 接口
+
+```go
+type Lifecycle interface {
+    Start() error
+    Stop() error
+}
+```
+
+可被统一启动与停止的资源能力。`Hub` 在**已注册的 `Watcher`** 中识别它：`Start` 按注册顺序启动、`Stop` 按相反顺序停止；未实现该接口的 `Watcher` 只参与事件分发。接口本身**不要求实现方是 `Watcher`**，但若希望由 `Hub` 统一管理，仍需同时实现 `Watcher`（或包装成一个 `Watcher`）。
+
+| 方法 | 契约 |
+|------|------|
+| `Start() error` | 获取资源、启动后台循环。返回错误时 `Hub` 会回滚本次已启动的子项并把自身置为 `hubStopped` |
+| `Stop() error` | 释放资源、等待后台循环退出。即使返回错误也应尽量完成清理；`Hub` 会用 `errors.Join` 汇总所有子项错误 |
+
+典型实现：`persist.LogWatcher` / `persist.LifecycleWatcher` / `reporter.PushWatcher` 都通过 `Start` 启动 `funnel.Spout` 消费循环、`Stop` 关闭通道；`Hub` 自身也实现 `Lifecycle`，因此嵌套 Hub 会递归启停。
+
 ### `WatcherFunc` 适配器
 
 ```go
@@ -40,13 +58,14 @@ func (f WatcherFunc) OnEvent(event Event) error {
 
 ### 本包与项目内的实现
 
-| 实现 | 位置 | 说明 |
-|------|------|------|
-| `Hub` | [`hub.md`](./hub.md) | 自身实现 `Watcher`，可嵌套注册到另一个 Hub |
-| `MetricsWatcher` | [`metrics.md`](./metrics.md) | 从事件流重建各 Plot 指标 |
-| `PrintWatcher` | [`print.md`](./print.md) | 打印累计进度到 `os.Stdout` |
-| `persist.LogWatcher` | `pkg/persist/log.go` | 运行日志异步落盘，读取 `MetricsWatcher` 补全计数 |
-| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | 种子血缘写入 SQLite |
+| 实现 | 位置 | 实现 `Lifecycle` | 说明 |
+|------|------|:----------------:|------|
+| `Hub` | [`hub.md`](./hub.md) | ✅ | 自身实现 `Watcher`，可嵌套注册到另一个 Hub；同时递归启停子项 |
+| `MetricsWatcher` | [`metrics.md`](./metrics.md) | ❌ | 从事件流重建各 Plot 指标，纯内存累加 |
+| `PrintWatcher` | [`print.md`](./print.md) | ❌ | 打印累计进度到 `os.Stdout` |
+| `persist.LogWatcher` | `pkg/persist/log.go` | ✅ | 运行日志异步落盘，读取 `MetricsWatcher` 补全计数 |
+| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | ✅ | 种子血缘写入 SQLite |
+| `reporter.PushWatcher` | `pkg/reporter/push.go` | ✅ | 把 Farm 事件与周期快照异步推送到远程服务 |
 
 ## 关键流程
 
@@ -78,6 +97,9 @@ sequenceDiagram
 - **错误语义**：`Watcher` 的 `error` 只用于**上报**，不是控制流。看到 `OnEvent` 返回 `nil` 不代表所有 Watcher 都成功，只代表分发流程本身没有中断。
 - **`WatcherFunc` 为 nil 时**：`var f WatcherFunc; f.OnEvent(...)` 会因调用 nil 函数而 panic。若通过 `Hub` 分发，panic 会被 `Hub.deliver` 捕获并转成 `scarecrow: ... panicked on ...` 的上报错误；直接调用则没有保护。
 - **类型为 nil 的接口值**：`hub.AddWatcher(nil)` 会被拒绝，但 `var p *PrintWatcher; hub.AddWatcher(p)` 传入的是**非 nil 接口**（动态类型非空、值为 nil），注册会通过，调用时在 nil 接收者上操作而 panic，最终同样被 `Hub` 捕获上报。若需要「可选注册」，请显式判断指针是否为 nil。
+- **`Lifecycle` 与 `Watcher` 是两个独立接口**：`Lifecycle` 不要求实现 `Watcher`，但 `Hub.Start` 只遍历已注册的 `Watcher`，因此接入 `Hub` 的资源必须同时实现 `OnEvent`（或由包装类型提供）。
+- **启停错误不走 `ErrorHandler`**：`Lifecycle.Start` / `Stop` 的错误直接作为 `Hub.Start` / `Hub.Stop` 的返回值上抛（`Stop` 用 `errors.Join` 汇总），由调用方（如 `pkg/assembly`）决定如何处理。
+- **启动只覆盖注册快照**：`Hub.Start` 只启动当次快照中实现 `Lifecycle` 的观察者；`Start` 之后再 `AddWatcher` 的 `Lifecycle` 不会被自动启动，需在启动前完成注册。
 
 ## 使用示例
 

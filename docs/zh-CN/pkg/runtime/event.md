@@ -1,6 +1,6 @@
 # pkg/runtime/event.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `event.go` 定义运行期的**事件 ID 分配抽象**：接口 `EventClient` 只有 `Emit(type_ string, parents []int) int` 一个方法，默认实现 `LocalEventClient` 用互斥锁维护进程内单调递增的计数器。`pkg/plot` 的 `basePlot` 通过 `eventClient` 字段取得 ID，并在同一时刻把 ID 写进 `pkg/scarecrow` 的事件结构体（`SeedInputEvent.SeedID`、`SeedRipenEvent.FruitID`、`SeedWitherEvent.WeedID` 等），供指标、日志与生命周期观察者消费。
 
@@ -11,7 +11,7 @@
 - 定义**事件 ID 分配器**的最小契约 `EventClient`，把「ID 怎么生成」从 plot 的调度逻辑中解耦。
 - 提供进程内、并发安全的默认实现 `LocalEventClient`。
 - 让 `Seed` / `Seal` / `witherSeed` / `pruneSeed` / `ripenSeed` / `sprout` 收尾等关键节点都能拿到单调递增的整数 ID，并用 `parents` 串起「seed → fruit → 下游 seed → …」的因果链。
-- 这些 ID 随事件结构体进入 `scarecrow.Hub`，最终由 `persist.LifecycleWatcher` 写入 SQLite 的 `events` / `event_parents` 表。
+- 种子相关事件（`seed` / `fruit` / `weed` / `prune`）的 ID 随事件结构体进入 `scarecrow.Hub`，最终由 `persist.LifecycleWatcher` 写入 SQLite 的 `events` / `event_parents` 表；seal ID 只在内存中传递，不落库。
 
 > 本包**只有** `EventClient`、`LocalEventClient`、`NewLocalEventClient` 与 `(*LocalEventClient).Emit` 四个导出符号；没有 `EventKind` 枚举，也没有 `Event` 结构体。事件种类（`"seed"` / `"fruit"` / `"weed"` / `"prune"` / `"seal"`）以字符串字面量由 `pkg/plot` 传入 `Emit` 的 `type_` 参数。
 
@@ -169,7 +169,7 @@ ID 本身不携带业务信息，落库完全由观察者完成：
 - `scarecrow.MetricsWatcher` 按事件字段维护输入 / 成熟 / 枯萎 / 剪枝计数与上下游来源分布，不读取事件 ID。
 - `persist.LifecycleWatcher` 把四类种子事件翻译成 `persist.LifecycleRecord`，再用 `InsertLifecycleEvent` 写入 `events` + `event_parents`，并更新 `status` 表。
 - `persist.LogWatcher` 输出可读日志；`scarecrow.PrintWatcher` 打印进度。二者都不落库。
-- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` 由 `pkg/assembly` 在 `Run` / `Start` 时自动注册到 Hub；`PrintWatcher` 需要调用方通过 `AddWatcher` 手动挂载。
+- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` 由 `pkg/assembly` 在 `Run` / `Start` 时自动注册到 Hub；带远程上报配置（`*reporter.Config` 非 `nil`）时还会额外注册 `reporter.PushWatcher`。`PrintWatcher` 需要调用方通过 `AddWatcher` 手动挂载。
 
 ```mermaid
 flowchart LR
@@ -177,20 +177,21 @@ flowchart LR
     H --> M["MetricsWatcher<br/>内存指标"]
     H --> L["LifecycleWatcher<br/>SQLite"]
     H --> G["LogWatcher<br/>日志文件"]
-    H --> R["PrintWatcher<br/>终端进度"]
+    H --> P["PrintWatcher<br/>终端进度"]
+    H --> W["PushWatcher<br/>远程上报（可选）"]
 ```
 
-`type_` 与落库值的对应关系如下（`LifecycleRecord` 的 `Kind` 常量定义在 `pkg/persist/lifecycle.go`）：
+`LifecycleRecord` 是定义在 `pkg/persist/lifecycle.go` 的封闭类型联合（`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`），**具体记录类型决定落库值**，没有运行期 `Kind` 字段。`type_` 与落库值的对应关系如下：
 
-| `Emit` 的 `type_` | 事件 | `LifecycleRecord.Kind` | `events.event_type` | `status.status` |
+| `Emit` 的 `type_` | 事件 | `LifecycleRecord` 实现 | `events.event_type` | `status.status` |
 |-------------------|------|------------------------|---------------------|-----------------|
-| `"seed"` | `SeedInputEvent` | `"seed"` | `"seed"` | `"seed"` |
-| `"fruit"` | `SeedRipenEvent` | `"ripen"` | `"ripen"` | `"ripen"` |
-| `"weed"` | `SeedWitherEvent` | `"wither"` | `"wither"` | `"wither"` |
-| `"prune"` | `SeedPruneEvent` | `"prune"` | `"prune"` | `"prune"` |
+| `"seed"` | `SeedInputEvent` | `SeedRecord` | `"seed"` | `"seed"` |
+| `"fruit"` | `SeedRipenEvent` | `RipenRecord` | `"ripen"` | `"ripen"` |
+| `"weed"` | `SeedWitherEvent` | `WitherRecord` | `"wither"` | `"wither"` |
+| `"prune"` | `SeedPruneEvent` | `PruneRecord` | `"prune"` | `"prune"` |
 | `"seal"` | `SealInputEvent` / `SealMergeEvent` | （不产生记录） | — | — |
 
-> 命名分层：`Emit` 的 `type_` 用植物学隐喻（`fruit` / `weed`），`LifecycleRecord.Kind` 与落库值用状态语义（`ripen` / `wither`）。`LifecycleRecord.ParentIDs` 来自事件字段：种子输入用 `SeedInputEvent.Parents`，成熟 / 枯萎 / 剪枝各自使用 `[]int{SeedID}`。
+> 命名分层：`Emit` 的 `type_` 用植物学隐喻（`fruit` / `weed`），`LifecycleRecord` 的具体类型与落库值用状态语义（`ripen` / `wither`）。各记录类型的 `ParentIDs` 来自事件字段：种子输入用 `SeedInputEvent.Parents`，成熟 / 枯萎 / 剪枝各自使用 `[]int{SeedID}`。
 
 ## 使用示例
 
@@ -240,7 +241,7 @@ func main() {
 	double.SetEventClient(client) // 覆盖 AddPlot 注入的默认 client
 	format.SetEventClient(client) // 同一条链路必须共用同一实例
 
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }

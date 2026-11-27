@@ -1,6 +1,6 @@
 # pkg/scarecrow/event.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -19,7 +19,7 @@ type Event interface {
 ```
 
 - 方法未导出，**包外无法新增事件类型**，因此所有 `type switch` 都能确信覆盖了全部事件；代价是新增事件必须修改本包，并同步所有消费方。
-- 事件以**值**传递（`Hub.OnEvent(event Event)`），接口动态类型始终是上表中的结构体值，不是指针。
+- 事件以**值**传递（`Hub.OnEvent(event Event)`）：本项目所有生产方都发送上表中的结构体值；虽然值接收者方法使指针类型也能满足 `Event`，但不应使用指针形态（消费方普遍按值做类型断言）。
 
 ### 事件一览
 
@@ -46,6 +46,7 @@ type FarmStartEvent struct {
     Plots       []string            // Plot 名称列表
     Edges       map[string][]string // 出边邻接表
     SourcePlots []string            // 源 Plot 名称列表
+    NodeMeta    map[string]NodeMeta // Plot 名称 -> 构建期元信息
     Structure   []string            // 预先渲染的结构行
     StartTime   time.Time           // 启动时间
 }
@@ -60,8 +61,29 @@ type FarmEndEvent struct {
 | 字段 | 说明 |
 |------|------|
 | `Plots` / `Edges` / `SourcePlots` | 来自 `Farm.Nodes()`、`Farm.OutEdges()`、`SourceNodes(OrderGraph)` 的快照 |
+| `NodeMeta` | `Farm.getNodeMeta()` 汇总的各 Plot `GetMeta()` 结果，键为 Plot 名称 |
 | `Structure` | `Farm.getStructureList()` 预渲染的图结构文本行，供日志/终端直接打印，避免观察者重复实现渲染 |
 | `IsDAG` | `IsDAG(OrderGraph)` 的结果，非 DAG 拓扑下结构渲染语义不同 |
+
+### `NodeMeta`
+
+`NodeMeta` 描述单个 Plot 在**构建期**确定、运行期不再变化的元信息，随 `FarmStartEvent` 一次性上报，不会出现在每拍的状态快照里。
+
+```go
+type NodeMeta struct {
+    ClassName     string `json:"class_name"`     // Plot 类型名
+    ExecutionMode string `json:"execution_mode"` // 执行模式
+    MaxWorkers    int    `json:"max_workers"`    // 最大并发数
+}
+```
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| `ClassName` | 各 Plot 的 `GetMeta()` | `SinglePlot` / `SplitPlot` / `RoutePlot` |
+| `ExecutionMode` | `basePlot.meta()` | 当前实现固定为 `"thread"` |
+| `MaxWorkers` | `basePlot.meta()` | 等于 `numTenders`（`WithTenders` 配置的并发 tender 数） |
+
+`pkg/reporter` 的 `PushWatcher` 收到 `FarmStartEvent` 后把 `NodeMeta` 原样放进图元信息记录的 `node_meta` 字段（JSON 键即上表 tag）；每拍的状态快照则来自 [`MetricsWatcher`](./metrics.md) 的 `PlotMetrics`，两者分工不同，见 [`metrics.md`](./metrics.md) 的「与 `pkg/reporter` 的契约」。
 
 ### Plot 事件
 
@@ -156,6 +178,8 @@ type SeedReplantEvent struct {
 | `Attempt` | 已失败并触发重试的次数，**从 1 开始**；最多出现 `maxRetries` 条 |
 | `Err` | 导致枯萎的最终错误，或导致本次重试的错误；`SeedWitherEvent` 中可能来自 `cultivator panic` 的包装错误 |
 | `Elapsed` | 培育/判定耗时，从 `tend` 内取 `startTime` 起算；**包含**重试循环中的 `retryDelay` 等待，但**不包含**在 `seedChan` 排队与等待并发令牌的时间 |
+
+> `pkg/reporter` 的 `PushWatcher` 只把 `SeedWitherEvent` 当作任务失败上报：`WeedID` 作为 `event_id`，`Plot` 作为 `node`，`Seed` 作为 `task_json`，`Err` 的 `%T` / `%v` 分别作为 `error_type` / `error_message`。`SeedRepr` / `FruitRepr` 只供人读，不进入上报载荷。
 
 ### Seal 事件
 

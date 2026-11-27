@@ -1,6 +1,6 @@
 # pkg/persist/sqlite.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -24,7 +24,7 @@ type LifecycleEventRecord struct {
 | 字段 | 说明 |
 |------|------|
 | `EventID` | 事件唯一 ID（主键），来自 `scarecrow` 事件携带的 `SeedID` / `FruitID` / `WeedID` / `PruneID` |
-| `EventType` | 事件类型；`pkg/persist` 自身写入 `record.Kind`，即 `seed` / `ripen` / `wither` / `prune`，但表结构不强制枚举 |
+| `EventType` | 事件类型；`pkg/persist` 自身按记录类型写入 `seed` / `ripen` / `wither` / `prune`，但表结构不强制枚举 |
 | `Plot` | 事件所属 plot 名称 |
 | `TS` | 时间戳（Unix 秒，浮点，毫秒精度）。由事件自带时间换算：`float64(t.UnixMilli()) / 1000` |
 
@@ -221,17 +221,17 @@ if err := tx.Commit(); err != nil { ... }
 
 ```mermaid
 flowchart TD
-    A["HandleRecord seed/ripen/wither/prune"] -->|Kind = seed| B[InsertLifecycleEvent]
-    A -->|Kind = ripen| B
-    A -->|Kind = wither| B
-    A -->|Kind = prune| B
+    A["HandleRecord(SeedRecord / RipenRecord / WitherRecord / PruneRecord)"] -->|"SeedRecord"| B[InsertLifecycleEvent]
+    A -->|"RipenRecord"| B
+    A -->|"WitherRecord"| B
+    A -->|"PruneRecord"| B
     B --> C["事务: INSERT events + N×INSERT event_parents"]
     C --> D{Commit?}
-    D -->|是| E{Kind}
-    E -->|seed| F1[UpsertLifecycleStatusSeed<br/>status = seed]
-    E -->|ripen| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
-    E -->|wither| F3[PromoteLifecycleStatusWither<br/>status = wither]
-    E -->|prune| F4[PromoteLifecycleStatusPrune<br/>status = prune]
+    D -->|是| E{记录类型}
+    E -->|SeedRecord| F1[UpsertLifecycleStatusSeed<br/>status = seed]
+    E -->|RipenRecord| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
+    E -->|WitherRecord| F3[PromoteLifecycleStatusWither<br/>status = wither]
+    E -->|PruneRecord| F4[PromoteLifecycleStatusPrune<br/>status = prune]
     D -->|否| F[rollbackOnError 自动回滚]
     F1 --> G[(status 表)]
     F2 --> G

@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -60,7 +60,7 @@
 - **fan-out / fan-in 计数**：`counts[seed]` 来自 `head` 的 `cultivator`，被并发调用，因此测试使用 `sync.Mutex` 保护；`GetSeedNum` / `GetFruitNum` / `GetWeedNum` 则读取 `MetricsWatcher` 的聚合结果。
 - **失败路由**：`basePlot.witherSeed` 仅记录失败并发出 `SeedWitherEvent`，不向下游转发；`head` 收到的 fruit 数与 `midA.GetFruitNum() + midB.GetFruitNum()` 严格相等，这一断言在 `TestFarmStructure121PartialFailure` 中被验证。
 - **通道配置**：`WithChanSize` 在 `TestFarmStructure21FaninDifferentSpeed` 中显式放大，避免慢 source 阻塞快 source 写入。
-- **运行入口**：四个用例都调用 `Run(inputs, "INFO")`，因此同时覆盖 `InjectTasks` 与 `InjectTerminations(sourceNodes)` 的默认批处理路径。
+- **运行入口**：四个用例都调用 `Run(inputs, "INFO", nil)`，因此同时覆盖 `InjectTasks` 与 `InjectTerminations(sourceNodes)` 的默认批处理路径。
 
 ## 关联源码
 

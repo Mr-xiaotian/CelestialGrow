@@ -1,6 +1,6 @@
 # pkg/plot/option.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `option.go` 定义所有节点的「函数选项」配置层。所有 `Option` 都是把 `*plotOptions` 修改一遍的小闭包；`newBasePlot` 会先取 `defaultOptions()`，再依次应用用户传入的 `Option`，因此 `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` 共享同一套配置。
 
@@ -27,7 +27,7 @@ type plotOptions struct {
 
 `Option` 即「接收 `*plotOptions`、就地修改、什么都不返回」的函数，是 Go 中常见的可选参数模式。
 
-> 日志级别**不在** `plotOptions` 中：它由 `Run(seeds, logLevel)` 在运行时传给 `assembly.StartPlotResources`，因此同一个 plot 的不同次运行可以使用不同的日志级别。
+> 日志级别**不在** `plotOptions` 中：它由 `Run(seeds, logLevel)` 在运行时传给 `assembly.StartLocalResources`（连同 plot 的 watcher hub、ticker hub 与 `metronome.DefaultInterval`），因此同一个 plot 的不同次运行可以使用不同的日志级别。
 
 ## 默认值
 
@@ -98,7 +98,7 @@ p := plot.NewSinglePlot("dedup",
 ## 注意事项
 
 - `WithMaxRetries(n)` 中的 `n` **不包含**首次执行；`n=0` 表示「不重试」。
-- `WithRetryDelay` 的 `attempt` 是 1-based。源码在每次失败后都会 `Sleep(retryDelay(attempt))`，**包括最后一次**（此时不会再重试），因此退避函数会在「可能出现空等」的位置被多调用一次。
+- `WithRetryDelay` 的 `attempt` 是 1-based。错误通过 `retryIf` 过滤后，源码在每次失败后都会 `Sleep(retryDelay(attempt))`，**包括最后一次**（此时不会再有下一次执行）；`retryIf` 返回 `false` 时会在 `Sleep` 之前直接 `break`。
 - `WithPruneIf` 的谓词在 `cultivator` 之前判断，且**优先于重试**：一旦谓词返回 `true`，该种子既不调用 `cultivator`，也不进入重试循环，直接走 `pruneSeed`。谓词默认 `nil`（不修剪）。
 - `WithPruneIf` 内部用类型断言把 `any` 还原为 `S`；断言失败时按「不修剪」处理。泛型参数 `S` 由传入谓词的参数类型推断，无需显式指定。
 - 日志级别由 `Run` 的 `logLevel` 参数控制，不再存在 `WithLogLevel` Option。

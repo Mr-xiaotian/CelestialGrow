@@ -1,6 +1,6 @@
 # pkg/persist/lifecycle.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -16,35 +16,38 @@
 
 ## 核心对象
 
-### `LifecycleRecord` — 队列载荷
+### `LifecycleRecord` — 封闭记录类型联合
 
 ```go
-type LifecycleRecord struct {
-    Kind           string
-    InputEventID   int
-    CurrentEventID int
-    ParentIDs      []int
-    PlotName       string
-    SeedJSON       string
-    FruitJSON      string
-    WitherType     string
-    WitherMessage  string
-    TS             float64
+type LifecycleRecord interface {
+    lifecycleRecord()
 }
 ```
 
+接口只由包内四种记录实现，具体类型直接决定 `events.event_type`，不再依赖运行期 `Kind` 字段：
+
+| 记录类型 | 字段 | 用途 |
+|----------|------|------|
+| `SeedRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `SeedJSON` / `TS` | 种子输入 |
+| `RipenRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `FruitJSON` / `TS` | 种子成熟 |
+| `WitherRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `WitherType` / `WitherMessage` / `TS` | 种子枯萎 |
+| `PruneRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `TS` | 种子剪枝 |
+
+四种记录共有字段的含义：
+
 | 字段 | 含义 |
 |------|------|
-| `Kind` | 操作类型，取包内常量 `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` / `lifecyclePrune`（即 `seed` / `ripen` / `wither` / `prune`）；同时作为 `events.event_type` 落库 |
 | `InputEventID` | 本颗种子（输入）的事件 ID，对应 `status.input_event_id` |
-| `CurrentEventID` | 本次产生的事件 ID，对应 `events.event_id` 与 `status.current_event_id`；`seed` 时等于 `InputEventID` |
+| `CurrentEventID` | 本次产生的事件 ID，对应 `events.event_id` 与 `status.current_event_id`；`SeedRecord` 时等于 `InputEventID` |
 | `ParentIDs` | 父事件 ID 列表，写入 `event_parents` 边；外部注入的种子为 `nil` |
 | `PlotName` | 事件所属 Plot 名称，写入 `events.plot` 与 `status.plot` |
-| `SeedJSON` | 种子载荷 JSON，仅 `seed` 记录填写 |
-| `FruitJSON` | 果实 JSON，仅 `ripen` 记录填写 |
-| `WitherType` | 枯萎错误类型，仅 `wither` 记录填写（`fmt.Sprintf("%T", err)`） |
-| `WitherMessage` | 枯萎错误文本，仅 `wither` 记录填写（`fmt.Sprintf("%v", err)`） |
+| `SeedJSON` | 种子载荷 JSON，仅 `SeedRecord` 携带 |
+| `FruitJSON` | 果实 JSON，仅 `RipenRecord` 携带 |
+| `WitherType` | 枯萎错误类型，仅 `WitherRecord` 携带（`fmt.Sprintf("%T", err)`） |
+| `WitherMessage` | 枯萎错误文本，仅 `WitherRecord` 携带（`fmt.Sprintf("%v", err)`） |
 | `TS` | 事件时间（Unix 秒，浮点，毫秒精度），由事件的 `Time` 字段换算 |
+
+> `lifecycleRecord()` 是私有方法，包外无法新增实现；新增事件类型必须同时扩展本文件的记录类型与 handler 的 switch。
 
 ### `LifecycleRecordHandler` — 消费端
 
@@ -60,7 +63,7 @@ type LifecycleRecordHandler struct {
 | 方法 | 触发时机 | 行为 |
 |------|----------|------|
 | `BeforeStart() error` | `Spout.Start()` 内、消费循环启动前 | 创建 `lifecycles/<YYYY-MM-DD>/`（权限 `0755`），拼出 `grow_lifecycle(<HH-MM-SS.mmm>).sqlite3` 路径，调用 `OpenLifecycleSQLite` 打开库并建表；路径存入 `SQLitePath`，句柄存入 `sqliteDB` |
-| `HandleRecord(record LifecycleRecord) error` | 每条记录出队 | 先校验 `sqliteDB != nil`，再按 `Kind` 先写事件、后写/晋升状态快照 |
+| `HandleRecord(record LifecycleRecord) error` | 每条记录出队 | 先校验 `sqliteDB != nil`，再按记录的具体类型先写事件、后写/晋升状态快照 |
 | `AfterStop() error` | `Spout.Stop()` 收尾 | 关闭 `sqliteDB` 并置空；句柄本就为空时直接返回 `nil` |
 
 > `SQLitePath` 是公开字段，`AfterStop` 后仍保留最后一次打开的路径；离线读取通过 `LoadLifecycleStatusesFromPath`（见 [`sqlite.md`](./sqlite.md)）完成，`LifecycleRecordHandler` 本身不再提供查询方法。
@@ -80,7 +83,7 @@ type LifecycleWatcher struct {
 | `Start() error` | 委托 `spout.Start()`：触发 `BeforeStart` 建目录、开库，并启动后台消费 goroutine |
 | `Stop() error` | 委托 `spout.Stop()`：关闭通道、等待队列排空（最多 1s），最后 `AfterStop` 关库；超时返回 `shutdown timeout` |
 | `DBPath() string` | 返回底层 handler 的 `SQLitePath`；消费循环尚未 `Start` 时为空串 |
-| `OnEvent(event scarecrow.Event) error` | 按事件类型构造 `LifecycleRecord` 并 `inlet.Send`；未关心的事件直接返回 `nil` |
+| `OnEvent(event scarecrow.Event) error` | 按事件类型构造 `SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord` 并 `inlet.Send`；未关心的事件直接返回 `nil` |
 
 > `newLifecycleWatcher(handler funnel.RecordHandler[LifecycleRecord])` 是包内构造函数，测试用它注入捕获型 handler。此时 `DBPath()` 会因 handler 不是 `*LifecycleRecordHandler` 而返回空串。
 
@@ -88,12 +91,12 @@ type LifecycleWatcher struct {
 
 `OnEvent` 只处理 4 类种子结果事件，其余事件一律忽略：
 
-| `scarecrow` 事件 | `Kind` | `InputEventID` | `CurrentEventID` | `ParentIDs` | 载荷 |
-|------------------|--------|----------------|------------------|-------------|------|
-| `SeedInputEvent` | `seed` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
-| `SeedRipenEvent` | `ripen` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
-| `SeedWitherEvent` | `wither` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`、`WitherMessage = %v(ev.Err)` |
-| `SeedPruneEvent` | `prune` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | 无 |
+| `scarecrow` 事件 | 记录类型 | `InputEventID` | `CurrentEventID` | `ParentIDs` | 载荷 |
+|------------------|----------|----------------|------------------|-------------|------|
+| `SeedInputEvent` | `SeedRecord` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
+| `SeedRipenEvent` | `RipenRecord` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
+| `SeedWitherEvent` | `WitherRecord` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`、`WitherMessage = %v(ev.Err)` |
+| `SeedPruneEvent` | `PruneRecord` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | 无 |
 
 被显式忽略（`return nil`，不入库）的事件：`FarmStartEvent`、`FarmEndEvent`、`PlotStartEvent`、`PlotEndEvent`、`SeedReplantEvent`、`SealInputEvent`、`SealMergeEvent`。包外无法新增事件类型（`scarecrow.Event` 的 `isEvent()` 是私有方法），因此 switch 之外的兜底分支实际不会被触发。
 
@@ -126,7 +129,7 @@ sequenceDiagram
     Note over Sp: 后台 goroutine 开始消费
 
     Hub->>W: OnEvent(SeedInputEvent)
-    W->>W: 构造 LifecycleRecord{Kind: seed, ...}
+    W->>W: 构造 SeedRecord{SeedJSON: ..., Parents: ...}
     W->>In: Send(record)
     In->>Q: 入队（满则 1s 后报错）
     Q->>Sp: 出队
@@ -134,7 +137,7 @@ sequenceDiagram
     H->>DB: InsertLifecycleEvent + UpsertLifecycleStatusSeed
 
     Hub->>W: OnEvent(SeedRipenEvent)
-    W->>In: Send({Kind: ripen, FruitJSON: ...})
+    W->>In: Send(RipenRecord{FruitJSON: ...})
     In->>Q: 入队
     Q->>Sp: 出队
     Sp->>H: HandleRecord(record)
@@ -146,7 +149,7 @@ sequenceDiagram
     H->>DB: sqliteDB.Close()
 ```
 
-### `HandleRecord` 的 Kind 路由
+### `HandleRecord` 的类型路由
 
 ```go
 func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
@@ -154,24 +157,25 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
         return fmt.Errorf("生命周期 sqlite 未初始化")
     }
 
-    switch record.Kind {
-    case lifecycleSeed:
-        if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+    switch rec := record.(type) {
+    case SeedRecord:
+        if err := InsertLifecycleEvent(l.sqliteDB, rec.CurrentEventID, "seed", rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
             return err
         }
-        return UpsertLifecycleStatusSeed(l.sqliteDB, record.InputEventID, record.SeedJSON, record.PlotName, record.TS)
-    // ripen / wither / prune 同理：先 InsertLifecycleEvent，再 PromoteLifecycleStatusXxx
+        return UpsertLifecycleStatusSeed(l.sqliteDB, rec.InputEventID, rec.SeedJSON, rec.PlotName, rec.TS)
+    // RipenRecord / WitherRecord / PruneRecord 同理：先 InsertLifecycleEvent，再 PromoteLifecycleStatusXxx
     default:
-        return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
+        return fmt.Errorf("unsupported lifecycle record: %T", record)
     }
 }
 ```
 
 要点：
 
-- 四种 `Kind` 都先写 `events`（含 `event_parents` 父边），成功后才写 `status`；事件写入失败时状态不会变更，两者保持一致。
-- `ripen` / `wither` / `prune` 通过 `UPDATE status ... WHERE input_event_id = ?` 晋升，因此要求对应的 `seed` 记录已先落库（`UPDATE` 未命中不会报错，见 [`sqlite.md`](./sqlite.md)）。
-- `kind` 非法时返回 `unsupported lifecycle operation: <kind>`；`sqliteDB == nil` 时返回 `生命周期 sqlite 未初始化`。
+- 四种记录都先写 `events`（含 `event_parents` 父边），成功后才写 `status`；事件写入失败时状态不会变更，两者保持一致。
+- `event_type` 由具体记录类型固定为 `seed` / `ripen` / `wither` / `prune`，不再从记录字段读取。
+- `ripen` / `wither` / `prune` 通过 `UPDATE status ... WHERE input_event_id = ?` 晋升，因此要求对应的 `SeedRecord` 已先落库（`UPDATE` 未命中不会报错，见 [`sqlite.md`](./sqlite.md)）。
+- 记录类型不在四种之内时返回 `unsupported lifecycle record: <类型>`；`sqliteDB == nil` 时返回 `生命周期 sqlite 未初始化`。由于 `LifecycleRecord` 的标记方法是私有的，包外无法构造第五种记录。
 - 所有错误都原样向上返回，由 `Spout` 的消费循环丢弃（`Spout` 不检查 `HandleRecord` 的返回值）；如需观测写入失败，只能依赖 SQLite 文件本身或日志。
 
 ### DB 路径与目录
@@ -183,7 +187,7 @@ lifecycles/<YYYY-MM-DD>/grow_lifecycle(<HH-MM-SS.mmm>).sqlite3
 - 日期 `2006-01-02`、时间 `15-04-05.000` 在 `BeforeStart` 中各取一次 `time.Now()`；同一天多次启动会得到多个文件。
 - 目录权限 `0755`；文件由 `sql.Open("sqlite", "file:...")` 自动创建，`BeforeStart` 不显式建文件。
 - `os.MkdirAll` 失败 → `创建生命周期目录失败: %w`；打开库失败 → `打开生命周期 sqlite 失败: %w`。
-- `Start` 失败时不会留下已启动的消费循环；`assembly` 会在 `Start` 成功后才把观察者注册进 Hub。
+- `Start` 失败时 `Spout` 不会启动消费循环；`assembly` 会先注册观察者，再由 `watcherHub.Start()` 统一启动，启动失败由 Hub 逆序回滚已启动项。
 
 ### `toLifecycleJSON` 兜底
 
@@ -207,10 +211,14 @@ func toLifecycleJSON(value any) string {
 
 | 符号 | 类别 | 用途 |
 |------|------|------|
-| `LifecycleRecord` | 类型 | 队列载荷（`Kind` + 事件字段 + 状态字段） |
+| `LifecycleRecord` | 接口 | 封闭记录联合，仅由四种记录实现 |
+| `SeedRecord` | 类型 | 种子输入记录 |
+| `RipenRecord` | 类型 | 种子成熟记录 |
+| `WitherRecord` | 类型 | 种子枯萎记录 |
+| `PruneRecord` | 类型 | 种子剪枝记录 |
 | `LifecycleRecordHandler` | 类型 | `funnel.RecordHandler[LifecycleRecord]` 实现，负责落库 |
 | `(*LifecycleRecordHandler).BeforeStart` | 方法 | 建目录、开库、建表 |
-| `(*LifecycleRecordHandler).HandleRecord` | 方法 | 按 `Kind` 写事件并推进状态 |
+| `(*LifecycleRecordHandler).HandleRecord` | 方法 | 按记录类型写事件并推进状态 |
 | `(*LifecycleRecordHandler).AfterStop` | 方法 | 关闭数据库句柄 |
 | `LifecycleWatcher` | 类型 | `scarecrow.Watcher` 实现，事件 → 记录 |
 | `NewLifecycleWatcher` | 函数 | 创建观察者（默认 handler、缓冲 100、超时 1s） |

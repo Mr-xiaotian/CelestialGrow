@@ -1,6 +1,6 @@
 # pkg/scarecrow/print.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -155,7 +155,8 @@ func main() {
     if err := f.AddWatcher(scarecrow.NewPrintWatcher("garden")); err != nil {
         panic(err)
     }
-    if err := f.Run(map[string][]any{"harvester": {Seed{ID: 1}}}, "INFO"); err != nil {
+    // 第三个参数为远程上报配置，nil 表示纯本地运行。
+    if err := f.Run(map[string][]any{"harvester": {Seed{ID: 1}}}, "INFO", nil); err != nil {
         panic(err)
     }
 }

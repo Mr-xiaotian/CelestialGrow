@@ -1,6 +1,6 @@
 # pkg/funnel/spout.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `pkg/funnel/spout.go` 定义了 `Spout[T]` 泛型抽象——CelestialGrow 异步消费基础设施中的**消费端**（读取者）。它持有一个带缓冲的 Go channel，在后台 goroutine 中持续读取记录并交给 `RecordHandler[T]` 处理；同时通过 `BeforeStart` / `HandleRecord` / `AfterStop` 三段式接口明确资源生命周期。
 
@@ -192,10 +192,10 @@ funnel.Spout[T]（单后台 goroutine）──HandleRecord(T)──▶ persist.L
 
 - `persist.LogRecordHandler` / `persist.LifecycleRecordHandler` 都实现了 `RecordHandler[T]`：
   - `BeforeStart`：创建 `logs/` 目录并按日期打开日志文件 / 创建 `lifecycles/<date>/` 目录并打开 SQLite。
-  - `HandleRecord`：格式化为一行文本追加写入文件 / 按 `Kind`（`seed` / `ripen` / `wither` / `prune`）写入事件并更新状态。
+  - `HandleRecord`：格式化为一行文本追加写入文件 / 按记录类型（`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`）写入事件并更新状态。
   - `AfterStop`：关闭日志文件 / 关闭 SQLite 连接。
 - `persist.LogWatcher` / `LifecycleWatcher` 在未导出的 `newLogWatcher` / `newLifecycleWatcher` 中用 `funnel.NewSpout(handler, 100, time.Second)` 构造 `Spout`，再用 `funnel.NewInlet(spout.GetQueue(), time.Second)` 构造配套 `Inlet`。
-- `pkg/assembly` 统一管理生命周期：`StartPlotResources` / `StartFarmResources` 创建两个观察者，**先 `lifecycle.Start()`、再 `log.Start()`**，然后把它们注册到 `*scarecrow.Hub`；`Resources.Stop`（`sync.Once` 保护）按相反顺序先 `log.Stop()`、再 `lifecycle.Stop()`。
+- `pkg/assembly` 统一管理生命周期：`StartLocalResources` / `StartReportResources` 创建观察者并**先注册到 `*scarecrow.Hub`**，再由 `watcherHub.Start()` 按注册顺序启动（`lifecycle.Start()` → `log.Start()`）；`StopFunc` 按启动的相反顺序回收（先 `log.Stop()`、再 `lifecycle.Stop()`）。
 - `Plot` / `Farm` 只持有 `Hub`，不直接持有 `Spout`，也没有 `BindInlet` / `StartSpouts` / `StopSpouts` 之类的接口——通道的创建与绑定都封装在 `persist` 的观察者构造函数里。
 
 ## 与 Inlet 的协作（inlet ← spout）
@@ -275,6 +275,6 @@ func main() {
   - `timeout` 越大，关闭越"温和"；但进程退出时会被迫等更久。
 - `RecordHandler.HandleRecord` 与 `AfterStop` 的错误都被忽略，**不要**把关键错误状态只写进返回值；如需失败可观测，应在 handler 内部自行记录（`persist` 的 handler 目前通过错误返回值传递，但调用方拿不到）。
 - **`Start` 不可重复**：调用两次会执行两次 `BeforeStart`（可能重复打开文件）并启动两个消费 goroutine，二者竞争同一通道且 `HandleRecord` 可能并发执行。
-- **`Stop` 不幂等**：`ch` 已关闭，再次 `Stop` 会 panic（`close of closed channel`）。`pkg/assembly` 用 `sync.Once` 包了一层来保证只停一次。
+- **`Stop` 不幂等**：`ch` 已关闭，再次 `Stop` 会 panic（`close of closed channel`）。`pkg/assembly` 用 `StopFunc` 内部的 `stopped` 布尔值包了一层来保证只停一次（该保护非并发安全）。
 - `Stop` 可以在 `Start` 之前调用：会关闭通道、立即通过 `wg.Wait()`、然后调用 `AfterStop`，因此 handler 的 `AfterStop` 必须能容忍「`BeforeStart` 未执行」的状态。
 - `Handler()` 返回的引用是只读的，外部修改其内部状态是允许的（例如查询已写入条数），但替换整个 handler 不会生效。

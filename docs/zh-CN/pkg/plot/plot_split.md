@@ -1,6 +1,6 @@
 # pkg/plot/plot_split.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot_split.go` 定义 `SplitPlot[S, F]`：一种**一拆多**节点。它的 `cultivator`（构造参数名为 `splitter`）返回 `[]F`，节点再把切片中的每个元素单独作为一颗下游 yield 转发。
 
@@ -146,7 +146,7 @@ head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 
 _ = f.AddPlot(split, head)
 _ = f.Connect([]plot.PlotNode{split}, []plot.PlotNode{head}) // 上游 yield int → 下游 seed int
-_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO")
+_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO", nil)
 ```
 
 ## 注意事项

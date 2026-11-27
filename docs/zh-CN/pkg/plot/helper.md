@@ -73,4 +73,4 @@ func trunc(s string, maxLen int) string {
 - `trunc` 是未导出函数，外部包**无法**直接调用；如需截断字符串，请自行实现或复用 `pkg/persist` 内已封装的处理。
 - `trunc` 不会在结果中保留「完整原长」信息；如果调试时需要完整内容，建议在测试或开发模式下改用自定义 `Watcher` 读取事件的 `Seed` / `Fruit` 原始字段。
 - 当原始字符串 `len(runes) <= maxLen` 时函数**不会**返回 `s + "..."`，而是原样返回——这意味着当恰好等于 `maxLen` 时也不会带省略号。
-- 生命周期记录（`LifecycleRecord.SeedJSON` / `FruitJSON`）**不经过** `trunc`：`persist.LifecycleWatcher` 序列化的是事件中的原始 `Seed` / `Fruit`，始终保存完整 JSON；截断只影响可读表示。
+- 生命周期记录（`SeedRecord.SeedJSON` / `RipenRecord.FruitJSON`）**不经过** `trunc`：`persist.LifecycleWatcher` 序列化的是事件中的原始 `Seed` / `Fruit`，始终保存完整 JSON；截断只影响可读表示。

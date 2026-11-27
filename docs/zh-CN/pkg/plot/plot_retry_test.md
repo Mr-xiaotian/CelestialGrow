@@ -1,6 +1,6 @@
 # pkg/plot/plot_retry_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot_retry_test.go` 聚焦 `SinglePlot` 的**重试语义**：验证 `WithMaxRetries` / `WithRetryDelay` / `WithRetryIf` 三个 Option 如何影响 `basePlot.tend` 的重试循环，并最终通过 `Harvest` 把结果固化为生命周期快照。
 
@@ -82,7 +82,7 @@
 
 - 测试包：`package plot_test`（黑盒），不直接访问 `SinglePlot` 未导出字段；
 - `attempts` 使用 `sync/atomic.Int32` 跨协程安全累加，确保重试次数断言不受并发影响；
-- 复用 `plot_harvest_test.go` 中定义的 `mustHarvest(t, plot harvestable)`（`harvestable` 为测试内局部接口 `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`）拉取快照，因此隐式验证了 `Run` 中 `assembly.StartPlotResources` 装配的 `LifecycleWatcher` 与 `Harvest` 的串联；
+- 复用 `plot_harvest_test.go` 中定义的 `mustHarvest(t, plot harvestable)`（`harvestable` 为测试内局部接口 `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`）拉取快照，因此隐式验证了 `Run` 中 `assembly.StartLocalResources` 装配的 `LifecycleWatcher` 与 `Harvest` 的串联；
 - 四个用例都用 `WithTenders(1)`：并发 tender 不会改变总调用次数，但会让 `attempts.Add(1)` 的时序难以断言，串行化后重试次数才是确定值。
 
 ## 运行方式

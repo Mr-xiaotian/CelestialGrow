@@ -1,12 +1,12 @@
 # pkg/farm/farm_inject_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
 `farm_inject_test.go` 以 `package farm_test` 覆盖 `Farm` 的**外部驱动模式**：
 
-- `Start(logLevel)` 本身不注入任何种子或终止信号；
+- `Start(logLevel, report)` 本身不注入任何种子或终止信号；
 - 调用方可在 `Start` 阻塞期间通过 `InjectTasks` / `InjectTerminations` 动态控制任务流；
 - Farm 级 watcher（`Farm.AddWatcher`）能同时收到 Farm 事件与 Plot 事件。
 
@@ -40,7 +40,7 @@ sequenceDiagram
 
     T->>F: NewFarm("start_injection") / AddPlot(root)
     T->>F: AddWatcher(WatcherFunc)
-    T-)F: go Start("INFO")
+    T-)F: go Start("INFO", nil)
     Note over F: 不注入任何数据，阻塞在 WaitAsync
     T->>F: InjectTasks({"root": [1,2,3]})
     F->>P: SeedAny(1) / SeedAny(2) / SeedAny(3)
@@ -54,7 +54,7 @@ sequenceDiagram
 
 ### 1. `Start` 不注入
 
-`Start` 只计算 `sourceNodes` 并调用 `start(logLevel, nil)`；`prepare` 为 `nil` 时不会触发 `InjectTasks` / `InjectTerminations`。测试必须先注入，否则 `Start` 永远不会返回。
+`Start` 只计算 `sourceNodes` 并调用 `start(logLevel, report, nil)`；测试传入 `report = nil`，`prepare` 为 `nil` 时不会触发 `InjectTasks` / `InjectTerminations`。测试必须先注入，否则 `Start` 永远不会返回。
 
 ### 2. 运行期注入的时序
 
@@ -68,7 +68,7 @@ sequenceDiagram
 
 ### 3. Farm 级 watcher 的层级分发
 
-`AddWatcher` 注册到 Farm Hub；`start` 中 Farm Hub 又被注册到 `root` 的 Hub。因此同一个 watcher 会收到：
+`AddWatcher` 注册到 Farm 的 `watcherHub`；`start` 中该 Hub 又被注册到 `root` 的 Hub。因此同一个 watcher 会收到：
 
 | 事件 | 来源 | 断言 |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ sequenceDiagram
 ## 关联源码
 
 - `pkg/farm/farm.go`：`Start` / `start` / `InjectTasks` / `InjectTerminations` / `AddWatcher`
-- `pkg/assembly/assembly.go`：`StartFarmResources`（`Start` 同样装配资源）
+- `pkg/assembly/assembly.go`：`StartLocalResources`（`Start` 同样装配本地资源）
 - `pkg/plot/plot.go`：`StartAsync` / `SeedAny` / `Seal` / `AddWatcher` / `notifyStart`
 - `pkg/scarecrow/watcher.go`：`Watcher` / `WatcherFunc`
 - `pkg/scarecrow/event.go`：`FarmStartEvent` / `PlotStartEvent`

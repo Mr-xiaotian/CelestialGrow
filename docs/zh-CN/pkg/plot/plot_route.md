@@ -1,6 +1,6 @@
 # pkg/plot/plot_route.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot_route.go` 定义 `RoutePlot[S, Y]`：一种**定向转发**节点。它的 `cultivator` 返回的不是单个 fruit，而是一张路由表 `map[string]Y`，key 为目标下游名称，value 为要发给该下游的 yield。
 
@@ -133,7 +133,7 @@ route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 _ = f.AddPlot(route, left, right)
 // 只连 route → left、route → right；路由表中未出现的目标不会收到数据
 _ = f.Connect([]plot.PlotNode{route}, []plot.PlotNode{left, right})
-_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO")
+_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO", nil)
 ```
 
 > 由于下游 `left` / `right` 的 `S` 是 `string`，`RoutePlot` 的 `Y` 也必须是 `string`，否则 `Connect` 阶段就会因类型不匹配报错。

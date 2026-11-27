@@ -1,6 +1,6 @@
 # pkg/persist/lifecycle_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -30,7 +30,7 @@ func (h *captureLifecycleHandler) snapshot() []LifecycleRecord { /* 加锁拷贝
 
 | 测试 | 覆盖能力 | 关键不变量 |
 |------|----------|-----------|
-| `TestLifecycleWatcherTranslatesEvents` | 投递 7 个事件，覆盖 4 类种子结果事件 + 2 类被忽略事件 | 只产生 5 条记录；`Kind` / `InputEventID` / `CurrentEventID` / `ParentIDs` / JSON 载荷 / 时间戳全部符合映射规则 |
+| `TestLifecycleWatcherTranslatesEvents` | 投递 7 个事件，覆盖 4 类种子结果事件 + 2 类被忽略事件 | 只产生 5 条记录；记录类型 / `InputEventID` / `CurrentEventID` / `ParentIDs` / JSON 载荷 / 时间戳全部符合映射规则 |
 
 ## `TestLifecycleWatcherTranslatesEvents`
 
@@ -65,13 +65,13 @@ if len(records) != 5 { t.Fatalf(...) }
 
 ### 断言内容
 
-| 索引 | 来源事件 | `Kind` | `InputEventID` | `CurrentEventID` | 其它断言 |
-|:----:|----------|--------|----------------|------------------|----------|
-| 0 | `SeedInputEvent`（plot `a`） | `seed` | 1 | 1 | `PlotName == "a"`、`SeedJSON == "1"`、`ParentIDs == nil`、`TS ≈ 1700000000.123`（误差 `1e-6`） |
-| 1 | `SeedRipenEvent` | `ripen` | 1 | 2 | `FruitJSON == "2"`、`ParentIDs == [1]` |
-| 2 | `SeedInputEvent`（plot `b`，`Parents: [2]`） | `seed` | 3 | 3 | `PlotName == "b"`、`SeedJSON == "2"`、`ParentIDs == [2]` |
-| 3 | `SeedWitherEvent` | `wither` | 3 | 4 | `WitherMessage == "boom"`、`WitherType != ""` |
-| 4 | `SeedPruneEvent` | `prune` | 5 | 6 | — |
+| 索引 | 来源事件 | 记录类型 | `InputEventID` | `CurrentEventID` | 其它断言 |
+|:----:|----------|----------|----------------|------------------|----------|
+| 0 | `SeedInputEvent`（plot `a`） | `SeedRecord` | 1 | 1 | `PlotName == "a"`、`SeedJSON == "1"`、`ParentIDs == nil`、`TS ≈ 1700000000.123`（误差 `1e-6`） |
+| 1 | `SeedRipenEvent` | `RipenRecord` | 1 | 2 | `FruitJSON == "2"`、`ParentIDs == [1]` |
+| 2 | `SeedInputEvent`（plot `b`，`Parents: [2]`） | `SeedRecord` | 3 | 3 | `PlotName == "b"`、`SeedJSON == "2"`、`ParentIDs == [2]` |
+| 3 | `SeedWitherEvent` | `WitherRecord` | 3 | 4 | `WitherMessage == "boom"`、`WitherType != ""` |
+| 4 | `SeedPruneEvent` | `PruneRecord` | 5 | 6 | — |
 
 - `PlotStartEvent` 与 `SealMergeEvent` 被观察者显式忽略，因此 7 个事件只产生 5 条记录——这是「忽略分支」的间接断言。
 - 索引 2 覆盖「上游投递」场景：`From` 字段不影响持久化，父边来自 `Parents`；`Seed` 为 `2` 时 `SeedJSON` 正好是 `"2"`。
@@ -95,6 +95,6 @@ go test ./pkg/persist/...
 
 - **`Stop` 是同步点**：`Spout.Stop` 关闭通道并等待消费循环排空（最多 1s），之后 `snapshot` 才能看到全部记录；若只调用 `OnEvent` 不 `Stop`，断言会因记录尚未消费而随机失败。
 - **`Start` 不可省略**：`OnEvent` 本身只向 `Inlet` 投递，消费依赖 `Start` 启动的 goroutine。
-- **不覆盖落库逻辑**：`captureLifecycleHandler` 不写 SQL，`HandleRecord` 的 Kind 路由、`InsertLifecycleEvent` / `Promote*` 的调用顺序均由 [`sqlite_test.md`](./sqlite_test.md) 与源码保证；本测试只锁定「事件 → 记录」的字段映射。
-- **不覆盖错误分支**：`unsupported lifecycle operation`、`生命周期 sqlite 未初始化` 等错误未在此文件断言；`OnEvent` 对未识别事件返回 `nil`，因此也没有错误路径可测。
+- **不覆盖落库逻辑**：`captureLifecycleHandler` 不写 SQL，`HandleRecord` 的记录类型路由、`InsertLifecycleEvent` / `Promote*` 的调用顺序均由 [`sqlite_test.md`](./sqlite_test.md) 与源码保证；本测试只锁定「事件 → 记录」的类型与字段映射。
+- **不覆盖错误分支**：`unsupported lifecycle record`、`生命周期 sqlite 未初始化` 等错误未在此文件断言；`OnEvent` 对未识别事件返回 `nil`，因此也没有错误路径可测。
 - **时间断言用 `math.Abs` 容差**：`TS` 是 `float64(UnixMilli())/1000`，浮点比较必须留容差（测试用 `1e-6`）。

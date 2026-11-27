@@ -1,6 +1,6 @@
 # pkg/farm/farm_connect_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -18,8 +18,8 @@
 ## 关键断言
 
 - `TestFarmAddPlot` 同时校验 `GetPlot` 拿到的指针与原 `SinglePlot` 一致——`Farm.plots` 是按接口值保存的，不做节点拷贝。
-- `TestFarmConnectHyperEdge` 中重复出现的 `targetA` 不会导致 `source → targetA` 被建两次：内部 `uniquePlots` 在调用 `Connect` 之前完成去重。
-- `TestFarmConnectHyperEdge` 在 `Run` 之后额外校验 `targetA` / `targetB` 的 `GetSeedNum()` 与 `GetFruitNum()` 均为 1，确认超边确实把同一颗 fruit 分发给了两个下游。
+- `TestFarmConnectHyperEdge` 中重复出现的 `targetA` 不会导致 `source → targetA` 被建两次：`Connect` 内部先用 `uniquePlots` 去重，再进入笛卡尔积连接循环。
+- `TestFarmConnectHyperEdge` 在 `Run(..., "INFO", nil)` 之后额外校验 `targetA` / `targetB` 的 `GetSeedNum()` 与 `GetFruitNum()` 均为 1，确认超边确实把同一颗 fruit 分发给了两个下游。
 - `TestFarmConnectTypeMismatch` 中上下游 `SinglePlot[S, F]` 的 `F` 与 `S` 不同，`ConnectTo` 内对 `next.GetSeedChanAny()` 的 `.(chan runtime.Payload[Y])` 类型断言失败，因此 `Connect` 整体返回 error，且 `OrderGraph` 中不会留下 `AddEdge` 记录。
 
 ## 关联源码

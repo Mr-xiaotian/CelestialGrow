@@ -1,6 +1,6 @@
 # pkg/farm/farm_start_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -16,7 +16,7 @@
 
 - 创建 `root`（`seed * 2`，`WithTenders(2)`）和 `head`（收集 seed，`WithTenders(2)`）。
 - `Connect(root → head)`。
-- `Run` 时给 `root` 注入 `{1, 2, 3}`，日志级别传 `"INFO"`。
+- `Run` 时给 `root` 注入 `{1, 2, 3}`，日志级别传 `"INFO"`，上报配置传 `nil`（本地运行）。
 - 期望：
   - `head` 共收到 3 个 seed，排序后为 `[2, 4, 6]`。
   - `root.GetState() == 2`、`head.GetState() == 2`（即 `notifyFinish` 已触发）。

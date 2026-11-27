@@ -1,6 +1,6 @@
 # pkg/farm/farm_split_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -20,8 +20,8 @@
 
 ## 关键细节
 
-- **拆分函数覆盖空输入**：`split` 对空串返回 `nil, nil`，用于覆盖「拆分结果为空」分支（不下发 yield）。
-- **数字解析错误**：拆分过程中 `strconv.Atoi` 失败会返回 error，从而走 `SplitPlot` 的 withered 路径，本用例输入均为合法整数，用于验证纯成功路径。
+- **空输入分支未触发**：`split` 代码对空串返回 `nil, nil`（不下发 yield），但本用例实际输入 `{"1,2,3", "4,5"}`，不会走到该分支；它只验证正常拆分路径。
+- **数字解析错误**：拆分过程中 `strconv.Atoi` 失败会返回 error，从而走 `SplitPlot` 的 withered 路径；本用例输入均为合法整数，同样不触发该分支。
 - **`head` 的 fan-in**：`head` 使用 `WithTenders(2)`，会并发处理来自 `split` 的多条 yield；其 `GetSeedNum` 由 `MetricsWatcher` 统计上游投递的 `SeedInputEvent` 得到。
 - **`split` 未显式设置 `WithTenders`**：沿用默认 `runtime.NumCPU()`，说明并发度不影响「按输入计数」的语义。
 

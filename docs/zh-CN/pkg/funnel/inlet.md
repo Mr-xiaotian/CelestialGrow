@@ -1,6 +1,6 @@
 # pkg/funnel/inlet.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `pkg/funnel/inlet.go` 定义了 `Inlet[T]` 泛型抽象——CelestialGrow 异步消费基础设施中的**生产端**（写入者）。它把上游组件的记录送入一个带缓冲的 Go channel，由对端的 `Spout[T]` 异步消费。`Inlet` 内置了独立的 `context.Context`，可被 `Close` 主动取消；每次发送还带超时保护，避免上游被慢消费者无限阻塞。
 
@@ -87,7 +87,7 @@ funnel.Spout[T] ──HandleRecord──▶ RecordHandler[T]
 - 两个观察者的队列参数一致：`funnel.NewSpout(handler, 100, time.Second)` + `funnel.NewInlet(..., time.Second)`，即**缓冲 100 条**，`Send` 超时与 `Spout.Stop` 的优雅关闭超时均为 **1 秒**。
 - `LogWatcher` 在 `OnEvent` 与 `Send` 之间还有一层级别过滤：私有方法 `log(level, message, at)` 会丢弃低于 `minLevel` 的记录，这些记录**不会**占用通道。
 - `Send` 的错误会沿 `OnEvent` 原样返回（`LogWatcher.OnEvent` / `LifecycleWatcher.OnEvent` 直接把 `Send` 的 error 作为返回值），但 `Hub` 会捕获观察者错误交给 `ErrorHandler` 并始终返回 `nil`，所以超时不会中断业务执行。
-- `Plot` / `Farm` **不再**直接持有 `Inlet` 或 `Spout`：它们只持有 `scarecrow.Hub`，观察者由 `pkg/assembly` 的 `StartPlotResources` / `StartFarmResources` 创建并启动，运行结束时由 `Resources.Stop`（内部 `sync.Once`）先停日志、再停生命周期。
+- `Plot` / `Farm` **不再**直接持有 `Inlet` 或 `Spout`：它们只持有 `scarecrow.Hub` 与 `metronome.Hub`，观察者由 `pkg/assembly` 的 `StartLocalResources` / `StartReportResources` 创建，注册后由 `watcherHub.Start()` 统一启动。运行结束时 `StopFunc` 先停节拍时钟、再停 ticker Hub、最后停观察者 Hub；观察者按注册相反顺序停止（远程模式 `push → log → lifecycle`，本地模式 `log → lifecycle`）。
 
 ## 使用示例
 

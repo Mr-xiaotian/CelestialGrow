@@ -1,6 +1,6 @@
 # demo/demo_farm/main.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -40,10 +40,10 @@ flowchart LR
 | 调用 | 来源 | 作用 |
 |------|------|------|
 | `grow.NewSinglePlot[S, F](name, cultivator, opts...)` | `pkg/api` → `plot.NewSinglePlot` | 构造一个单进单出的泛型并发节点，`S` 为种子类型、`F` 为果实类型。 |
-| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | 构造一个 Farm，内部创建事件客户端与观察者 Hub；日志级别改由 `Run` / `Start` 传入。 |
+| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | 构造一个 Farm，内部创建事件客户端、观察者 Hub 与节拍 Hub；日志级别改由 `Run` / `Start` 传入。 |
 | `farm.AddPlot(plots ...plot.PlotNode)` | `pkg/farm` | 把若干 `PlotNode` 注册到 Farm，并加入拓扑图。 |
 | `farm.Connect(fromPlots, toPlots []plot.PlotNode)` | `pkg/farm` | 在源组与目标组之间建立全连接（笛卡尔积），并对每条连接做种子/果实类型校验。 |
-| `farm.Run(inputs map[string][]any, logLevel string)` | `pkg/farm` | 同步执行整张图；`logLevel` 为本次运行的日志最低级别（空字符串按 `INFO`），阻塞到全部 Plot 完成。 |
+| `farm.Run(inputs map[string][]any, logLevel string, report *reporter.Config)` | `pkg/farm` | 同步执行整张图；`logLevel` 为本次运行的日志最低级别（空字符串按 `INFO`），`report` 为远程上报配置（`nil` 表示本地运行），阻塞到全部 Plot 完成。 |
 | `grow.WithTenders(n int)` | `pkg/api` → `plot.WithTenders` | 设置 Plot 的并发 tender（照料协程）数，默认为 `runtime.NumCPU()`。 |
 | `grow.PlotNode` | `pkg/api` → `plot.PlotNode` | `Farm.Connect` 入参使用的统一接口，对 `SinglePlot` / `SplitPlot` / `RoutePlot` 做了泛型擦除。 |
 
@@ -53,10 +53,10 @@ flowchart LR
 
 1. 构建 `root` 节点，cultivator 为 `double`，并发 tender 数为 2。
 2. 构建 `head` 节点，cultivator 为 `addOne`，并发 tender 数为 2。
-3. 创建 `demo_farm`：`NewFarm` 只完成 Farm 的构造（事件客户端、Hub、注册表与拓扑图），不接收日志级别。
+3. 创建 `demo_farm`：`NewFarm` 只完成 Farm 的构造（事件客户端、观察者 Hub、节拍 Hub、注册表与拓扑图），不接收日志级别。
 4. `AddPlot(root, head)`：把两个节点注册进 Farm，名称必须唯一。
 5. `Connect({root}, {head})`：在 `root` → `head` 之间建立一条边。
-6. `Run({"root": {1, 2, 3}}, "INFO")`：注入 3 个初始 seed 到 `root`，整张图开始执行。`Run` 会通过 `pkg/assembly` 启动日志、生命周期与指标观察者，把 Farm Hub 注册到每个 Plot，然后等待所有 Plot 完成才返回。
+6. `Run({"root": {1, 2, 3}}, "INFO", nil)`：注入 3 个初始 seed 到 `root`，整张图开始执行。`Run` 会通过 `pkg/assembly` 装配并启动日志、生命周期与指标观察者以及节拍时钟，把 Farm 的观察者 Hub 注册到每个 Plot，然后等待所有 Plot 完成才返回。
 
 ## 运行产物
 
@@ -102,7 +102,7 @@ func main() {
 	}
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -113,10 +113,10 @@ func main() {
 - **导入**：仅导入 `pkg/api` 并以别名 `grow` 引用，避免与局部变量名 `farm` 冲突。
 - **`double` / `addOne`**：两个最简单的 `func(S) (F, error)` 形态 cultivator，返回值恒不为 nil error，因此示例中所有 seed 都会正常产出 fruit 并被下游消费。
 - **`NewSinglePlot`**：两个节点的 seed 与 fruit 类型均为 `int`，泛型参数 `S = F = int` 由 Go 编译器自动推导；`WithTenders(2)` 把单 Plot 并发 tender 数限制为 2。
-- **`NewFarm`**：只完成 Farm 的构造（事件客户端、Hub、注册表与拓扑图），不会启动日志/生命周期资源；这两类资源在 `Run` 时由 `pkg/assembly` 统一装配。
+- **`NewFarm`**：只完成 Farm 的构造（事件客户端、观察者 Hub、节拍 Hub、注册表与拓扑图），不会启动日志/生命周期资源；这些运行期资源在 `Run` 时由 `pkg/assembly` 统一装配。
 - **`AddPlot`**：会把 `SinglePlot` 加入 Farm 的 `plots` 映射与拓扑图，并共享 Farm 的事件客户端；名称为空或重复注册都会返回错误。
 - **`Connect`**：使用「组到组全连接」语义，本例中两组都只有一个节点，因此只产生一条 `root → head` 的有向边。
-- **`Run`**：校验 `inputs` 后，启动日志/生命周期/指标观察者，把 Farm Hub 注册到每个 Plot，启动所有 Plot，注入 seed，向 source 节点（此处即 `root`）发送 seal，等待全部 Plot 完成后停止资源并返回。
+- **`Run`**：校验 `inputs` 后，装配并启动日志/生命周期/指标观察者与节拍时钟，把 Farm 观察者 Hub 注册到每个 Plot，启动所有 Plot，注入 seed，向 source 节点（此处即 `root`）发送 seal，等待全部 Plot 完成后停止资源并返回。
 
 ### 运行方式
 
@@ -136,7 +136,7 @@ go run ./demo/demo_farm
 ```go
 if err := farm.Run(map[string][]any{
 	"root": {1, 2, 3},
-}, "DEBUG"); err != nil {
+}, "DEBUG", nil); err != nil {
 	panic(err)
 }
 ```

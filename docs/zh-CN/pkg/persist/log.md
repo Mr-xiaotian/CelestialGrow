@@ -1,6 +1,6 @@
 # pkg/persist/log.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
@@ -159,7 +159,7 @@ logs/
 - `OnEvent` 只做映射、过滤、入队；真正的 `WriteString` 在 `Spout` 的后台 goroutine 中执行。
 - `Stop` 先 `close(ch)`，消费循环读完缓冲区内剩余记录后退出；若 1s 内未排空，`Spout` 取消上下文并返回 `shutdown timeout`。
 - 无论是否超时，`AfterStop` 都会执行并关闭文件句柄，因此 `Stop` 返回后日志已落盘且句柄已释放。
-- `pkg/assembly.Resources.Stop` 会先停日志、再停生命周期观察者，保证运行结束时两类队列都被刷空。
+- `pkg/assembly` 的 `StopFunc` 会先停节拍时钟与 ticker Hub，再停观察者 Hub；观察者按注册的相反顺序停止（本地模式先停日志、再停生命周期；远程模式还会先停推送观察者），保证运行结束时各类队列都被刷空。
 
 ## 公开符号清单
 
@@ -249,5 +249,5 @@ func main() {
 - **`OnEvent` 会阻塞调用方**：队列容量 100、超时 1s；队列满时返回 `inlet send timeout after 1s`，`Hub` 将其交给 `ErrorHandler`，不会中断其它观察者。
 - **`FormatTime` 来自事件时间**：由 `at.Format("2006-01-02 15:04:05")` 生成；若事件时间为零值，日志会显示 `0001-01-01 00:00:00`。
 - **文件按天追加、无轮转**：同一天所有运行共享一个文件；需要按体积切分时必须在本文件之外实现。
-- **`AfterStop` 不置空 `logFile`**：仅关闭句柄，`LogPath` 仍保留，便于排查；重复 `Stop` 会重复关闭通道而 panic，因此只应由 `assembly.Resources.Stop`（内部 `sync.Once`）统一调用。
-- **错误传播**：`BeforeStart` / `HandleRecord` / `AfterStop` 的错误会经 `Start` / `Stop` 返回；`HandleRecord` 的错误在 `Spout` 内部被丢弃，不会回流到 `OnEvent` 调用方。
+- **`AfterStop` 不置空 `logFile`**：仅关闭句柄，`LogPath` 仍保留，便于排查；重复 `Stop` 会重复关闭通道而 panic，因此只应由 `pkg/assembly` 的 `StopFunc`（内部 `stopped` 布尔保护）统一调用。
+- **错误传播**：`BeforeStart` 的错误会经 `Start` 原样返回；`HandleRecord` 与 `AfterStop` 的错误在 `Spout` 内部被丢弃（`Stop` 只返回关闭超时错误），不会回流到 `OnEvent` / `Stop` 调用方。

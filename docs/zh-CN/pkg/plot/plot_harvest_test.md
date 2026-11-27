@@ -1,6 +1,6 @@
 # pkg/plot/plot_harvest_test.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot_harvest_test.go` 是 `plot` 包的「**结果快照**」测试集。它通过 `SinglePlot.Run` 跑批后调用 `Harvest`，拉取每颗 seed 的最终生命周期状态（`ripen` / `wither` + `FruitJSON` + `WitherMessage`），验证：
 
@@ -79,8 +79,8 @@ func indexStatusesBySeed(records []persist.LifecycleStatusRecord) map[string]per
 
 - 测试包：`package plot_test`（黑盒测试），不直接访问 `SinglePlot` 未导出字段；
 - 不显式调用 `StartAsync` / `Seal`，全部由 `Run(seeds, "INFO")` 内部完成；
-- `Run` 通过 `assembly.StartPlotResources` 注册 `MetricsWatcher` 与 `LifecycleWatcher`，因此 `GetCompleted` 能读到事件流重建的指标，`Harvest` 能通过 `LifecycleWatcher.DBPath()` 找到已落盘的数据库；
-- `Run` 返回前会 `resources.Stop()` 停止观察者并关闭数据库，`Harvest` 随后用 `persist.LoadLifecycleStatusesFromPath` 重新打开数据库做离线查询；
+- `Run` 通过 `assembly.StartLocalResources` 装配指标、生命周期与日志观察者（注册到 plot 的 watcher hub，并启动 ticker hub 上的节拍时钟），因此 `GetCompleted` 能读到事件流重建的指标，`Harvest` 能通过 `LifecycleWatcher.DBPath()` 找到已落盘的数据库；
+- `Run` 返回前会调用 `StartLocalResources` 返回的 `stop()` 停止观察者并关闭数据库，`Harvest` 随后用 `persist.LoadLifecycleStatusesFromPath` 重新打开数据库做离线查询；
 - 三个用例的 cultivator 都不返回「瞬时错误后成功」，因此不受 `maxRetries` 默认值（`1`）影响——失败用例是**确定性失败**，成功用例是**一次成功**。
 
 ## 运行方式

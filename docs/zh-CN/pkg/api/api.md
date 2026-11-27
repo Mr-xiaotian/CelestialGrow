@@ -1,23 +1,25 @@
 # pkg/api/api.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 ## 作用
 
 `pkg/api` 是 CelestialGrow 的**对外统一入口包**。它不引入任何新实现，只把底层包的核心类型与常用配置以三种形式重新暴露：
 
-1. **类型别名**（`type X = pkg.Y`）：`Farm`、`SinglePlot`、`SplitPlot`、`RoutePlot`、`PlotNode`、`Option`；
-2. **构造函数薄包装**：`NewFarm`、`NewSinglePlot`、`NewSplitPlot`、`NewRoutePlot`；
+1. **类型别名**（`type X = pkg.Y`）：`Farm`、`SinglePlot`、`SplitPlot`、`RoutePlot`、`PlotNode`、`Option`、`PrintWatcher`、`Report`；
+2. **构造函数薄包装**：`NewFarm`、`NewSinglePlot`、`NewSplitPlot`、`NewRoutePlot`、`NewPrintWatcher`；
 3. **配置项**：包级变量 `WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`，以及泛型函数 `WithPruneIf`。
 
-底层依赖只有两个包：
+底层依赖四个包：
 
 | 底层包 | 提供内容 |
 |--------|----------|
 | `pkg/farm` | `Farm`：节点注册、超边式连接、整体调度与外部注入 |
 | `pkg/plot` | `SinglePlot` / `SplitPlot` / `RoutePlot` / `PlotNode` / `Option` 及其配置函数 |
+| `pkg/scarecrow` | `PrintWatcher`：把事件进度打印到标准输出的观察者 |
+| `pkg/reporter` | `Config`（以 `Report` 别名导出）：远程上报与远程注入的最小配置 |
 
-> 运行期的事件观察能力（进度打印、指标统计等）由 `pkg/scarecrow` 提供，通过 `AddWatcher` 注入。`pkg/api` 不提供任何观察器构造器；需要输出进度时使用 `scarecrow.NewPrintWatcher` 或自定义 `scarecrow.Watcher`。
+> 运行期的事件观察能力（进度打印、指标统计等）由 `pkg/scarecrow` 提供，通过 `AddWatcher` 注入。`pkg/api` 只额外提供标准输出观察者的构造器 `NewPrintWatcher`；指标统计等其它观察者仍需从 `pkg/scarecrow` 直接导入或自定义 `scarecrow.Watcher`。
 
 由于导出项全部是别名、函数值或一层直通包装，本包的行为契约完全由底层包决定。本文档聚焦「导出符号清单 + 类型参数语义 + 默认值 + 错误场景」。
 
@@ -31,10 +33,13 @@
 | `RoutePlot[S, Y]` | 泛型类型别名 | `plot.RoutePlot[S, Y]` | 路由节点。处理函数返回 `map[string]Y`，`key` 为目标下游名称，`value` 只发给该下游。 |
 | `PlotNode` | 类型别名 | `plot.PlotNode` | 擦除泛型参数的统一节点接口，`Farm` 用它持有类型各异的节点。 |
 | `Option` | 类型别名 | `plot.Option` | 节点可选配置，底层为 `func(*plotOptions)`；`plotOptions` 未导出，包外**无法自定义** `Option`。 |
-| `NewFarm(name string) *Farm` | 构造函数 | `farm.NewFarm` | 创建 Farm（同时建立内部事件 Hub）。 |
+| `PrintWatcher` | 类型别名 | `scarecrow.PrintWatcher` | 把事件进度打印到标准输出的观察者。 |
+| `Report` | 类型别名 | `reporter.Config` | 远程上报配置：服务地址、会话标识、快照周期与注入周期。 |
+| `NewFarm(name string) *Farm` | 构造函数 | `farm.NewFarm` | 创建 Farm（同时建立内部事件 Hub 与节拍 Hub）。 |
 | `NewSinglePlot[S, F](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]` | 构造函数 | `plot.NewSinglePlot` | 创建单进单出节点。 |
 | `NewSplitPlot[S, F](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F]` | 构造函数 | `plot.NewSplitPlot` | 创建拆分节点。 |
 | `NewRoutePlot[S, Y](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]` | 构造函数 | `plot.NewRoutePlot` | 创建路由节点。 |
+| `NewPrintWatcher(name string) *PrintWatcher` | 构造函数 | `scarecrow.NewPrintWatcher` | 创建标准输出进度观察者，`name` 用作输出前缀。 |
 | `WithTenders(n int) Option` | 包级变量 | `plot.WithTenders` | 并发 tender 数。 |
 | `WithChanSize(n int) Option` | 包级变量 | `plot.WithChanSize` | 种子通道缓冲区大小。 |
 | `WithMaxRetries(n int) Option` | 包级变量 | `plot.WithMaxRetries` | 最大重试次数（不含首次执行）。 |
@@ -54,6 +59,8 @@ flowchart LR
         A3[PlotNode / Option]
         A4[NewFarm / New*Plot]
         A5[With*]
+        A6[PrintWatcher / NewPrintWatcher]
+        A7[Report]
     end
 
     subgraph FARM["pkg/farm"]
@@ -67,6 +74,14 @@ flowchart LR
         P4[PlotNode / Option<br/>接口与配置]
     end
 
+    subgraph SCARECROW["pkg/scarecrow"]
+        S1[PrintWatcher<br/>标准输出观察者]
+    end
+
+    subgraph REPORTER["pkg/reporter"]
+        R1[Config<br/>远程上报配置]
+    end
+
     A1 -.别名.-> F1
     A2 -.别名.-> P1
     A2 -.别名.-> P2
@@ -77,6 +92,8 @@ flowchart LR
     A4 --> P2
     A4 --> P3
     A5 --> P4
+    A6 -.别名.-> S1
+    A7 -.别名.-> R1
 ```
 
 ## 泛型参数语义
@@ -100,8 +117,9 @@ flowchart LR
 | `AddPlot(plots ...PlotNode) error` | 注册一个或多个节点；名称不能为空且在 Farm 内唯一。注册后节点共享 Farm 的事件客户端。 |
 | `Connect(fromPlots, toPlots []PlotNode) error` | 在两组节点间建立**全连接**（笛卡尔积），逐条调用上游 `ConnectTo` 做类型校验。 |
 | `AddWatcher(watcher scarecrow.Watcher) error` | 注册 Farm 级 watcher，可同时收到 Farm 事件与所有 Plot 事件（Farm Hub 会作为子 Hub 注册到每个 Plot）。 |
-| `Run(inputs map[string][]any, logLevel string) error` | 同步运行：先校验 `inputs`、启动全部节点，再注入初始种子、向**源节点**发送终止信号，最后等待全部退出。`logLevel` 为空按 `INFO` 处理。 |
-| `Start(logLevel string) error` | 只装配并启动，不注入任何种子/终止信号；阻塞到全部节点退出。适合外部驱动场景。若无人注入终止信号，`Start` 不会返回。 |
+| `AddTicker(ticker metronome.Ticker) error` | 注册 Farm 级 ticker，随 Farm 的节拍时钟运行。 |
+| `Run(inputs map[string][]any, logLevel string, report *reporter.Config) error` | 同步运行：先校验 `inputs`、启动全部节点，再注入初始种子、向**源节点**发送终止信号，最后等待全部退出。`report` 为 `nil` 时只装配本地资源。 |
+| `Start(logLevel string, report *reporter.Config) error` | 只装配并启动，不注入任何种子/终止信号；阻塞到全部节点退出。适合外部驱动场景。若无人注入终止信号，`Start` 不会返回。 |
 | `InjectTasks(tasks map[string][]any) error` | 向指定节点注入种子。可在 `Start`/`Run` 运行期间调用。 |
 | `InjectTerminations(nodes []string) error` | 向指定节点注入终止信号；对某节点终止后再向它播种不会被处理。 |
 | `PlotCount() int` | 已注册节点数量。 |
@@ -116,6 +134,8 @@ flowchart LR
 | 运行期持续投递任务（流式/外部驱动） | ❌ 会立即封口 | ✅ 配合 `InjectTasks` / `InjectTerminations` |
 | 返回时机 | 全部节点处理完并退出后 | 收到全部终止信号且处理完后 |
 
+`logLevel` 为空字符串或无法识别的级别时按 `INFO` 处理。`report` 为 `nil` 表示纯本地运行：只装配指标、生命周期与日志观察者；传入非 nil 的 `*Report` 时，还会装配远程推送、周期快照与远程注入拉取。`Farm` 会在运行前补齐空的 `SessionID`（格式为 `<farm>@<纳秒时间戳>`）。
+
 ## Plot 常用方法
 
 `SinglePlot` / `SplitPlot` / `RoutePlot` 共享同一套 `basePlot` 方法（泛型签名见上文）。
@@ -123,7 +143,9 @@ flowchart LR
 | 方法 | 说明 |
 |------|------|
 | `AddWatcher(watcher scarecrow.Watcher) error` | 注册节点级 watcher；重复注册会重复收到事件。须在 `Run`/`StartAsync` 前调用。 |
-| `Run(seeds []S, logLevel string)` | standalone 模式：装配日志/生命周期/指标资源，启动节点，播种、封口并等待结束。**无返回值**。 |
+| `AddTicker(ticker metronome.Ticker) error` | 注册节点级 ticker，Farm 运行时会随 Farm 的节拍时钟一起驱动。 |
+| `GetTickerHub() *metronome.Hub` | 返回节点持有的节拍 Hub（Farm 会把它挂到自己的 Hub 下）。 |
+| `Run(seeds []S, logLevel string)` | standalone 模式：装配本地资源、启动节点，播种、封口并等待结束。**无返回值**。 |
 | `Harvest() ([]persist.LifecycleStatusRecord, error)` | 读取该节点已持久化的种子状态快照；可在 standalone `Run` 或 `Farm.Run/Start` 结束后调用。 |
 | `GetSeedNum() int` | 输入总数（外部注入 + 上游投递）。 |
 | `GetFruitNum() int` | 成功数（成熟）。 |
@@ -148,10 +170,13 @@ flowchart LR
 |------|------|
 | `GetName() string` | 返回节点名称，用于唯一性校验与连接寻址。 |
 | `GetState() int32` | 返回状态：`0` = idle，`1` = running，`2` = done。 |
+| `GetMeta() scarecrow.NodeMeta` | 返回构建期元信息（类名、执行模式、最大并发数），用于 Farm 启动事件。 |
 | `GetSeedChanAny() any` | 以 `any` 返回种子通道，供 `ConnectTo` 做类型断言。 |
 | `ConnectTo(next PlotNode) error` | 把本节点产出接到下游输入；上下游类型不兼容时返回错误。 |
 | `AddUpstream(name string)` | 登记上游名称（由上游在 `ConnectTo` 中调用），用于 seal 聚合。 |
 | `AddWatcher(listener scarecrow.Watcher) error` | 注册观察者。 |
+| `AddTicker(ticker metronome.Ticker) error` | 注册节点级 ticker。 |
+| `GetTickerHub() *metronome.Hub` | 返回节点级节拍 Hub。 |
 | `SetEventClient(eventClient runtime.EventClient)` | 注入事件客户端；`Farm.AddPlot` 会让所有节点共享 Farm 的客户端。 |
 | `StartAsync()` | 异步启动调度器。 |
 | `WaitAsync()` | 等待后台协程退出。 |
@@ -168,7 +193,7 @@ flowchart LR
 
 - `name`：Farm 名称，用于日志标识与 `FarmStartEvent` / `FarmEndEvent`。
 - 不返回 error；创建后即可 `AddPlot` / `Connect` / `Run`。
-- Farm 自身的日志级别不在此设置，而在 `Run(inputs, logLevel)` / `Start(logLevel)` 时传入。
+- Farm 自身的日志级别与远程上报配置不在此设置，而在 `Run(inputs, logLevel, report)` / `Start(logLevel, report)` 时传入。
 
 ### `NewSinglePlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]`
 
@@ -186,6 +211,14 @@ flowchart LR
 ### `NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]`
 
 创建路由节点。`cultivator` 返回的路由表中，`key` 为目标下游名称、`value` 为发给该下游的 yield：不同下游可以收到不同 yield，未被路由到的下游收不到任何数据；路由表中出现但并未连接的下游会被跳过，不影响其余路由项。
+
+### `NewPrintWatcher(name string) *PrintWatcher`
+
+创建把事件进度打印到标准输出的观察者。
+
+- `name`：输出前缀，用于区分不同 Plot / Farm 的进度行。
+- 返回的 `*PrintWatcher` 实现了 `scarecrow.Watcher`，可挂在 `Farm.AddWatcher` 或 `Plot.AddWatcher` 上。
+- 不返回 error。
 
 ## 配置函数
 
@@ -246,7 +279,6 @@ import (
     "fmt"
 
     grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
-    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // double 将种子翻倍。
@@ -271,13 +303,14 @@ func main() {
     }
 
     // Farm 级 watcher：同时收到 Farm 事件与所有 Plot 事件。
-    if err := f.AddWatcher(scarecrow.NewPrintWatcher("demo_farm")); err != nil {
+    if err := f.AddWatcher(grow.NewPrintWatcher("demo_farm")); err != nil {
         panic(err)
     }
 
+    // 第三个参数为 report；nil 表示不启用远程上报。
     if err := f.Run(map[string][]any{
         "double": {1, 2, 3, 4},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 
@@ -388,7 +421,7 @@ func main() {
 
     if err := f.Run(map[string][]any{
         "split": {1, 2, 3},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 }
@@ -429,7 +462,7 @@ func main() {
     }
 
     errCh := make(chan error, 1)
-    go func() { errCh <- f.Start("INFO") }()
+    go func() { errCh <- f.Start("INFO", nil) }()
 
     <-started // 等节点启动，Farm Hub 已接入，指标统计才完整
 
@@ -450,6 +483,46 @@ func main() {
 
 > `Start` 不注入任何初始任务。若没有对**源节点**调用 `InjectTerminations`，或图中仍有节点等待上游 seal，`Start` 不会返回。
 
+### 示例 5：远程上报与远程注入
+
+传入非 nil 的 `*grow.Report` 后，Farm 会额外装配推送观察者、周期快照与远程注入拉取。快照/注入周期以节拍为单位，`0` 使用 `pkg/reporter` 的默认值（快照 1 拍、注入 5 拍）。
+
+```go
+package main
+
+import (
+    "fmt"
+
+    grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+)
+
+func main() {
+    root := grow.NewSinglePlot("root", func(seed int) (int, error) {
+        return seed * 2, nil
+    })
+
+    f := grow.NewFarm("report_farm")
+    if err := f.AddPlot(root); err != nil {
+        panic(err)
+    }
+
+    report := &grow.Report{
+        URL:             "http://127.0.0.1:8000",
+        SessionID:       "", // 留空时 Farm 生成 <farm>@<纳秒时间戳>
+        SnapshotPeriod:  2,  // 每 2 拍推送一次整图快照
+        InjectionPeriod: 5,  // 每 5 拍拉取一次远程注入
+    }
+
+    if err := f.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", report); err != nil {
+        panic(err)
+    }
+
+    fmt.Println("done")
+}
+```
+
+> 远程服务不可达不会阻止本地运行：推送失败只写日志，注入拉取失败由节拍 Hub 的错误处理器消费。远程注入的任务与终止信号仍通过 `InjectTasks` / `InjectTerminations` 进入 Farm。
+
 ## 错误场景
 
 | 入口 | 可能的 error |
@@ -457,24 +530,26 @@ func main() {
 | `Farm.AddPlot` | 传入 `nil` 节点、名称为空、名称重复（`plot %q already exists`）。 |
 | `Farm.Connect` | `from` / `to` 去重去 nil 后为空；节点未注册到该 Farm；上下游类型不兼容（`ConnectTo` 断言失败）。 |
 | `Farm.AddWatcher` / `Plot.AddWatcher` | watcher 为 `nil`；注册会形成 Hub 环。 |
-| `Farm.Run` | `inputs` 中出现未注册的节点名；assembly 资源装配或内部 watcher 注册失败；注入种子时类型不匹配。注入失败时仍会向源节点封口并等待退出，然后返回该错误。 |
-| `Farm.Start` | assembly 资源装配或内部 watcher 注册失败；其余错误需通过 `InjectTasks` / `InjectTerminations` 自行检查。 |
+| `Farm.AddTicker` / `Plot.AddTicker` | ticker 为 `nil`、重复注册、节拍周期非法或形成 Hub 环。 |
+| `Farm.Run` | `inputs` 中出现未注册的节点名；运行期资源装配失败（Hub 为 nil、报告配置非法等）；注入种子时类型不匹配。注入失败时仍会向源节点封口并等待退出，然后返回该错误。 |
+| `Farm.Start` | 运行期资源装配失败；其余错误需通过 `InjectTasks` / `InjectTerminations` 自行检查。 |
 | `Farm.InjectTasks` | 目标节点未注册（先整体校验，未注册则不注入）；种子类型与节点 `S` 不匹配（`plot %q seed type mismatch: got %T`）。类型错误可能在部分节点已注入后才返回。 |
 | `Farm.InjectTerminations` | 目标节点未注册（先整体校验，未注册则不发送任何终止信号）。 |
 | `Plot.SeedAny` | 传入值无法断言为节点的 `S`。 |
-| `Plot.Harvest` | 未装配生命周期观察者（例如未通过 `Run` / `Farm.Run` 启动）；或数据库路径尚未就绪。 |
-| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` | 不返回 error。 |
-| `Plot.Run` | **不返回 error**；assembly 装配失败时静默返回，节点不会运行。 |
+| `Plot.Harvest` | 未装配生命周期观察者（`plot %q lifecycle watcher is not registered`）；数据库路径尚未就绪（`plot %q lifecycle database is not ready`）。 |
+| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` / `NewPrintWatcher` | 不返回 error。 |
+| `Plot.Run` | **不返回 error**；资源装配失败（如 Hub 为 nil）时静默返回，节点不会运行。 |
 
 ## 注意事项
 
-1. **类型别名 ≠ 新类型**：`Farm`、`SinglePlot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]`、`PlotNode`、`Option` 都是 `type X = pkg.Y`，可与底层类型互换使用。
+1. **类型别名 ≠ 新类型**：`Farm`、`SinglePlot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]`、`PlotNode`、`Option`、`PrintWatcher`、`Report` 都是 `type X = pkg.Y`，可与底层类型互换使用。
 2. **Option 不可扩展**：`Option` 底层是 `func(*plotOptions)`，而 `plotOptions` 未导出，包外无法自定义 `Option`，只能使用内置 `With*`。配置按传入顺序依次应用，同一字段后传入者覆盖前者；默认值由 `pkg/plot/option.go` 的 `defaultOptions()` 维护。
 3. **`With*` 是变量**：`WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf` 均为包级变量而非函数声明，运行时赋值会改变全包行为，**不要重新赋值**。
 4. **指标需先装配**：六个指标方法与 `IsFinish` 依赖 `MetricsWatcher`；`Run` / `Farm.Run` / `Farm.Start` 会自动注册，运行前调用只会得到 `0` / `false`。`Start` 场景下，Farm Hub 在 `FarmStartEvent` 之后才挂到各 Plot，因此建议等 `PlotStartEvent` 再注入任务，事件才会进入指标统计。
 5. **watcher 注册时机**：`AddWatcher` 建议在 `Run` / `Start` 前完成。Farm 级 watcher 会同时收到 Farm 事件与所有 Plot 事件；`PrintWatcher` 挂在 Farm 上时统计的是**所有 Plot 的累计输入**（含节点间转发的种子），挂在单个 Plot 上时只看该节点。
 6. **连接是运行期校验**：`Farm.Connect` 对源组与目标组做全连接，逐条调用 `ConnectTo` 由类型断言校验「上游 `F`/`Y` 与下游 `S`」是否匹配，失败立即返回错误。
 7. **终止语义**：`InjectTerminations` / `Seal` 是外部强终止——不再等待剩余上游 seal；节点会先处理完已接收的种子再向下游合并 seal。向已封口的节点继续播种不会被处理。
-8. **`Run` 吞掉装配错误**：standalone 的 `Plot.Run` 无返回值，assembly 失败（如无法创建 `lifecycles/` 目录、无法打开 SQLite）时节点不会运行，随后 `Harvest` 会返回「生命周期观察者未注册」类错误。
+8. **`Run` 吞掉装配错误**：standalone 的 `Plot.Run` 无返回值，资源装配失败（如 Hub 为 nil、无法创建 `lifecycles/` 目录或无法打开 SQLite）时节点不会运行，随后 `Harvest` 会返回「生命周期观察者未注册」或「数据库未就绪」类错误。
 9. **运行产物落在工作目录**：生命周期 SQLite 写入 `<cwd>/lifecycles/<日期>/`，日志写入 `<cwd>/logs/`，需在部署环境中预留写权限。
 10. **导入别名**：推荐 `grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"`，避免与本地变量名（`farm`、`plot`）冲突。
+11. **`Report` 只是配置**：`Report` 是 `reporter.Config` 的别名，本身不启动上报；只有把它传给 `Farm.Run` / `Farm.Start` 才会装配远程资源。`URL` 为空或不是 http/https 时装配失败。

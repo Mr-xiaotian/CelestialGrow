@@ -1,6 +1,6 @@
 # pkg/plot/plot_single.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot_single.go` 定义 `pkg/plot` 中最常用的节点类型 `SinglePlot[S, F]`：把「接收 seed → 并发执行 cultivator → 产出一颗 fruit → 广播给所有已连接下游」封装为可连接、可观察、可重试的泛型节点。
 
@@ -55,7 +55,7 @@ type SinglePlot[S any, F any] struct {
 
 1. 先声明 `var p *SinglePlot[S, F]`，再用 `newBasePlot[S, F, F]` 构造共享骨架，最后把 `base` 赋值给 `p`；
 2. 传给 `newBasePlot` 的 `ripenSeed` 钩子是一个闭包，内部调用 `p.ripenSeed(...)`。它捕获了尚未赋值的 `p`，但该闭包只在 `StartAsync` 之后的 `sprout` / `tend` 路径上被调用，彼时 `p` 一定已完成赋值；
-3. channel 分配、默认 `EventClient` 与 `Hub` 初始化、`context` 派生都在 `newBasePlot` 内完成（见 `plot.md` 的「构造」一节）。
+3. channel 分配、默认 `EventClient`、watcher `Hub` 与 ticker `Hub` 初始化、`context` 派生都在 `newBasePlot` 内完成（见 `plot.md` 的「构造」一节）。
 
 ### `ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time)`（未导出）
 
@@ -198,7 +198,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

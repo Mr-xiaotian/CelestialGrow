@@ -1,6 +1,6 @@
 # pkg/plot/plot.go
 
-> 📅 最后更新日期: 2026/11/13
+> 📅 最后更新日期: 2026/11/26
 
 `plot.go` 是 `pkg/plot` 的**共享运行骨架**，同时承载包文档。它定义两样东西：
 
@@ -24,11 +24,14 @@
 type PlotNode interface {
 	GetName() string
 	GetState() int32
+	GetMeta() scarecrow.NodeMeta
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
 	AddWatcher(listener scarecrow.Watcher) error
+	AddTicker(ticker metronome.Ticker) error
+	GetTickerHub() *metronome.Hub
 	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
@@ -42,10 +45,13 @@ type PlotNode interface {
 |------|------|
 | `GetName()` | 返回 plot 名称（`Farm` 中需唯一） |
 | `GetState()` | 返回状态：`0=idle`、`1=running`、`2=done` |
+| `GetMeta()` | 返回构建期元信息 `scarecrow.NodeMeta`（`ClassName`、`ExecutionMode="thread"`、`MaxWorkers=numTenders`），由 `Farm` 汇总进 `FarmStartEvent` |
 | `GetSeedChanAny()` | 以 `any` 暴露 `seedChan`，供上游 `ConnectTo` 做类型断言 |
 | `ConnectTo(next)` | 建立「本节点 yield → 下游 seed」的连接并校验类型 |
 | `AddUpstream(name)` | 由**上游**在 `ConnectTo` 时调用，登记本节点的上游名称，用于 seal 聚合 |
 | `AddWatcher(listener)` | 向本节点内部 `Hub` 注册观察者，重复注册会重复收到事件 |
+| `AddTicker(ticker)` | 向本节点持有的 `metronome.Hub` 注册一个 plot 级 ticker |
+| `GetTickerHub()` | 返回 plot 持有的 `*metronome.Hub`，由 `Farm` 收纳进 Farm 级 ticker 树 |
 | `SetEventClient(eventClient)` | 注入事件 ID 分配器（`Farm` 会统一注入同一个 client） |
 | `StartAsync()` / `WaitAsync()` | 异步启动调度器 / 阻塞等待后台协程退出 |
 | `SeedAny(seed)` | 以 `any` 播入单颗种子，`Farm` 注入初始任务时使用 |
@@ -67,7 +73,8 @@ type basePlot[S any, F any, Y any] struct {
 	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
-	hub         *scarecrow.Hub
+	watcherHub  *scarecrow.Hub
+	tickerHub   *metronome.Hub
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -92,7 +99,8 @@ type basePlot[S any, F any, Y any] struct {
 | `yieldChans` | `下游 plot 名 → 该下游的 seed 通道`，由 `ConnectTo` 填充 |
 | `upstreams` | 已登记的上游 plot 名称集合，用于判断 seal 是否到齐 |
 | `eventClient` | 进程内事件 ID 分配器，默认 `runtime.NewLocalEventClient()` |
-| `hub` | 本节点的事件分发中心，默认 `scarecrow.NewHub()`；观察者由 `AddWatcher` 注册 |
+| `watcherHub` | 本节点的事件分发中心，默认 `scarecrow.NewHub()`；观察者由 `AddWatcher` 注册 |
+| `tickerHub` | 本节点的节拍容器，默认 `metronome.NewHub()`；`Farm` 启动时把它收进 Farm 级 ticker hub |
 | `ctx` / `cancel` | 由 `context.WithCancel(context.Background())` 派生，用于内部强制收尾 |
 | `wg` | 汇聚 `StartAsync` 启动的后台协程 |
 | `state` | 状态原子变量（0/1/2） |
@@ -121,17 +129,18 @@ func newBasePlot[S any, F any, Y any](
 仅由同包的 `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` 调用。流程：
 
 1. 取 `defaultOptions()`，依次应用 `opts`；
-2. `context.WithCancel(context.Background())` 派生 `ctx / cancel`；
-3. 分配 `seedChan`（容量 `chanSize`）与空的 `yieldChans` / `upstreams`；
-4. 初始化 `eventClient = runtime.NewLocalEventClient()` 与 `hub = scarecrow.NewHub()`。
+2. `metronome.NewHub()` 创建 `tickerHub`，失败时直接 `panic`；
+3. `context.WithCancel(context.Background())` 派生 `ctx / cancel`；
+4. 分配 `seedChan`（容量 `chanSize`）与空的 `yieldChans` / `upstreams`；
+5. 初始化 `eventClient = runtime.NewLocalEventClient()` 与 `watcherHub = scarecrow.NewHub()`。
 
 ## 指标读取
 
-`basePlot` 不再自带计数器，指标由事件流重建：`pkg/assembly` 在运行期间把 `*scarecrow.MetricsWatcher` 注册到 plot 的 `hub`，`basePlot` 读取时通过 `scarecrow.Find` 在 hub（含嵌套 hub）中定位它。
+`basePlot` 不再自带计数器，指标由事件流重建：`pkg/assembly` 在运行期间把 `*scarecrow.MetricsWatcher` 注册到 plot 的 `watcherHub`，`basePlot` 读取时通过 `scarecrow.Find` 在 hub（含嵌套 hub）中定位它。
 
 ```go
 func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
-	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.hub)
+	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.watcherHub)
 	if !ok {
 		return scarecrow.PlotMetrics{}, false
 	}
@@ -152,12 +161,10 @@ func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
 
 ## 事件发送
 
-`basePlot` 通过 `emit` 把事件同步分发给 `hub` 上的所有观察者；观察者返回的错误或 panic 由 `Hub` 的错误处理器消费，不会影响执行路径：
+`basePlot` 的各个流程直接调用 `p.watcherHub.OnEvent(...)`，把事件同步分发给 hub 上的所有观察者；观察者返回的错误由 `Hub` 的错误处理器消费，不会影响执行路径：
 
 ```go
-func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
-	_ = p.hub.OnEvent(event)
-}
+p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* ... */ })
 ```
 
 | 事件 | 触发点 | 关键字段 |
@@ -172,7 +179,7 @@ func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
 | `SealInputEvent` | `Seal` | `SealID` |
 | `SealMergeEvent` | `sprout` 收尾 | `ParentIDs`、`SealID` |
 
-> 生命周期与日志都不再由 `basePlot` 直接写库：`pkg/persist` 的 `LifecycleWatcher` / `LogWatcher` 作为普通 `Watcher` 订阅这些事件，`pkg/assembly.StartPlotResources` 负责创建并注册。事件 ID 仍由 `eventClient.Emit(...)` 分配：`seed` / `fruit` / `weed` / `prune` / `seal`。
+> 生命周期与日志都不再由 `basePlot` 直接写库：`pkg/persist` 的 `LifecycleWatcher` / `LogWatcher` 作为普通 `Watcher` 订阅这些事件，`pkg/assembly.StartLocalResources` 负责创建并注册。事件 ID 仍由 `eventClient.Emit(...)` 分配：`seed` / `fruit` / `weed` / `prune` / `seal`。
 
 ## 关键流程
 
@@ -322,7 +329,7 @@ for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 		break
 	}
 	if attempt <= p.maxRetries {
-		p.emit(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
+		p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
 	}
 	time.Sleep(p.retryDelay(attempt))
 }
@@ -359,8 +366,8 @@ func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string)
 
 standalone 模式的一站式入口（阻塞）：
 
-1. `assembly.StartPlotResources(p.hub, logLevel)` 装配指标、生命周期与日志观察者，失败时**直接返回**（无错误返回、无任何输出）；
-2. 以 `defer resources.Stop()` 保证退出时刷盘并回收资源；
+1. `assembly.StartLocalResources(p.watcherHub, p.tickerHub, logLevel, metronome.DefaultInterval)` 装配指标、生命周期与日志观察者，并启动节拍时钟；返回 `(stop assembly.StopFunc, err error)`，`err != nil` 时**直接返回**（`Run` 无错误返回值、无任何输出）；
+2. 以 `defer func() { _ = stop() }()` 保证退出时刷盘并回收资源；
 3. `StartAsync()`；
 4. 依次 `Seed(seed)` 注入 `seeds`；
 5. `Seal()` 声明不再有外部输入；
@@ -474,7 +481,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

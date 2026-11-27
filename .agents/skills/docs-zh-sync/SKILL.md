@@ -65,6 +65,8 @@ go run .agents/skills/docs-zh-sync/scan_manifest.go \
             "pkg/persist:docs/zh-CN/pkg/persist" \
             "pkg/funnel:docs/zh-CN/pkg/funnel" \
             "pkg/runtime:docs/zh-CN/pkg/runtime" \
+            "pkg/metronome:docs/zh-CN/pkg/metronome" \
+            "pkg/reporter:docs/zh-CN/pkg/reporter" \
             "demo:docs/zh-CN/demo" \
     --output tmp_manifest.md
 ```
@@ -90,11 +92,13 @@ go run .agents/skills/docs-zh-sync/scan_manifest.go \
 | A6 | `pkg/funnel` | `pkg/funnel` | `docs/zh-CN/pkg/funnel` | 异步消费基础设施 |
 | A7 | `pkg/runtime` | `pkg/runtime` | `docs/zh-CN/pkg/runtime` | 运行时基础类型 |
 | A8 | `pkg/assembly` | `pkg/assembly` | `docs/zh-CN/pkg/assembly` | 运行期资源装配 |
-| A9 | `demo` | `demo` | `docs/zh-CN/demo` | 示例程序 |
+| A9 | `demo` | `demo` | `docs/zh-CN/demo` | 示例程序（含 `demo_web`） |
+| A10 | `pkg/metronome` | `pkg/metronome` | `docs/zh-CN/pkg/metronome` | 节拍时钟与分发 |
+| A11 | `pkg/reporter` | `pkg/reporter` | `docs/zh-CN/pkg/reporter` | 远程上报与注入 |
 
-并行度建议：第一批并行 A1–A8，第二批 A9。
+并行度建议：第一批并行 A1–A8、A10–A11，第二批 A9。
 
-> **退化策略**：若环境不支持并行 subagent，则按 A1→A2→…→A9 顺序串行执行。
+> **退化策略**：若环境不支持并行 subagent，则按 A1→A2→…→A11 顺序串行执行。
 >
 > 根 `README.md` 与 `docs/zh-CN/README.md` **不属于任何子任务**：前者由用户维护，
 > 后者已删除；其它语言 README 的翻译走 `docs-i18n-sync`。

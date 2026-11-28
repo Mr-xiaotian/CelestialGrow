@@ -1,10 +1,10 @@
 # pkg/scarecrow/hub.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
-`pkg/scarecrow/hub.go` はイベント配信センター `Hub` を実装します：`Event` を登録順に**同期的**にすべての `Watcher` へファンアウトし、個々のオブザーバの `error` と `panic` を隔離して設定可能な `ErrorHandler` へ報告します。`Hub` 自身が `Watcher` を実装しているため、別の `Hub` に登録して階層的な配信（Plot Hub → Farm Hub）を構成でき、ジェネリック関数 `Find` で階層内を型ごとに検索できます。
+`pkg/scarecrow/hub.go` はイベント配信センター `Hub` を実装します：`Event` を登録順に**同期的**にすべての `Watcher` へファンアウトし、個々のオブザーバの `error` と `panic` を隔離して設定可能な `ErrorHandler` へ報告します。`Hub` 自身が `Watcher` を実装しているため、別の `Hub` に登録して階層的な配信（Plot Hub → Farm Hub）を構成でき、ジェネリック関数 `Find` で階層内を型ごとに検索できます。さらに `Lifecycle` も実装し、登録済みオブザーバの起動／停止を一括で管理します（`Start` は正順、`Stop` は逆順）。
 
 ## 主要オブジェクト
 
@@ -27,6 +27,10 @@ type Hub struct {
     mu        sync.RWMutex
     listeners []Watcher
     onError   func(error)
+
+    lifecycleMu sync.Mutex
+    state       hubState
+    lifecycle   []Lifecycle
 }
 ```
 
@@ -35,6 +39,27 @@ type Hub struct {
 | `mu` | `listeners` を保護する読み書きロック：書き込み（`AddWatcher`）は書き込みロックを保持し、配信はスナップショット取得時だけ読み取りロックを保持する |
 | `listeners` | オブザーバのリスト。登録順に保持し、重複を許す |
 | `onError` | エラーハンドラ。ゼロ値の Hub では `nil` であり、`report` は既定の出力へフォールバックする |
+| `lifecycleMu` | `Start` / `Stop` を直列化するミューテックス。`mu` とは独立している |
+| `state` | ライフサイクル状態（`hubIdle` / `hubRunning` / `hubStopped`） |
+| `lifecycle` | `Start` が起動に成功した `Lifecycle` の子項目。起動順に保持し、`Stop` が逆順に回収する |
+
+ライフサイクル状態：
+
+```go
+type hubState int
+
+const (
+    hubIdle    hubState = iota // 尚未启动
+    hubRunning                 // 已启动，子项正在运行
+    hubStopped                 // 已停止，不可再次启动
+)
+```
+
+| 状態 | 意味 |
+|------|------|
+| `hubIdle` | 新規作成またはゼロ値 Hub の初期状態。`Start` を実行できる |
+| `hubRunning` | `Start` 成功後に遷移する。`Start` を繰り返してもそのまま `nil` を返す |
+| `hubStopped` | `Stop` 後、または `Start` 失敗後に遷移する。再度 `Start` するとエラーを返し、`Stop` は副作用がない |
 
 ### コンストラクタとデフォルトハンドラ
 
@@ -58,6 +83,28 @@ func (h *Hub) AddWatcher(listener Watcher) error
 - 同じインスタンスの**重複登録**を許可し、配信のたびに毎回呼び出されます。
 - 循環検出 `rejectCycle` は**ロック取得前**に完了します：候補 Hub を深さ優先で走査し、現在の Hub に到達したら拒否します。`seen` 集合により、異常なトポロジーでも走査が終了しない事態を防ぎます。
 
+### `Start` / `Stop`
+
+```go
+func (h *Hub) Start() error
+func (h *Hub) Stop() error
+```
+
+`Hub` はこの 2 つのメソッドで `Lifecycle` を実装し、**登録時に `Lifecycle` を実装しているオブザーバのみ**を管理します。純粋な `Watcher` はスキップされ、イベント配信にのみ参加します。ネストした `Hub` 自身も `Lifecycle` を実装しているため、ライフサイクルは階層に沿って再帰します。
+
+| メソッド | 動作 | エラー |
+|------|------|------|
+| `Start` | `lifecycleMu` の下で `listeners` のスナップショットを取得し、登録順に各 `Lifecycle.Start` を呼び出します。成功後は子項目を記録して `hubRunning` へ遷移します。すでに `hubRunning` の場合はそのまま `nil` を返します | すでに `hubStopped` の場合は `scarecrow: hub already stopped` を返します。いずれかの子項目の起動に失敗した場合は `scarecrow: start %T: %w` でラップし、今回起動した子項目を**逆順**で停止したうえで Hub を `hubStopped` へ遷移させます（失敗は終態） |
+| `Stop` | `lifecycleMu` の下で起動の**逆順**に `Stop` を呼び出し、子項目をクリアして `hubStopped` へ遷移します。未起動または停止済みの場合はそのまま `nil` を返し、繰り返し呼び出せます | `errors.Join` ですべての子項目のエラーを集約し、各項目を `scarecrow: stop %T: %w` でラップします |
+
+補足の意味論：
+
+- ロールバックに失敗した場合、`Start` は `errors.Join` で起動エラーとロールバックエラーをまとめて返します。
+- `Start` は**その時点のスナップショット**内のオブザーバだけを起動します。`Start` の後に `AddWatcher` した `Lifecycle` は自動起動されません。
+- `Stop` は `listeners` を取り除きません：停止後もイベント配信と `Find` の検索は通常どおり動作します。
+- 重複登録が許可されているため、同じ `Lifecycle` インスタンスを 2 回登録すると `Start` / `Stop` もそれぞれ 2 回呼び出されます。
+- ゼロ値の `Hub` はそのまま `Start` でき、`onError` は引き続き既定のハンドラへフォールバックします。
+
 ### `OnEvent`
 
 ```go
@@ -67,7 +114,7 @@ func (h *Hub) OnEvent(event Event) error
 - `event == nil` の場合はそのまま `nil` を返し、どのオブザーバも呼び出しません。
 - 読み取りロックの下で `listeners` のスナップショットを 1 回取得し、その後は**ロックの外で**走査するため、watcher の内部から安全に watcher を追加登録できます。
 - 個々のオブザーバのエラーや panic は `deliver` でラップされて `report` へ渡され、残りのオブザーバは実行を続けます。
-- **常に `nil` を返します**：オブザーバの障害はエラーハンドラが消費済みで、実行経路へは戻りません（そのため `plot.emit` / `farm.emit` は戻り値を無視できます）。
+- **常に `nil` を返します**：オブザーバの障害はエラーハンドラが消費済みで、実行経路へは戻りません（そのため `plot` の各イベント送信箇所と `farm.emit` は戻り値を無視できます）。
 
 ### `Find`
 
@@ -115,6 +162,29 @@ flowchart TD
     D -->|走査終了| Z
 ```
 
+### ライフサイクル
+
+```mermaid
+sequenceDiagram
+    participant A as 呼び出し側
+    participant H as Hub
+    participant L1 as Lifecycle A
+    participant L2 as Lifecycle B（ネストした Hub）
+
+    A->>H: Start()
+    H->>L1: Start()
+    H->>L2: Start()（子項目を再帰的に起動）
+    Note over H: state = hubRunning
+    A->>H: Start()
+    H-->>A: nil（起動済み、副作用なし）
+    A->>H: Stop()
+    H->>L2: Stop()（後に起動したものを先に停止）
+    H->>L1: Stop()
+    Note over H: state = hubStopped
+    A->>H: Stop()
+    H-->>A: nil（停止済み、副作用なし）
+```
+
 ### ネストしたトポロジー（プロジェクトでの実際の使い方）
 
 ```mermaid
@@ -137,7 +207,7 @@ flowchart LR
     FB --> FM
 ```
 
-`Farm.start` は `plot.AddWatcher(f.hub)` で Farm Hub を各 Plot Hub に登録するため、Farm レベルの watcher はその Farm 内のすべての Plot のイベントを受け取れます。`Find` も Plot Hub から上へ辿って Farm レベルで登録された `MetricsWatcher` を見つけられます（`basePlot.currentMetrics` はこの経路に依存しています）。
+`Farm.start` は `plot.AddWatcher(f.watcherHub)` で Farm Hub を各 Plot Hub に登録するため、Farm レベルの watcher はその Farm 内のすべての Plot のイベントを受け取れます。`Find` は Plot Hub から出発するとまず直属のオブザーバを調べ、次にネストした Farm Hub へ入るため、Farm レベルで登録された `MetricsWatcher` も見つけられます（`basePlot.currentMetrics` はこの経路に依存しています）。
 
 ## 重要な詳細
 
@@ -145,7 +215,10 @@ flowchart LR
 - **スナップショットの境界**：配信開始後に登録された watcher はその 1 件のイベントを受け取れず、次のイベントから受け取ります（`Farm.AddWatcher` のコメントも「以降のイベントで初めて届く」と強調しています）。
 - **登録順がそのまま呼び出し順**：同一階層内では `AddWatcher` の順に厳密に直列呼び出しされるため、前の watcher がブロックすると後続の watcher が遅れます。
 - **循環検出の既知の競合**：検出はロック取得前に完了するため、2 つの Hub が同時に互いを登録する極端な並行状況では検出を回避され得ます。ソースのコメントも「実行時に Hub トポロジーを並行構築することは推奨しない」と明記しています。`Find` の `seen` は異常なトポロジーに対する最後の防御です。
-- **ゼロ値でも使用可能**：`var h Hub` でもそのまま `AddWatcher` / `OnEvent` を呼べます。`onError` が `nil` のとき `report` は自動で既定のハンドラへフォールバックします。
+- **ゼロ値でも使用可能**：`var h Hub` のまま `AddWatcher` / `OnEvent` / `Start` を呼び出せます。`onError` が `nil` のとき `report` は自動で既定のハンドラへフォールバックします。
+- **ライフサイクルと配信は分離されている**：`Start` / `Stop` は `Lifecycle` の子項目だけを管理します。`OnEvent` は Hub の状態を検査せず、`Stop` の後も通常どおりイベントを配信します。
+- **起動／停止の順序は固定**：`Start` は登録順、`Stop` は起動の逆順です。同じ階層で前の子項目がブロックすると、後続の子項目が遅れます。
+- **起動失敗は終態**：`Start` に失敗すると、起動済みの子項目はロールバック停止され、Hub は `hubStopped` に入って再起動できません（ソースのコメントは、停止済みの子項目は再起動できないと指摘しています。例えば spout のチャネルはすでに閉じられています）。
 - **エラーハンドラも保護される**：`report` 内ではハンドラ呼び出しに `recover` を掛けており、ハンドラの panic が `OnEvent` の「常に nil を返す」という約束を破ることはありません。
 
 ## 使用例
@@ -180,6 +253,50 @@ func main() {
     // reported: scarecrow: scarecrow.WatcherFunc failed on scarecrow.PlotStartEvent: boom
     // healthy watcher still runs
     // <nil>
+}
+```
+
+### `Lifecycle` の一括起動と停止
+
+```go
+package main
+
+import (
+    "fmt"
+
+    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
+)
+
+// closer 同时是 Watcher 与 Lifecycle，Start/Stop 按 Hub 记录的注册顺序执行。
+type closer struct{ name string }
+
+func (c *closer) OnEvent(scarecrow.Event) error { return nil }
+
+func (c *closer) Start() error {
+    fmt.Println("start", c.name)
+    return nil
+}
+
+func (c *closer) Stop() error {
+    fmt.Println("stop", c.name)
+    return nil
+}
+
+func main() {
+    hub := scarecrow.NewHub()
+    _ = hub.AddWatcher(&closer{name: "a"})
+    _ = hub.AddWatcher(&closer{name: "b"})
+
+    if err := hub.Start(); err != nil {
+        panic(err)
+    }
+    if err := hub.Stop(); err != nil {
+        panic(err)
+    }
+
+    // 输出顺序：start a、start b、stop b、stop a
+    // 停止后再次 Start 会返回 scarecrow: hub already stopped。
+    _ = hub.Start()
 }
 ```
 

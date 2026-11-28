@@ -1,6 +1,6 @@
 # pkg/plot/plot_route.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot_route.go` は `RoutePlot[S, Y]` を定義します。これは**宛先指定型の転送**ノードです。その `cultivator` が返すのは単一の fruit ではなく、ルーティングテーブル `map[string]Y` です。key はターゲットとなる下流の名前、value はその下流へ送る yield です。
 
@@ -133,7 +133,7 @@ route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 _ = f.AddPlot(route, left, right)
 // 只连 route → left、route → right；路由表中未出现的目标不会收到数据
 _ = f.Connect([]plot.PlotNode{route}, []plot.PlotNode{left, right})
-_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO")
+_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO", nil)
 ```
 
 > 下流の `left` / `right` の `S` は `string` であるため、`RoutePlot` の `Y` も `string` でなければなりません。そうでない場合は `Connect` の段階で型の不一致によりエラーになります。

@@ -1,23 +1,25 @@
 # pkg/api/api.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
 `pkg/api` is the **unified public entry package** of CelestialGrow. It introduces no new implementation; it only re-exposes the core types and common configuration of the underlying packages in three forms:
 
-1. **Type aliases** (`type X = pkg.Y`): `Farm`, `SinglePlot`, `SplitPlot`, `RoutePlot`, `PlotNode`, `Option`;
-2. **Thin constructor wrappers**: `NewFarm`, `NewSinglePlot`, `NewSplitPlot`, `NewRoutePlot`;
+1. **Type aliases** (`type X = pkg.Y`): `Farm`, `SinglePlot`, `SplitPlot`, `RoutePlot`, `PlotNode`, `Option`, `PrintWatcher`, `Report`;
+2. **Thin constructor wrappers**: `NewFarm`, `NewSinglePlot`, `NewSplitPlot`, `NewRoutePlot`, `NewPrintWatcher`;
 3. **Configuration items**: the package-level variables `WithTenders`, `WithChanSize`, `WithMaxRetries`, `WithRetryDelay`, `WithRetryIf`, plus the generic function `WithPruneIf`.
 
-There are only two underlying dependency packages:
+It depends on four underlying packages:
 
 | Underlying package | Provided content |
 |--------|----------|
 | `pkg/farm` | `Farm`: node registration, hyperedge-style connection, overall scheduling, and external injection |
 | `pkg/plot` | `SinglePlot` / `SplitPlot` / `RoutePlot` / `PlotNode` / `Option` and their configuration functions |
+| `pkg/scarecrow` | `PrintWatcher`: an observer that prints event progress to standard output |
+| `pkg/reporter` | `Config` (exported under the `Report` alias): the minimal configuration for remote reporting and remote injection |
 
-> Runtime event observation (progress printing, metrics, etc.) is provided by `pkg/scarecrow` and injected through `AddWatcher`. `pkg/api` offers no observer constructors; use `scarecrow.NewPrintWatcher` or a custom `scarecrow.Watcher` when you need progress output.
+> Runtime event observation (progress printing, metrics, etc.) is provided by `pkg/scarecrow` and injected through `AddWatcher`. `pkg/api` only additionally offers the standard-output observer constructor `NewPrintWatcher`; other observers such as the metrics one must still be imported directly from `pkg/scarecrow` or implemented as a custom `scarecrow.Watcher`.
 
 Since all exported items are aliases, function values, or one-layer pass-through wrappers, the behavioral contract of this package is entirely determined by the underlying packages. This document focuses on "the list of exported symbols + type parameter semantics + defaults + error scenarios".
 
@@ -31,10 +33,13 @@ Since all exported items are aliases, function values, or one-layer pass-through
 | `RoutePlot[S, Y]` | Generic type alias | `plot.RoutePlot[S, Y]` | The routing node. The processing function returns `map[string]Y`, where `key` is the target downstream name and `value` is sent only to that downstream. |
 | `PlotNode` | Type alias | `plot.PlotNode` | The unified node interface with generic parameters erased; `Farm` uses it to hold nodes of differing types. |
 | `Option` | Type alias | `plot.Option` | Optional node configuration, whose underlying type is `func(*plotOptions)`; `plotOptions` is unexported, so `Option` **cannot be customized** outside the package. |
-| `NewFarm(name string) *Farm` | Constructor | `farm.NewFarm` | Creates a Farm (and its internal event Hub along with it). |
+| `PrintWatcher` | Type alias | `scarecrow.PrintWatcher` | An observer that prints event progress to standard output. |
+| `Report` | Type alias | `reporter.Config` | Remote reporting configuration: service address, session identifier, snapshot period, and injection period. |
+| `NewFarm(name string) *Farm` | Constructor | `farm.NewFarm` | Creates a Farm (and sets up its internal event Hub and metronome Hub along with it). |
 | `NewSinglePlot[S, F](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]` | Constructor | `plot.NewSinglePlot` | Creates a single-in single-out node. |
 | `NewSplitPlot[S, F](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F]` | Constructor | `plot.NewSplitPlot` | Creates a split node. |
 | `NewRoutePlot[S, Y](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]` | Constructor | `plot.NewRoutePlot` | Creates a routing node. |
+| `NewPrintWatcher(name string) *PrintWatcher` | Constructor | `scarecrow.NewPrintWatcher` | Creates a standard-output progress observer; `name` is used as the output prefix. |
 | `WithTenders(n int) Option` | Package-level variable | `plot.WithTenders` | Number of concurrent tenders. |
 | `WithChanSize(n int) Option` | Package-level variable | `plot.WithChanSize` | Buffer size of the seed channel. |
 | `WithMaxRetries(n int) Option` | Package-level variable | `plot.WithMaxRetries` | Maximum number of retries (excluding the first execution). |
@@ -54,6 +59,8 @@ flowchart LR
         A3[PlotNode / Option]
         A4[NewFarm / New*Plot]
         A5[With*]
+        A6[PrintWatcher / NewPrintWatcher]
+        A7[Report]
     end
 
     subgraph FARM["pkg/farm"]
@@ -67,6 +74,14 @@ flowchart LR
         P4[PlotNode / Option<br/>interface and config]
     end
 
+    subgraph SCARECROW["pkg/scarecrow"]
+        S1[PrintWatcher<br/>standard-output observer]
+    end
+
+    subgraph REPORTER["pkg/reporter"]
+        R1[Config<br/>remote reporting config]
+    end
+
     A1 -.alias.-> F1
     A2 -.alias.-> P1
     A2 -.alias.-> P2
@@ -77,6 +92,8 @@ flowchart LR
     A4 --> P2
     A4 --> P3
     A5 --> P4
+    A6 -.alias.-> S1
+    A7 -.alias.-> R1
 ```
 
 ## Generic Parameter Semantics
@@ -99,9 +116,10 @@ The three node types share the same convention: **the output type of an upstream
 |------|------|
 | `AddPlot(plots ...PlotNode) error` | Registers one or more nodes; the name must be non-empty and unique within the Farm. After registration the nodes share the Farm's event client. |
 | `Connect(fromPlots, toPlots []PlotNode) error` | Establishes a **full connection** (Cartesian product) between the two groups and calls the upstream `ConnectTo` on each pair for type validation. |
-| `AddWatcher(watcher scarecrow.Watcher) error` | Registers a Farm-level watcher, which receives both Farm events and all Plot events (the Farm Hub is registered on every Plot as a child Hub). |
-| `Run(inputs map[string][]any, logLevel string) error` | Synchronous run: validate `inputs`, start all nodes, inject the initial seeds, send the termination signal to the **source nodes**, and finally wait for all of them to exit. An empty `logLevel` is treated as `INFO`. |
-| `Start(logLevel string) error` | Only assembles and starts; injects no seeds/termination signals; blocks until all nodes exit. Suited to external-driver scenarios. If nobody injects termination signals, `Start` never returns. |
+| `AddWatcher(watcher scarecrow.Watcher) error` | Registers a Farm-level watcher, which receives both Farm events and all Plot events (the Farm Hub is registered as a child Hub on every Plot). |
+| `AddTicker(ticker metronome.Ticker) error` | Registers a Farm-level ticker, which runs with the Farm's metronome clock. |
+| `Run(inputs map[string][]any, logLevel string, report *reporter.Config) error` | Synchronous run: first validates `inputs`, starts all nodes, then injects the initial seeds, sends the termination signal to the **source nodes**, and finally waits for all of them to exit. When `report` is `nil` only local resources are assembled. |
+| `Start(logLevel string, report *reporter.Config) error` | Only assembles and starts; injects no seeds/termination signals; blocks until all nodes exit. Suited to external-driver scenarios. If nobody injects termination signals, `Start` never returns. |
 | `InjectTasks(tasks map[string][]any) error` | Injects seeds into the specified nodes. Can be called while `Start`/`Run` is running. |
 | `InjectTerminations(nodes []string) error` | Injects termination signals into the specified nodes; seeds sown into a node after its termination are not processed. |
 | `PlotCount() int` | Number of registered nodes. |
@@ -116,6 +134,8 @@ Differences between `Run` and `Start`:
 | Continuously deliver tasks at runtime (streaming/external driver) | ❌ Seals immediately | ✅ Together with `InjectTasks` / `InjectTerminations` |
 | Return timing | After all nodes have processed and exited | After all termination signals are received and processing is done |
 
+An empty `logLevel`, or an unrecognizable level, is treated as `INFO`. A `nil` `report` means purely local operation: only the metrics, lifecycle, and log observers are assembled; passing a non-nil `*Report` additionally assembles remote pushing, periodic snapshots, and remote injection polling. `Farm` fills in an empty `SessionID` before running (in the format `<farm>@<nanosecond timestamp>`).
+
 ## Common Plot Methods
 
 `SinglePlot` / `SplitPlot` / `RoutePlot` share the same set of `basePlot` methods (see the generic signatures above).
@@ -123,7 +143,9 @@ Differences between `Run` and `Start`:
 | Method | Description |
 |------|------|
 | `AddWatcher(watcher scarecrow.Watcher) error` | Registers a node-level watcher; registering twice means receiving events twice. Must be called before `Run`/`StartAsync`. |
-| `Run(seeds []S, logLevel string)` | Standalone mode: assembles the log/lifecycle/metrics resources, starts the node, sows, seals, and waits for completion. **No return value**. |
+| `AddTicker(ticker metronome.Ticker) error` | Registers a node-level ticker, which runs along with the Farm's metronome clock when the Farm runs. |
+| `GetTickerHub() *metronome.Hub` | Returns the metronome Hub held by the node (the Farm attaches it under its own Hub). |
+| `Run(seeds []S, logLevel string)` | Standalone mode: assembles local resources, starts the node, sows, seals, and waits for completion. **No return value**. |
 | `Harvest() ([]persist.LifecycleStatusRecord, error)` | Reads the persisted seed state snapshots of this node; callable after a standalone `Run` or after `Farm.Run/Start` finishes. |
 | `GetSeedNum() int` | Total input count (external injection + upstream delivery). |
 | `GetFruitNum() int` | Success count (ripened). |
@@ -148,10 +170,13 @@ Differences between `Run` and `Start`:
 |------|------|
 | `GetName() string` | Returns the node name, used for uniqueness validation and connection addressing. |
 | `GetState() int32` | Returns the state: `0` = idle, `1` = running, `2` = done. |
+| `GetMeta() scarecrow.NodeMeta` | Returns build-time metadata (class name, execution mode, maximum concurrency), used for Farm start events. |
 | `GetSeedChanAny() any` | Returns the seed channel as `any`, for `ConnectTo` to perform a type assertion. |
 | `ConnectTo(next PlotNode) error` | Connects this node's output to the downstream input; returns an error when the upstream/downstream types are incompatible. |
 | `AddUpstream(name string)` | Registers an upstream name (called by the upstream in `ConnectTo`), used for seal aggregation. |
 | `AddWatcher(listener scarecrow.Watcher) error` | Registers an observer. |
+| `AddTicker(ticker metronome.Ticker) error` | Registers a node-level ticker. |
+| `GetTickerHub() *metronome.Hub` | Returns the node-level metronome Hub. |
 | `SetEventClient(eventClient runtime.EventClient)` | Injects the event client; `Farm.AddPlot` makes all nodes share the Farm's client. |
 | `StartAsync()` | Starts the scheduler asynchronously. |
 | `WaitAsync()` | Waits for the background goroutines to exit. |
@@ -168,7 +193,7 @@ Creates and returns a `Farm`.
 
 - `name`: the Farm name, used as the log identifier and for `FarmStartEvent` / `FarmEndEvent`.
 - Returns no error; after creation you can immediately call `AddPlot` / `Connect` / `Run`.
-- The Farm's own log level is not set here but passed in `Run(inputs, logLevel)` / `Start(logLevel)`.
+- The Farm's own log level and remote reporting configuration are not set here but passed in `Run(inputs, logLevel, report)` / `Start(logLevel, report)`.
 
 ### `NewSinglePlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]`
 
@@ -186,6 +211,14 @@ Creates a split node. `splitter` maps one seed to `[]F`; on success the whole se
 ### `NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]`
 
 Creates a routing node. In the routing table returned by `cultivator`, `key` is the target downstream name and `value` is the yield sent to that downstream: different downstreams can receive different yields, and downstreams that are not routed to receive nothing; downstreams that appear in the routing table but are not connected are skipped, without affecting the remaining routing entries.
+
+### `NewPrintWatcher(name string) *PrintWatcher`
+
+Creates an observer that prints event progress to standard output.
+
+- `name`: the output prefix, used to distinguish progress lines of different Plots / Farms.
+- The returned `*PrintWatcher` implements `scarecrow.Watcher` and can be attached to `Farm.AddWatcher` or `Plot.AddWatcher`.
+- Returns no error.
 
 ## Configuration Functions
 
@@ -246,7 +279,6 @@ import (
     "fmt"
 
     grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
-    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // double 将种子翻倍。
@@ -271,13 +303,14 @@ func main() {
     }
 
     // Farm 级 watcher：同时收到 Farm 事件与所有 Plot 事件。
-    if err := f.AddWatcher(scarecrow.NewPrintWatcher("demo_farm")); err != nil {
+    if err := f.AddWatcher(grow.NewPrintWatcher("demo_farm")); err != nil {
         panic(err)
     }
 
+    // 第三个参数为 report；nil 表示不启用远程上报。
     if err := f.Run(map[string][]any{
         "double": {1, 2, 3, 4},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 
@@ -388,7 +421,7 @@ func main() {
 
     if err := f.Run(map[string][]any{
         "split": {1, 2, 3},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 }
@@ -429,7 +462,7 @@ func main() {
     }
 
     errCh := make(chan error, 1)
-    go func() { errCh <- f.Start("INFO") }()
+    go func() { errCh <- f.Start("INFO", nil) }()
 
     <-started // 等节点启动，Farm Hub 已接入，指标统计才完整
 
@@ -450,6 +483,46 @@ func main() {
 
 > `Start` injects no initial tasks. If `InjectTerminations` is not called on the **source nodes**, or if some node is still waiting for an upstream seal, `Start` never returns.
 
+### Example 5: Remote reporting and remote injection
+
+After a non-nil `*grow.Report` is passed, the Farm additionally assembles a push observer, periodic snapshots, and remote injection polling. The snapshot/injection periods are measured in ticks, and `0` uses the defaults of `pkg/reporter` (1 tick for snapshots, 5 ticks for injection).
+
+```go
+package main
+
+import (
+    "fmt"
+
+    grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+)
+
+func main() {
+    root := grow.NewSinglePlot("root", func(seed int) (int, error) {
+        return seed * 2, nil
+    })
+
+    f := grow.NewFarm("report_farm")
+    if err := f.AddPlot(root); err != nil {
+        panic(err)
+    }
+
+    report := &grow.Report{
+        URL:             "http://127.0.0.1:8000",
+        SessionID:       "", // 留空时 Farm 生成 <farm>@<纳秒时间戳>
+        SnapshotPeriod:  2,  // 每 2 拍推送一次整图快照
+        InjectionPeriod: 5,  // 每 5 拍拉取一次远程注入
+    }
+
+    if err := f.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", report); err != nil {
+        panic(err)
+    }
+
+    fmt.Println("done")
+}
+```
+
+> An unreachable remote service does not block local operation: push failures are only logged, and injection pull failures are consumed by the metronome Hub's error handler. Remotely injected tasks and termination signals still enter the Farm through `InjectTasks` / `InjectTerminations`.
+
 ## Error Scenarios
 
 | Entry | Possible error |
@@ -457,24 +530,26 @@ func main() {
 | `Farm.AddPlot` | A `nil` node is passed, the name is empty, or the name is duplicated (`plot %q already exists`). |
 | `Farm.Connect` | `from` / `to` is empty after deduplication and nil removal; a node is not registered in this Farm; the upstream/downstream types are incompatible (the `ConnectTo` assertion fails). |
 | `Farm.AddWatcher` / `Plot.AddWatcher` | The watcher is `nil`; registration would form a Hub ring. |
-| `Farm.Run` | An unregistered node name appears in `inputs`; assembly resource setup or internal watcher registration fails; the seed type does not match when injecting. On injection failure it still seals the source nodes and waits for exit, then returns the error. |
-| `Farm.Start` | Assembly resource setup or internal watcher registration fails; other errors must be checked by yourself via `InjectTasks` / `InjectTerminations`. |
+| `Farm.AddTicker` / `Plot.AddTicker` | The ticker is `nil`, it is registered twice, the tick period is invalid, or a Hub ring would be formed. |
+| `Farm.Run` | An unregistered node name appears in `inputs`; runtime resource assembly fails (Hub is nil, report configuration is invalid, etc.); the seed type does not match when injecting. On injection failure it still seals the source nodes and waits for exit, then returns the error. |
+| `Farm.Start` | Runtime resource assembly fails; other errors must be checked by yourself via `InjectTasks` / `InjectTerminations`. |
 | `Farm.InjectTasks` | The target node is not registered (validated up front; nothing is injected if any is unregistered); the seed type does not match the node's `S` (`plot %q seed type mismatch: got %T`). A type error may be returned only after some nodes have already been injected. |
 | `Farm.InjectTerminations` | The target node is not registered (validated up front; no termination signal is sent if any is unregistered). |
 | `Plot.SeedAny` | The passed value cannot be asserted to the node's `S`. |
-| `Plot.Harvest` | No lifecycle observer is assembled (for example, it was not started through `Run` / `Farm.Run`); or the database path is not ready yet. |
-| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` | Returns no error. |
-| `Plot.Run` | **Returns no error**; when assembly fails it returns silently and the node does not run. |
+| `Plot.Harvest` | No lifecycle observer is assembled (`plot %q lifecycle watcher is not registered`); the database path is not ready yet (`plot %q lifecycle database is not ready`). |
+| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` / `NewPrintWatcher` | Returns no error. |
+| `Plot.Run` | **Returns no error**; when resource assembly fails (for example, Hub is nil) it returns silently and the node does not run. |
 
 ## Notes
 
-1. **A type alias is not a new type**: `Farm`, `SinglePlot[S, F]`, `SplitPlot[S, F]`, `RoutePlot[S, Y]`, `PlotNode`, and `Option` are all `type X = pkg.Y` and can be used interchangeably with the underlying types.
+1. **A type alias is not a new type**: `Farm`, `SinglePlot[S, F]`, `SplitPlot[S, F]`, `RoutePlot[S, Y]`, `PlotNode`, `Option`, `PrintWatcher`, and `Report` are all `type X = pkg.Y` and can be used interchangeably with the underlying types.
 2. **Option is not extensible**: `Option` is `func(*plotOptions)` underneath, and `plotOptions` is unexported, so `Option` cannot be customized outside the package — only the built-in `With*` can be used. Configuration is applied in the order passed, and a later value for the same field overrides the earlier one; the defaults are maintained by `defaultOptions()` in `pkg/plot/option.go`.
 3. **`With*` are variables**: `WithTenders`, `WithChanSize`, `WithMaxRetries`, `WithRetryDelay`, and `WithRetryIf` are package-level variables rather than function declarations, so assigning to them at runtime changes the behavior of the whole package — **do not reassign them**.
 4. **Metrics must be assembled first**: the six metrics methods and `IsFinish` depend on `MetricsWatcher`; `Run` / `Farm.Run` / `Farm.Start` register it automatically, so calling them before a run only yields `0` / `false`. In the `Start` scenario the Farm Hub is attached to each Plot only after `FarmStartEvent`, so it is best to wait for `PlotStartEvent` before injecting tasks, so that the events enter the metrics.
 5. **Watcher registration timing**: `AddWatcher` should preferably be done before `Run` / `Start`. A Farm-level watcher receives both Farm events and all Plot events; when `PrintWatcher` is attached to the Farm it counts **the cumulative input of all Plots** (including seeds forwarded between nodes), while attaching it to a single Plot only looks at that node.
 6. **Connections are validated at runtime**: `Farm.Connect` fully connects the source group and the target group, calling `ConnectTo` on each pair so a type assertion validates whether "upstream `F`/`Y` and downstream `S`" match, returning an error immediately on failure.
 7. **Termination semantics**: `InjectTerminations` / `Seal` are external hard terminations — they no longer wait for the remaining upstream seals; a node first finishes the seeds it has already received, then merges the seal downstream. Sowing into an already sealed node is not processed.
-8. **`Run` swallows assembly errors**: the standalone `Plot.Run` has no return value, so when assembly fails (for example, the `lifecycles/` directory cannot be created or SQLite cannot be opened) the node does not run, and a later `Harvest` returns an error of the "lifecycle observer not registered" kind.
+8. **`Run` swallows assembly errors**: the standalone `Plot.Run` has no return value, so when resource assembly fails (for example, Hub is nil, the `lifecycles/` directory cannot be created, or SQLite cannot be opened) the node does not run, and a later `Harvest` returns an error of the "lifecycle observer not registered" or "database not ready" kind.
 9. **Runtime artifacts land in the working directory**: the lifecycle SQLite is written to `<cwd>/lifecycles/<date>/` and logs to `<cwd>/logs/`, so write permission must be reserved in the deployment environment.
 10. **Import alias**: the recommended form is `grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"`, avoiding conflicts with local variable names (`farm`, `plot`).
+11. **`Report` is just configuration**: `Report` is an alias of `reporter.Config` and does not start reporting by itself; remote resources are assembled only when it is passed to `Farm.Run` / `Farm.Start`. Assembly fails when `URL` is empty or is not http/https.

@@ -1,6 +1,6 @@
 # pkg/funnel/inlet.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `pkg/funnel/inlet.go` defines the `Inlet[T]` generic abstraction - the **producer side** (writer) in CelestialGrow's asynchronous consumption infrastructure. It feeds records from upstream components into a buffered Go channel, which the counterpart `Spout[T]` consumes asynchronously. `Inlet` carries its own independent `context.Context` that `Close` can cancel proactively; every send is also protected by a timeout, so upstream is never blocked indefinitely by a slow consumer.
 
@@ -87,7 +87,7 @@ Key points:
 - Both watchers use the same queue parameters: `funnel.NewSpout(handler, 100, time.Second)` + `funnel.NewInlet(..., time.Second)`, i.e. **100 records of buffering**, with the `Send` timeout and the graceful-shutdown timeout of `Spout.Stop` both set to **1 second**.
 - `LogWatcher` has another level filter between `OnEvent` and `Send`: the private method `log(level, message, at)` drops records below `minLevel`, and those records **do not** occupy the channel.
 - Errors from `Send` are returned as-is through `OnEvent` (`LogWatcher.OnEvent` / `LifecycleWatcher.OnEvent` return the `Send` error directly), but `Hub` catches watcher errors and hands them to the `ErrorHandler` while always returning `nil`, so a timeout never interrupts business execution.
-- `Plot` / `Farm` **no longer** hold `Inlet` or `Spout` directly: they only hold `scarecrow.Hub`, and the watchers are created and started by `StartPlotResources` / `StartFarmResources` in `pkg/assembly`; at shutdown, `Resources.Stop` (internally `sync.Once`) stops the log watcher first and then the lifecycle watcher.
+- `Plot` / `Farm` **no longer** hold `Inlet` or `Spout` directly: they only hold `scarecrow.Hub` and `metronome.Hub`; the watchers are created by `StartLocalResources` / `StartReportResources` in `pkg/assembly`, and are started uniformly by `watcherHub.Start()` after registration. When the run ends, `StopFunc` stops the tick clock first, then the ticker Hub, and finally the watcher Hub; watchers stop in the reverse order of registration (remote mode `push → log → lifecycle`, local mode `log → lifecycle`).
 
 ## Usage Example
 

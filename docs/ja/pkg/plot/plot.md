@@ -1,6 +1,6 @@
 # pkg/plot/plot.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot.go` は `pkg/plot` の **共有実行骨格** であり、パッケージドキュメントも兼ねます。次の 2 つを定義します：
 
@@ -24,11 +24,14 @@
 type PlotNode interface {
 	GetName() string
 	GetState() int32
+	GetMeta() scarecrow.NodeMeta
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
 	AddWatcher(listener scarecrow.Watcher) error
+	AddTicker(ticker metronome.Ticker) error
+	GetTickerHub() *metronome.Hub
 	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
@@ -42,10 +45,13 @@ type PlotNode interface {
 |------|------|
 | `GetName()` | plot 名を返す（`Farm` 内で一意である必要がある） |
 | `GetState()` | 状態を返す：`0=idle`、`1=running`、`2=done` |
+| `GetMeta()` | 構築期のメタ情報 `scarecrow.NodeMeta`（`ClassName`、`ExecutionMode="thread"`、`MaxWorkers=numTenders`）を返し、`Farm` が `FarmStartEvent` に集約する |
 | `GetSeedChanAny()` | `seedChan` を `any` として公開し、上流の `ConnectTo` が型アサーションを行うためのもの |
 | `ConnectTo(next)` | 「本ノードの yield → 下流の seed」の接続を確立し、型を検証する |
 | `AddUpstream(name)` | **上流**が `ConnectTo` 時に呼び出し、本ノードの上流名を登録する。seal の集約に使用 |
 | `AddWatcher(listener)` | 本ノード内部の `Hub` にオブザーバを登録する。重複登録するとイベントを重複して受け取る |
+| `AddTicker(ticker)` | 本ノードが保持する `metronome.Hub` に plot 単位の ticker を登録する |
+| `GetTickerHub()` | plot が保持する `*metronome.Hub` を返し、`Farm` が Farm 単位の ticker ツリーに収める |
 | `SetEventClient(eventClient)` | イベント ID の採番器を注入する（`Farm` は同じ client を統一的に注入する） |
 | `StartAsync()` / `WaitAsync()` | スケジューラを非同期起動する / バックグラウンド goroutine の終了をブロックして待つ |
 | `SeedAny(seed)` | 単一の seed を `any` として播く。`Farm` が初期タスクを注入する際に使用 |
@@ -67,7 +73,8 @@ type basePlot[S any, F any, Y any] struct {
 	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
-	hub         *scarecrow.Hub
+	watcherHub  *scarecrow.Hub
+	tickerHub   *metronome.Hub
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -92,7 +99,8 @@ type basePlot[S any, F any, Y any] struct {
 | `yieldChans` | `下流 plot 名 → その下流の seed チャネル`。`ConnectTo` が埋める |
 | `upstreams` | 登録済みの上流 plot 名の集合。seal が揃ったかを判定するために使用 |
 | `eventClient` | プロセス内のイベント ID 採番器。既定は `runtime.NewLocalEventClient()` |
-| `hub` | 本ノードのイベント配信センター。既定は `scarecrow.NewHub()`。オブザーバは `AddWatcher` で登録する |
+| `watcherHub` | 本ノードのイベント配信センター。既定は `scarecrow.NewHub()`。オブザーバは `AddWatcher` で登録する |
+| `tickerHub` | 本ノードの拍コンテナ。既定は `metronome.NewHub()`。`Farm` は起動時にこれを Farm 単位の ticker hub に収める |
 | `ctx` / `cancel` | `context.WithCancel(context.Background())` から派生し、内部での強制終了に使用 |
 | `wg` | `StartAsync` が起動したバックグラウンド goroutine を集約する |
 | `state` | 状態のアトミック変数（0/1/2） |
@@ -121,17 +129,18 @@ func newBasePlot[S any, F any, Y any](
 同パッケージの `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` からのみ呼び出されます。流れ：
 
 1. `defaultOptions()` を取得し、`opts` を順に適用する。
-2. `context.WithCancel(context.Background())` から `ctx / cancel` を派生させる。
-3. `seedChan`（容量 `chanSize`）と空の `yieldChans` / `upstreams` を確保する。
-4. `eventClient = runtime.NewLocalEventClient()` と `hub = scarecrow.NewHub()` を初期化する。
+2. `metronome.NewHub()` で `tickerHub` を生成し、失敗時はそのまま `panic` する。
+3. `context.WithCancel(context.Background())` から `ctx / cancel` を派生させる。
+4. `seedChan`（容量 `chanSize`）と空の `yieldChans` / `upstreams` を確保する。
+5. `eventClient = runtime.NewLocalEventClient()` と `watcherHub = scarecrow.NewHub()` を初期化する。
 
 ## 指標の読み取り
 
-`basePlot` はもはやカウンタを持たず、指標はイベントストリームから再構築されます。`pkg/assembly` が実行期間中に `*scarecrow.MetricsWatcher` を plot の `hub` に登録し、`basePlot` は読み取り時に `scarecrow.Find` で hub（入れ子の hub を含む）からそれを探します。
+`basePlot` はもはやカウンタを持たず、指標はイベントストリームから再構築されます。`pkg/assembly` が実行期間中に `*scarecrow.MetricsWatcher` を plot の `watcherHub` に登録し、`basePlot` は読み取り時に `scarecrow.Find` で hub（入れ子の hub を含む）からそれを探します。
 
 ```go
 func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
-	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.hub)
+	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.watcherHub)
 	if !ok {
 		return scarecrow.PlotMetrics{}, false
 	}
@@ -152,12 +161,10 @@ func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
 
 ## イベント送信
 
-`basePlot` は `emit` でイベントを `hub` 上のすべてのオブザーバへ同期的に配信します。オブザーバが返したエラーや panic は `Hub` のエラーハンドラが消費するため、実行経路には影響しません：
+`basePlot` の各フローは直接 `p.watcherHub.OnEvent(...)` を呼び出し、イベントを hub 上のすべてのオブザーバへ同期的に配信します。オブザーバが返したエラーは `Hub` のエラーハンドラが消費するため、実行経路には影響しません：
 
 ```go
-func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
-	_ = p.hub.OnEvent(event)
-}
+p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* ... */ })
 ```
 
 | イベント | 発生箇所 | 主要フィールド |
@@ -172,7 +179,7 @@ func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
 | `SealInputEvent` | `Seal` | `SealID` |
 | `SealMergeEvent` | `sprout` の終了処理 | `ParentIDs`、`SealID` |
 
-> ライフサイクルとログはもはや `basePlot` が直接 DB に書きません。`pkg/persist` の `LifecycleWatcher` / `LogWatcher` が通常の `Watcher` としてこれらのイベントを購読し、`pkg/assembly.StartPlotResources` が生成と登録を担います。イベント ID は引き続き `eventClient.Emit(...)` が採番します：`seed` / `fruit` / `weed` / `prune` / `seal`。
+> ライフサイクルとログはもはや `basePlot` が直接 DB に書きません。`pkg/persist` の `LifecycleWatcher` / `LogWatcher` が通常の `Watcher` としてこれらのイベントを購読し、`pkg/assembly.StartLocalResources` が生成と登録を担います。イベント ID は引き続き `eventClient.Emit(...)` が採番します：`seed` / `fruit` / `weed` / `prune` / `seal`。
 
 ## 主要なフロー
 
@@ -322,7 +329,7 @@ for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 		break
 	}
 	if attempt <= p.maxRetries {
-		p.emit(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
+		p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
 	}
 	time.Sleep(p.retryDelay(attempt))
 }
@@ -359,8 +366,8 @@ func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string)
 
 standalone モードのワンストップ入口（ブロッキング）：
 
-1. `assembly.StartPlotResources(p.hub, logLevel)` で指標・ライフサイクル・ログのオブザーバを組み立て、失敗時は **そのまま return**（エラーも返さず、何も出力しない）。
-2. `defer resources.Stop()` で、終了時のフラッシュとリソース回収を保証する。
+1. `assembly.StartLocalResources(p.watcherHub, p.tickerHub, logLevel, metronome.DefaultInterval)` で指標・ライフサイクル・ログのオブザーバを組み立て、メトロノームのクロックを起動します。`(stop assembly.StopFunc, err error)` を返し、`err != nil` の場合は **そのまま return** します（`Run` はエラーを返さず、何も出力しません）。
+2. `defer func() { _ = stop() }()` で、終了時のフラッシュとリソース回収を保証します。
 3. `StartAsync()`。
 4. `seeds` を順に `Seed(seed)` で注入する。
 5. `Seal()` で、これ以上外部入力がないことを宣言する。
@@ -474,7 +481,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

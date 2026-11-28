@@ -1,6 +1,6 @@
 # pkg/scarecrow/metrics.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -26,6 +26,8 @@ const (
 | `PlotRunning` | 1 | `running` |
 | `PlotStopped` | 2 | `stopped` |
 | その他の値 | — | `not_started`（`String()` の `default` 分岐） |
+
+`PlotStatus` は `fmt.Stringer` を実装します：`func (s PlotStatus) String() string` は `running` / `stopped` / `not_started` を返し、ログや `fmt.Println` はその名前をそのまま使います。
 
 > `PlotStatus` は `plot.GetState()` の `0=idle / 1=running / 2=done` と数値が一致しますが、両者は独立した型であり、相互に代入してはいけません。
 
@@ -98,6 +100,33 @@ func NewMetricsWatcher() *MetricsWatcher
 |------|------|------|
 | `GetPlot` | `func (m *MetricsWatcher) GetPlot(name string) (PlotMetrics, bool)` | 未登録ならゼロ値と `false` を返す。登録済みならコピーしたスナップショットを返す |
 | `GetPlots` | `func (m *MetricsWatcher) GetPlots() map[string]PlotMetrics` | 登録済みの全 Plot の新しいマップを返す。データがないときは空のマップ（nil ではない）を返す |
+
+## `pkg/reporter` との契約
+
+`pkg/reporter` は最小インターフェースを通じて本ファイルを消費し、`*MetricsWatcher` という具体型には依存しません：
+
+```go
+type MetricsView interface {
+    GetPlots() map[string]scarecrow.PlotMetrics
+}
+```
+
+`NewSnapshotTicker` / `NewPushWatcher` はいずれも `MetricsView` を受け取ります。`snapshot.go` の `toStatusSnapshot` は `PlotMetrics` を Web 側の `NodeStatus` へ射影します：
+
+| `PlotMetrics` フィールド | `NodeStatus` フィールド | 変換 |
+|--------------------|-------------------|------|
+| `Status` | `Status` | `int(item.Status)`、すなわち `0/1/2` |
+| `InputTotal` | `TasksInput` | そのまま代入 |
+| `Processed` | `TasksProcessed` | そのまま代入 |
+| `Pending` | `TasksPending` | そのまま代入 |
+| `Succeeded` | `TasksSucceeded` | そのまま代入 |
+| `Failed` | `TasksFailed` | そのまま代入 |
+| `Skipped` | `TasksSkipped` | そのまま代入 |
+| `UpstreamCounts` | `UpstreamCounts` | そのまま代入（スナップショットがマップを再構築済み） |
+| `DownstreamCounts` | `DownstreamCounts` | そのまま代入（スナップショットがマップを再構築済み） |
+| `StartTime` / `EndTime` | `StartTime` / `EndTime` | Unix 秒へ変換。ゼロ値の時刻は `0` を出力 |
+
+`NodeStatus` は Plot 名（名前は外側の `map[string]NodeStatus` のキー）と `NodeMeta` を含みません。ノードの構築期メタ情報は `FarmStartEvent.NodeMeta` として別途報告されます。詳細は [`event.md`](./event.md) の `NodeMeta` の節を参照してください。
 
 ## 主要なイベントマッピング
 

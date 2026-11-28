@@ -1,6 +1,6 @@
 # demo/demo_farm/main.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -40,10 +40,10 @@ Key APIs appearing in `main.go` (constructors and configuration come from `pkg/a
 | Call | Source | Purpose |
 |------|------|------|
 | `grow.NewSinglePlot[S, F](name, cultivator, opts...)` | `pkg/api` → `plot.NewSinglePlot` | Constructs a single-in single-out generic concurrent node, where `S` is the seed type and `F` is the fruit type. |
-| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | Constructs a Farm, internally creating the event client and the observer Hub; the log level is now passed to `Run` / `Start`. |
+| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | Constructs a Farm, internally creating the event client, the observer Hub, and the tick Hub; the log level is now passed to `Run` / `Start`. |
 | `farm.AddPlot(plots ...plot.PlotNode)` | `pkg/farm` | Registers several `PlotNode`s into the Farm and adds them to the topology graph. |
 | `farm.Connect(fromPlots, toPlots []plot.PlotNode)` | `pkg/farm` | Establishes a full connection (Cartesian product) between the source group and the target group, validating the seed/fruit types of every connection. |
-| `farm.Run(inputs map[string][]any, logLevel string)` | `pkg/farm` | Executes the whole graph synchronously; `logLevel` is the minimum log level for this run (an empty string means `INFO`), blocking until all Plots finish. |
+| `farm.Run(inputs map[string][]any, logLevel string, report *reporter.Config)` | `pkg/farm` | Executes the whole graph synchronously; `logLevel` is the minimum log level for this run (an empty string means `INFO`), `report` is the remote reporting config (`nil` means a local run), blocking until all Plots finish. |
 | `grow.WithTenders(n int)` | `pkg/api` → `plot.WithTenders` | Sets the number of concurrent tenders (tending goroutines) of a Plot, defaulting to `runtime.NumCPU()`. |
 | `grow.PlotNode` | `pkg/api` → `plot.PlotNode` | The unified interface used as the `Farm.Connect` parameter, with the generic parameters of `SinglePlot` / `SplitPlot` / `RoutePlot` erased. |
 
@@ -53,10 +53,10 @@ Inside the `main` function, execution follows this order:
 
 1. Build the `root` node with cultivator `double` and 2 concurrent tenders.
 2. Build the `head` node with cultivator `addOne` and 2 concurrent tenders.
-3. Create `demo_farm`: `NewFarm` only constructs the Farm (event client, Hub, registry, and topology graph); it does not take a log level.
+3. Create `demo_farm`: `NewFarm` only constructs the Farm (event client, observer Hub, tick Hub, registry, and topology graph); it does not take a log level.
 4. `AddPlot(root, head)`: registers both nodes into the Farm; names must be unique.
 5. `Connect({root}, {head})`: establishes one edge from `root` → `head`.
-6. `Run({"root": {1, 2, 3}}, "INFO")`: injects 3 initial seeds into `root` and starts executing the whole graph. `Run` uses `pkg/assembly` to start the log, lifecycle, and metrics observers, registers the Farm Hub on every Plot, and then waits for all Plots to finish before returning.
+6. `Run({"root": {1, 2, 3}}, "INFO", nil)`: injects 3 initial seeds into `root` and starts executing the whole graph. `Run` uses `pkg/assembly` to assemble and start the log, lifecycle, and metrics observers as well as the tick clock, registers the Farm's observer Hub on every Plot, and then waits for all Plots to finish before returning.
 
 ## Runtime Artifacts
 
@@ -102,7 +102,7 @@ func main() {
 	}
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -113,10 +113,10 @@ func main() {
 - **Imports**: only `pkg/api` is imported, referenced with the alias `grow`, avoiding a conflict with the local variable name `farm`.
 - **`double` / `addOne`**: the two simplest `func(S) (F, error)` cultivators; they never return a non-nil error, so every seed produces a fruit and is consumed downstream.
 - **`NewSinglePlot`**: the seed and fruit types of both nodes are `int`, so the compiler infers `S = F = int`; `WithTenders(2)` limits the number of concurrent tenders per Plot to 2.
-- **`NewFarm`**: only constructs the Farm (event client, Hub, registry, and topology graph); it does not start log/lifecycle resources, which `pkg/assembly` assembles uniformly during `Run`.
+- **`NewFarm`**: only constructs the Farm (event client, observer Hub, tick Hub, registry, and topology graph); it does not start log/lifecycle resources, which `pkg/assembly` assembles uniformly during `Run`.
 - **`AddPlot`**: adds the `SinglePlot`s to the Farm's `plots` map and topology graph and makes them share the Farm's event client; an empty or duplicate name returns an error.
 - **`Connect`**: uses "group-to-group full connection" semantics; here both groups contain a single node, so only one directed edge `root → head` is created.
-- **`Run`**: after validating `inputs`, starts the log/lifecycle/metrics observers, registers the Farm Hub on every Plot, starts all Plots, injects the seeds, sends a seal to the source nodes (here `root`), and waits for all Plots to finish before stopping the resources and returning.
+- **`Run`**: after validating `inputs`, assembles and starts the log/lifecycle/metrics observers and the tick clock, registers the Farm observer Hub on every Plot, starts all Plots, injects the seeds, sends a seal to the source nodes (here `root`), and waits for all Plots to finish before stopping the resources and returning.
 
 ### How to Run
 
@@ -136,7 +136,7 @@ At the `INFO` level, every message written to the log file by this run is `INFO`
 ```go
 if err := farm.Run(map[string][]any{
 	"root": {1, 2, 3},
-}, "DEBUG"); err != nil {
+}, "DEBUG", nil); err != nil {
 	panic(err)
 }
 ```

@@ -1,6 +1,6 @@
 # pkg/persist/sqlite.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -24,7 +24,7 @@ type LifecycleEventRecord struct {
 | Field | Description |
 |------|------|
 | `EventID` | Unique event ID (primary key), coming from the `SeedID` / `FruitID` / `WeedID` / `PruneID` carried by `scarecrow` events |
-| `EventType` | Event type; `pkg/persist` itself writes `record.Kind`, i.e. `seed` / `ripen` / `wither` / `prune`, but the table schema does not enforce an enumeration |
+| `EventType` | Event type; `pkg/persist` itself writes `seed` / `ripen` / `wither` / `prune` according to the record type, but the table schema does not enforce an enumeration |
 | `Plot` | Name of the plot the event belongs to |
 | `TS` | Timestamp (Unix seconds, floating point, millisecond precision). Converted from the time carried by the event: `float64(t.UnixMilli()) / 1000` |
 
@@ -221,18 +221,18 @@ Status writing is split into two steps: "insert the initial snapshot" and "UPDAT
 
 ```mermaid
 flowchart TD
-    A["HandleRecord seed/ripen/wither/prune"] -->|Kind = seed| B[InsertLifecycleEvent]
-    A -->|Kind = ripen| B
-    A -->|Kind = wither| B
-    A -->|Kind = prune| B
+    A["HandleRecord(SeedRecord / RipenRecord / WitherRecord / PruneRecord)"] -->|"SeedRecord"| B[InsertLifecycleEvent]
+    A -->|"RipenRecord"| B
+    A -->|"WitherRecord"| B
+    A -->|"PruneRecord"| B
     B --> C["transaction: INSERT events + N×INSERT event_parents"]
     C --> D{Commit?}
-    D -->|yes| E{Kind}
-    E -->|seed| F1[UpsertLifecycleStatusSeed<br/>status = seed]
-    E -->|ripen| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
-    E -->|wither| F3[PromoteLifecycleStatusWither<br/>status = wither]
-    E -->|prune| F4[PromoteLifecycleStatusPrune<br/>status = prune]
-    D -->|no| F[rollbackOnError auto rollback]
+    D -->|Yes| E{Record type}
+    E -->|SeedRecord| F1[UpsertLifecycleStatusSeed<br/>status = seed]
+    E -->|RipenRecord| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
+    E -->|WitherRecord| F3[PromoteLifecycleStatusWither<br/>status = wither]
+    E -->|PruneRecord| F4[PromoteLifecycleStatusPrune<br/>status = prune]
+    D -->|No| F[rollbackOnError auto rollback]
     F1 --> G[(status table)]
     F2 --> G
     F3 --> G

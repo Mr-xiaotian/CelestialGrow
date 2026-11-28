@@ -1,6 +1,6 @@
 # pkg/plot/plot_route.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot_route.go` defines `RoutePlot[S, Y]`: a node that performs **targeted forwarding**. Its `cultivator` returns not a single fruit but a routing table `map[string]Y`, where the key is the target downstream name and the value is the yield to send to that downstream.
 
@@ -133,7 +133,7 @@ route := plot.NewRoutePlot("route", func(seed int) (map[string]string, error) {
 _ = f.AddPlot(route, left, right)
 // 只连 route → left、route → right；路由表中未出现的目标不会收到数据
 _ = f.Connect([]plot.PlotNode{route}, []plot.PlotNode{left, right})
-_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO")
+_ = f.Run(map[string][]any{"route": {1, 2, 3}}, "INFO", nil)
 ```
 
 > Since the `S` of the downstreams `left` / `right` is `string`, the `Y` of `RoutePlot` must also be `string`; otherwise the `Connect` stage reports a type-mismatch error.

@@ -194,6 +194,8 @@ For more combinations see [`docs/zh-CN/demo/demo_prune/main.md`](./demo/demo_pru
 - `pkg/assembly`: runtime resource assembly, creating and starting the metrics / lifecycle / log observers and registering them on the `Hub`, reclaiming them uniformly through `Resources.Stop`
 - `pkg/persist`: watchers, record handlers, and query interfaces for the lifecycle SQLite and structured run logs
 - `pkg/funnel`: generic asynchronous record production / consumption infrastructure (`Inlet` / `Spout`)
+- `pkg/reporter`: remote reporting and injection, including node / snapshot / error pushes, the periodic snapshot ticker, and the injection polling ticker
+- `pkg/metronome`: the beat clock, dispatch hub, and ticker abstraction
 - `pkg/runtime`: runtime base types such as `Payload`, event ID allocation (`EventClient`), and control signals
 
 ## Observability
@@ -226,7 +228,7 @@ func main() {
 	if err := farm.AddWatcher(scarecrow.NewPrintWatcher("farm")); err != nil {
 		panic(err)
 	}
-	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO"); err != nil {
+	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -235,6 +237,22 @@ func main() {
 Farm-level watchers are registered on the Farm's own Hub, and that Hub is in turn attached to every Plot's Hub, so it receives both `FarmStartEvent` / `FarmEndEvent` and the seed events of all Plots. After the run, the metrics and persistence observers remain in the Hub and can be retrieved through `scarecrow.Find` (`SinglePlot.Harvest` queries the lifecycle SQLite based on this mechanism).
 
 > `Plot` and `Farm` themselves only hold a `scarecrow.Hub` and do not hold spouts or persistence observer instances directly; runtime resources such as logs and lifecycle are created, registered, started, and reclaimed uniformly by `pkg/assembly`.
+
+When the run state needs to be pushed to `celestialflow-web`, pass a reporting configuration to `Run` / `Start`:
+
+```go
+if err := farm.Run(map[string][]any{
+	"root": {1, 2, 3},
+}, "INFO", &grow.Report{
+	URL: "http://127.0.0.1:5005",
+}); err != nil {
+	panic(err)
+}
+```
+
+`URL` points to the web service address; when `SessionID` is left empty it is generated from the Farm name and the start time. Once reporting is enabled, `assembly` additionally assembles the push observer, the periodic snapshot ticker, and the remote injection ticker: node information, state snapshots, task errors, and session shutdown are pushed to the web, and injection tasks submitted on the web are also pulled back to the current Farm. Passing `nil` means local execution and no reporting resources are assembled.
+
+See [`demo/demo_web/main.go`](demo/demo_web/main.go) for a complete example: start the service with `celestialflow-web` first, then run `go run ./demo/demo_web` to observe the graph structure, node states, periodic snapshots, and error messages on the page.
 
 ## Typical Usage
 
@@ -245,7 +263,7 @@ The recommended order of calls is:
 3. Call `farm.AddPlot(...)` to register the nodes
 4. Call `farm.Connect(...)` to establish upstream/downstream relationships
 5. Optionally call `farm.AddWatcher(...)` to attach self-built observers such as `PrintWatcher`
-6. Call `farm.Run(inputs, logLevel)` to inject the initial input and execute
+6. Call `farm.Run(inputs, logLevel, report)` to inject the initial input and execute (passing `nil` as `report` means local execution)
 
 Here `Farm.Connect` uses "group-to-group full connection" semantics, that is, it establishes Cartesian-product connections between the source group and the target group. If you need one seed to derive multiple downstream tasks, use `api.NewSplitPlot(...)` (one-to-many) or `api.NewRoutePlot(...)` (name-based targeted forwarding) instead.
 
@@ -276,7 +294,7 @@ func main() {
 		}
 	}()
 
-	if err := farm.Start("INFO"); err != nil {
+	if err := farm.Start("INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -290,14 +308,17 @@ pkg/
   assembly/   # 运行期资源装配
   farm/       # 图结构与调度
   funnel/     # 通用异步消费基础设施
+  metronome/  # 节拍时钟与 ticker 分发
   persist/    # 日志与生命周期持久化
   plot/       # 泛型并发节点
+  reporter/   # 远程上报与注入
   runtime/    # 事件、信号与运行时载体
   scarecrow/  # 事件模型、分发 Hub 与观察者
 
 demo/
   demo_farm/  # 最小 Farm 流水线
   demo_prune/ # prune 去重（单 Plot 与 Farm）
+  demo_web/   # 远程上报到 celestialflow-web
 ```
 
 ## Requirements

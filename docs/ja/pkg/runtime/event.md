@@ -1,6 +1,6 @@
 # pkg/runtime/event.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `event.go` はランタイムの**イベント ID 割り当て抽象**を定義します。インターフェース `EventClient` には `Emit(type_ string, parents []int) int` というメソッドが 1 つだけあり、既定実装 `LocalEventClient` はミューテックスロックでプロセス内の単調増加カウンターを維持します。`pkg/plot` の `basePlot` は `eventClient` フィールドを通じて ID を取得し、同時にその ID を `pkg/scarecrow` のイベント構造体（`SeedInputEvent.SeedID`、`SeedRipenEvent.FruitID`、`SeedWitherEvent.WeedID` など）へ書き込み、メトリクス・ログ・ライフサイクルオブザーバーが消費できるようにします。
 
@@ -11,7 +11,7 @@
 - **イベント ID 割り当て器**の最小契約 `EventClient` を定義し、「ID をどう生成するか」を plot のスケジューリングロジックから切り離します。
 - プロセス内で並行安全な既定実装 `LocalEventClient` を提供します。
 - `Seed` / `Seal` / `witherSeed` / `pruneSeed` / `ripenSeed` / `sprout` の終了処理などの重要ポイントで単調増加する整数 ID を取得できるようにし、`parents` で「seed → fruit → 下流 seed → …」という因果チェーンをつなぎます。
-- これらの ID はイベント構造体とともに `scarecrow.Hub` へ渡り、最終的に `persist.LifecycleWatcher` によって SQLite の `events` / `event_parents` テーブルへ書き込まれます。
+- seed 関連イベント（`seed` / `fruit` / `weed` / `prune`）の ID はイベント構造体とともに `scarecrow.Hub` へ入り、最終的に `persist.LifecycleWatcher` によって SQLite の `events` / `event_parents` テーブルへ書き込まれます。seal ID はメモリ内でのみ受け渡され、データベースには保存されません。
 
 > 本パッケージのエクスポートシンボルは `EventClient`、`LocalEventClient`、`NewLocalEventClient`、`(*LocalEventClient).Emit` の**4 つだけ**です。`EventKind` 列挙型も `Event` 構造体もありません。イベント種別（`"seed"` / `"fruit"` / `"weed"` / `"prune"` / `"seal"`）は文字列リテラルとして `pkg/plot` から `Emit` の `type_` 引数へ渡されます。
 
@@ -117,7 +117,7 @@ flowchart LR
     S1 -.->|"pruneIf ヒット<br/>Emit(prune, [1])"| P2["prune<br/>id=2"]
 ```
 
-`fruit` → 複数の下流 `seed` になるとファンアウトが形成されます（`SplitPlot` の複数の果実、`RoutePlot` の複数のターゲットも同様です）。`weed` / `prune` はチェーンの終端であり、それ以上産出しません。seal チェーンは「上流のマージ seal → 下流」に沿って伝播します。
+`fruit` → 複数の下流 `seed` になるとファンアウトが形成されます（`SplitPlot` の複数の果実、`RoutePlot` の複数のターゲットも同様です）。`weed` / `prune` はチェーンの終端であり、それ以上産出しません。seal チェーンは「上流のマージ seal → 下流」に沿って伝播します：
 
 ```mermaid
 flowchart LR
@@ -166,10 +166,10 @@ sequenceDiagram
 
 ID 自体は業務情報を運ばず、データベースへの保存は完全にオブザーバーが行います：
 
-- `scarecrow.MetricsWatcher` はイベントのフィールドに基づいて入力 / 成熟 / 枯萎 / 剪枝のカウントと上流・下流の由来分布を維持し、イベント ID は読み取りません。
+- `scarecrow.MetricsWatcher` はイベントのフィールドに基づいて入力 / 成熟 / 枯死 / 剪定のカウントと上流・下流の由来分布を維持し、イベント ID は読み取りません。
 - `persist.LifecycleWatcher` は 4 種類の seed イベントを `persist.LifecycleRecord` へ変換し、`InsertLifecycleEvent` で `events` + `event_parents` に書き込み、`status` テーブルを更新します。
 - `persist.LogWatcher` は可読なログを出力し、`scarecrow.PrintWatcher` は進捗を表示します。どちらもデータベースへは保存しません。
-- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` は `pkg/assembly` が `Run` / `Start` 時に Hub へ自動登録します。`PrintWatcher` は呼び出し側が `AddWatcher` で手動でマウントする必要があります。
+- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` は `pkg/assembly` が `Run` / `Start` 時に Hub へ自動登録します。リモート報告設定（`*reporter.Config` が非 nil）を伴う場合は、さらに `reporter.PushWatcher` も登録されます。`PrintWatcher` は呼び出し側が `AddWatcher` で手動でマウントする必要があります。
 
 ```mermaid
 flowchart LR
@@ -177,20 +177,21 @@ flowchart LR
     H --> M["MetricsWatcher<br/>メモリメトリクス"]
     H --> L["LifecycleWatcher<br/>SQLite"]
     H --> G["LogWatcher<br/>ログファイル"]
-    H --> R["PrintWatcher<br/>ターミナル進捗"]
+    H --> P["PrintWatcher<br/>ターミナル進捗"]
+    H --> W["PushWatcher<br/>リモート報告（任意）"]
 ```
 
-`type_` と保存値の対応関係は次のとおりです（`LifecycleRecord` の `Kind` 定数は `pkg/persist/lifecycle.go` で定義されています）。
+`LifecycleRecord` は `pkg/persist/lifecycle.go` で定義された閉じた型の共用体（`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`）で、**具体的なレコード型が保存値を決めます**。実行期の `Kind` フィールドはありません。`type_` と保存値の対応は次のとおりです：
 
-| `Emit` の `type_` | イベント | `LifecycleRecord.Kind` | `events.event_type` | `status.status` |
+| `Emit` の `type_` | イベント | `LifecycleRecord` の実装 | `events.event_type` | `status.status` |
 |-------------------|------|------------------------|---------------------|-----------------|
-| `"seed"` | `SeedInputEvent` | `"seed"` | `"seed"` | `"seed"` |
-| `"fruit"` | `SeedRipenEvent` | `"ripen"` | `"ripen"` | `"ripen"` |
-| `"weed"` | `SeedWitherEvent` | `"wither"` | `"wither"` | `"wither"` |
-| `"prune"` | `SeedPruneEvent` | `"prune"` | `"prune"` | `"prune"` |
+| `"seed"` | `SeedInputEvent` | `SeedRecord` | `"seed"` | `"seed"` |
+| `"fruit"` | `SeedRipenEvent` | `RipenRecord` | `"ripen"` | `"ripen"` |
+| `"weed"` | `SeedWitherEvent` | `WitherRecord` | `"wither"` | `"wither"` |
+| `"prune"` | `SeedPruneEvent` | `PruneRecord` | `"prune"` | `"prune"` |
 | `"seal"` | `SealInputEvent` / `SealMergeEvent` | （レコードを生成しません） | — | — |
 
-> 命名の階層：`Emit` の `type_` は植物学の比喩（`fruit` / `weed`）を使い、`LifecycleRecord.Kind` と保存値は状態のセマンティクス（`ripen` / `wither`）を使います。`LifecycleRecord.ParentIDs` はイベントのフィールドから取得します。seed の入力は `SeedInputEvent.Parents` を使い、成熟 / 枯萎 / 剪枝はそれぞれ `[]int{SeedID}` を使用します。
+> 命名の階層：`Emit` の `type_` は植物学の比喩（`fruit` / `weed`）を使い、`LifecycleRecord` の具体的な型と保存値は状態のセマンティクス（`ripen` / `wither`）を使います。各レコード型の `ParentIDs` はイベントのフィールドから取得します。seed の入力は `SeedInputEvent.Parents` を使い、成熟 / 枯死 / 剪定はそれぞれ `[]int{SeedID}` を使用します。
 
 ## 使用例
 
@@ -240,7 +241,7 @@ func main() {
 	double.SetEventClient(client) // 覆盖 AddPlot 注入的默认 client
 	format.SetEventClient(client) // 同一条链路必须共用同一实例
 
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }

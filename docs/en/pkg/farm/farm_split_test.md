@@ -1,6 +1,6 @@
 # pkg/farm/farm_split_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -20,8 +20,8 @@
 
 ## Key Details
 
-- **The split function covers empty input**: `split` returns `nil, nil` for an empty string, used to cover the "empty split result" branch (no yield is emitted).
-- **Number parsing error**: a `strconv.Atoi` failure during splitting returns an error, which then takes the widhered path of `SplitPlot`; the inputs in this case are all valid integers, verifying the pure success path.
+- **The empty-input branch is not triggered**: the `split` code returns `nil, nil` for an empty string (no yield is emitted), but this case actually inputs `{"1,2,3", "4,5"}`, so that branch is never reached; it only verifies the normal split path.
+- **Number parsing error**: a `strconv.Atoi` failure during splitting returns an error, which then takes the widhered path of `SplitPlot`; the inputs in this case are all valid integers, so that branch is not triggered either.
 - **`head`'s fan-in**: `head` uses `WithTenders(2)` and processes multiple yields from `split` concurrently; its `GetSeedNum` comes from `MetricsWatcher` counting the `SeedInputEvent`s delivered by the upstream.
 - **`split` does not set `WithTenders` explicitly**: it keeps the default `runtime.NumCPU()`, showing that the concurrency level does not affect the "count by input" semantics.
 

@@ -194,6 +194,8 @@ func main() {
 - `pkg/assembly`: 実行期リソースの組み立て。メトリクス / ライフサイクル / ログオブザーバーを作成して `Hub` に登録し、`Resources.Stop` で一括回収します
 - `pkg/persist`: ライフサイクル SQLite と構造化実行ログの watcher、レコードハンドラ、照会インターフェース
 - `pkg/funnel`: 汎用的な非同期レコードの生産 / 消費基盤（`Inlet` / `Spout`）
+- `pkg/reporter`: リモート報告と注入。図要素 / スナップショット / エラーのプッシュ、周期スナップショット ticker、注入ポーリング ticker を含みます
+- `pkg/metronome`: ビートクロック、配信 hub、ticker 抽象
 - `pkg/runtime`: `Payload`、イベント ID の割り当て（`EventClient`）、制御信号などの実行期基本型
 
 ## 可観測性（Observability）
@@ -226,7 +228,7 @@ func main() {
 	if err := farm.AddWatcher(scarecrow.NewPrintWatcher("farm")); err != nil {
 		panic(err)
 	}
-	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO"); err != nil {
+	if err := farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -235,6 +237,22 @@ func main() {
 Farm レベルの watcher は Farm 自身の Hub に登録され、その Hub は各 Plot の Hub にも接続されます。そのため `FarmStartEvent` / `FarmEndEvent` だけでなく、すべての Plot の seed イベントも受信できます。実行終了後も指標と永続化オブザーバーは Hub に残るため、`scarecrow.Find` で取得できます（`SinglePlot.Harvest` はこの仕組みに基づいてライフサイクル SQLite を照会します）。
 
 > `Plot` と `Farm` 自身は `scarecrow.Hub` のみを保持し、spout や永続化オブザーバーのインスタンスを直接保持しません。ログ、ライフサイクルなどの実行期リソースは `pkg/assembly` が一元的に作成、登録、起動、回収します。
+
+実行状態を `celestialflow-web` にプッシュする場合は、`Run` / `Start` に報告設定を渡します。
+
+```go
+if err := farm.Run(map[string][]any{
+	"root": {1, 2, 3},
+}, "INFO", &grow.Report{
+	URL: "http://127.0.0.1:5005",
+}); err != nil {
+	panic(err)
+}
+```
+
+`URL` は web サービスのアドレスを指します。`SessionID` を空にすると、Farm 名と起動時刻から生成されます。報告を有効にすると、`assembly` はプッシュオブザーバー、周期スナップショット ticker、リモート注入 ticker を追加で組み立てます。図要素情報、状態スナップショット、タスクエラー、セッションの切断が web にプッシュされ、web 上で送信された注入タスクも現在の Farm に取り込まれます。`nil` を渡すとローカル実行を意味し、報告リソースは組み立てられません。
+
+完全な例は [`demo/demo_web/main.go`](demo/demo_web/main.go) を参照してください。先に `celestialflow-web` でサービスを起動し、`go run ./demo/demo_web` を実行すると、ページ上でグラフ構造、ノード状態、周期スナップショット、エラー情報を確認できます。
 
 ## 典型的な使用方法（Typical Usage）
 
@@ -245,7 +263,7 @@ Farm レベルの watcher は Farm 自身の Hub に登録され、その Hub �
 3. `farm.AddPlot(...)` を呼び出してノードを登録する
 4. `farm.Connect(...)` を呼び出して上流下流の関係を構築する
 5. （任意）`farm.AddWatcher(...)` を呼び出して `PrintWatcher` などの自作オブザーバーを接続する
-6. `farm.Run(inputs, logLevel)` を呼び出して初期入力を注入し実行する
+6. `farm.Run(inputs, logLevel, report)` を呼び出して初期入力を注入し実行する（`report` に `nil` を渡すとローカル実行）
 
 このうち `Farm.Connect` が使用するのは「グループ間の完全接続」というセマンティクスで、ソースグループとターゲットグループの間に直積的な接続を確立します。1 つの seed から複数の下流タスクを派生させたい場合は、`api.NewSplitPlot(...)`（1 対多）または `api.NewRoutePlot(...)`（名前による宛先指定転送）を使用できます。
 
@@ -276,7 +294,7 @@ func main() {
 		}
 	}()
 
-	if err := farm.Start("INFO"); err != nil {
+	if err := farm.Start("INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -290,14 +308,17 @@ pkg/
   assembly/   # 运行期资源装配
   farm/       # 图结构与调度
   funnel/     # 通用异步消费基础设施
+  metronome/  # 节拍时钟与 ticker 分发
   persist/    # 日志与生命周期持久化
   plot/       # 泛型并发节点
+  reporter/   # 远程上报与注入
   runtime/    # 事件、信号与运行时载体
   scarecrow/  # 事件模型、分发 Hub 与观察者
 
 demo/
   demo_farm/  # 最小 Farm 流水线
   demo_prune/ # prune 去重（单 Plot 与 Farm）
+  demo_web/   # 远程上报到 celestialflow-web
 ```
 
 ## 動作環境（Requirements）

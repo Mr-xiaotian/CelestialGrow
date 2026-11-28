@@ -1,6 +1,6 @@
 # pkg/plot/plot_single.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot_single.go` defines `SinglePlot[S, F]`, the most commonly used node type in `pkg/plot`: it packages "receive seed → run cultivator concurrently → produce one fruit → broadcast to all connected downstreams" into a connectable, observable, retryable generic node.
 
@@ -55,7 +55,7 @@ Implementation notes:
 
 1. First declare `var p *SinglePlot[S, F]`, then build the shared skeleton with `newBasePlot[S, F, F]`, and finally assign `base` to `p`;
 2. The `ripenSeed` hook passed to `newBasePlot` is a closure that calls `p.ripenSeed(...)` internally. It captures `p` before it has been assigned, but the closure is only invoked on the `sprout` / `tend` path after `StartAsync`, by which time `p` is definitely assigned;
-3. Channel allocation, default `EventClient` and `Hub` initialization, and `context` derivation are all done inside `newBasePlot` (see the "Construction" section of `plot.md`).
+3. Channel allocation, default `EventClient`, watcher `Hub` and ticker `Hub` initialization, and `context` derivation are all done inside `newBasePlot` (see the "Construction" section of `plot.md`).
 
 ### `ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time)` (unexported)
 
@@ -198,7 +198,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

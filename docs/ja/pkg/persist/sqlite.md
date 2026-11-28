@@ -1,6 +1,6 @@
 # pkg/persist/sqlite.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -24,7 +24,7 @@ type LifecycleEventRecord struct {
 | フィールド | 説明 |
 |------|------|
 | `EventID` | イベントの一意 ID（主キー）。`scarecrow` イベントが保持する `SeedID` / `FruitID` / `WeedID` / `PruneID` に由来 |
-| `EventType` | イベント種別。`pkg/persist` 自身は `record.Kind`、すなわち `seed` / `ripen` / `wither` / `prune` を書き込むが、テーブル構造は列挙を強制しない |
+| `EventType` | イベント種別。`pkg/persist` 自身は記録型に従って `seed` / `ripen` / `wither` / `prune` を書き込むが、テーブル構造は列挙を強制しない |
 | `Plot` | イベントが属する plot 名 |
 | `TS` | タイムスタンプ（Unix 秒、浮動小数点、ミリ秒精度）。イベント自身の時刻から換算：`float64(t.UnixMilli()) / 1000` |
 
@@ -221,17 +221,17 @@ if err := tx.Commit(); err != nil { ... }
 
 ```mermaid
 flowchart TD
-    A["HandleRecord seed/ripen/wither/prune"] -->|Kind = seed| B[InsertLifecycleEvent]
-    A -->|Kind = ripen| B
-    A -->|Kind = wither| B
-    A -->|Kind = prune| B
+    A["HandleRecord(SeedRecord / RipenRecord / WitherRecord / PruneRecord)"] -->|"SeedRecord"| B[InsertLifecycleEvent]
+    A -->|"RipenRecord"| B
+    A -->|"WitherRecord"| B
+    A -->|"PruneRecord"| B
     B --> C["トランザクション: INSERT events + N×INSERT event_parents"]
     C --> D{Commit?}
-    D -->|はい| E{Kind}
-    E -->|seed| F1[UpsertLifecycleStatusSeed<br/>status = seed]
-    E -->|ripen| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
-    E -->|wither| F3[PromoteLifecycleStatusWither<br/>status = wither]
-    E -->|prune| F4[PromoteLifecycleStatusPrune<br/>status = prune]
+    D -->|はい| E{記録型}
+    E -->|SeedRecord| F1[UpsertLifecycleStatusSeed<br/>status = seed]
+    E -->|RipenRecord| F2[PromoteLifecycleStatusRipen<br/>status = ripen]
+    E -->|WitherRecord| F3[PromoteLifecycleStatusWither<br/>status = wither]
+    E -->|PruneRecord| F4[PromoteLifecycleStatusPrune<br/>status = prune]
     D -->|いいえ| F[rollbackOnError が自動ロールバック]
     F1 --> G[(status テーブル)]
     F2 --> G

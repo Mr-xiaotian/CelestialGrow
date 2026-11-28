@@ -1,6 +1,6 @@
 # pkg/plot/plot_harvest_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot_harvest_test.go` は `plot` パッケージの「**結果スナップショット**」テストセットです。`SinglePlot.Run` でバッチ実行した後に `Harvest` を呼び出し、各 seed の最終的なライフサイクル状態（`ripen` / `wither` + `FruitJSON` + `WitherMessage`）を取得して、次を検証します。
 
@@ -79,8 +79,8 @@ func indexStatusesBySeed(records []persist.LifecycleStatusRecord) map[string]per
 
 - テストパッケージ：`package plot_test`（ブラックボックステスト）であり、`SinglePlot` の未エクスポートフィールドには直接アクセスしません。
 - `StartAsync` / `Seal` を明示的に呼び出さず、すべて `Run(seeds, "INFO")` の内部で完結します。
-- `Run` は `assembly.StartPlotResources` を通じて `MetricsWatcher` と `LifecycleWatcher` を登録するため、`GetCompleted` はイベントストリームから再構築された指標を読め、`Harvest` は `LifecycleWatcher.DBPath()` からすでに永続化されたデータベースを見つけられます。
-- `Run` は戻る前に `resources.Stop()` でオブザーバを停止してデータベースを閉じ、その後 `Harvest` が `persist.LoadLifecycleStatusesFromPath` でデータベースを開き直してオフライン照会します。
+- `Run` は `assembly.StartLocalResources` を通じて指標・ライフサイクル・ログのオブザーバを組み立て（plot の watcher hub に登録し、ticker hub 上のメトロノームのクロックを起動します）、そのため `GetCompleted` はイベントストリームから再構築された指標を読め、`Harvest` は `LifecycleWatcher.DBPath()` からすでに永続化されたデータベースを見つけられます。
+- `Run` は戻る前に `StartLocalResources` が返した `stop()` を呼び出してオブザーバを停止しデータベースを閉じ、その後 `Harvest` が `persist.LoadLifecycleStatusesFromPath` でデータベースを開き直してオフライン照会します。
 - 3 つのケースの cultivator はいずれも「一時的なエラーの後に成功する」という挙動を返さないため、`maxRetries` のデフォルト値（`1`）の影響を受けません —— 失敗ケースは**確定的な失敗**、成功ケースは**1 回で成功**です。
 
 ## 実行方法

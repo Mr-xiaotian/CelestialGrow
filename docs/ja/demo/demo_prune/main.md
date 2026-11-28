@@ -1,6 +1,6 @@
 # demo/demo_prune/main.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -102,7 +102,7 @@ func (d *deduplicator) pruneIf(seed int) bool {
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 ```
@@ -212,7 +212,7 @@ func farmDedup() {
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

@@ -1,6 +1,6 @@
 # pkg/runtime/event.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `event.go` defines the runtime's **event ID allocation abstraction**: the `EventClient` interface has exactly one method, `Emit(type_ string, parents []int) int`, and the default implementation `LocalEventClient` uses a mutex to maintain an in-process monotonically increasing counter. `basePlot` in `pkg/plot` obtains IDs through its `eventClient` field and writes them at the same moment into the event structs of `pkg/scarecrow` (`SeedInputEvent.SeedID`, `SeedRipenEvent.FruitID`, `SeedWitherEvent.WeedID`, and so on), where metrics, logs, and lifecycle watchers consume them.
 
@@ -11,7 +11,7 @@
 - Defines the minimal contract of the **event ID allocator**, `EventClient`, decoupling "how IDs are generated" from the plot scheduling logic.
 - Provides the in-process, concurrency-safe default implementation `LocalEventClient`.
 - Ensures key points such as `Seed` / `Seal` / `witherSeed` / `pruneSeed` / `ripenSeed` / `sprout` finalization all obtain a monotonically increasing integer ID, and uses `parents` to chain the causal relationship "seed → fruit → downstream seed → …".
-- These IDs travel with the event structs into `scarecrow.Hub` and are ultimately written by `persist.LifecycleWatcher` into the `events` / `event_parents` tables of SQLite.
+- The IDs of seed-related events (`seed` / `fruit` / `weed` / `prune`) travel with the event structs into `scarecrow.Hub` and are ultimately written by `persist.LifecycleWatcher` into the `events` / `event_parents` tables of SQLite; seal IDs only travel in memory and are never persisted.
 
 > This package has **only** four exported symbols: `EventClient`, `LocalEventClient`, `NewLocalEventClient`, and `(*LocalEventClient).Emit`; there is no `EventKind` enum and no `Event` struct. Event kinds (`"seed"` / `"fruit"` / `"weed"` / `"prune"` / `"seal"`) are passed as string literals by `pkg/plot` to the `type_` parameter of `Emit`.
 
@@ -169,7 +169,7 @@ The ID itself carries no business information; persistence is entirely the watch
 - `scarecrow.MetricsWatcher` maintains input / ripen / wither / prune counts and the upstream-downstream source distribution from event fields, and does not read event IDs.
 - `persist.LifecycleWatcher` translates the four kinds of seed events into `persist.LifecycleRecord`, then writes them into `events` + `event_parents` via `InsertLifecycleEvent`, and updates the `status` table.
 - `persist.LogWatcher` outputs readable logs; `scarecrow.PrintWatcher` prints progress. Neither of them persists anything.
-- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` are registered on the Hub automatically by `pkg/assembly` during `Run` / `Start`; `PrintWatcher` must be attached manually by the caller through `AddWatcher`.
+- `MetricsWatcher` / `LifecycleWatcher` / `LogWatcher` are registered on the Hub automatically by `pkg/assembly` during `Run` / `Start`; when a remote reporting configuration is present (a non-nil `*reporter.Config`) an additional `reporter.PushWatcher` is registered. `PrintWatcher` must be attached manually by the caller through `AddWatcher`.
 
 ```mermaid
 flowchart LR
@@ -177,20 +177,21 @@ flowchart LR
     H --> M["MetricsWatcher<br/>in-memory metrics"]
     H --> L["LifecycleWatcher<br/>SQLite"]
     H --> G["LogWatcher<br/>log files"]
-    H --> R["PrintWatcher<br/>terminal progress"]
+    H --> P["PrintWatcher<br/>terminal progress"]
+    H --> W["PushWatcher<br/>remote reporting (optional)"]
 ```
 
-The correspondence between `type_` and the persisted values is as follows (`LifecycleRecord`'s `Kind` constants are defined in `pkg/persist/lifecycle.go`):
+`LifecycleRecord` is a sealed type union defined in `pkg/persist/lifecycle.go` (`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`); **the concrete record type determines the persisted value**, and there is no runtime `Kind` field. The correspondence between `type_` and the persisted values is as follows:
 
-| `Emit`'s `type_` | Event | `LifecycleRecord.Kind` | `events.event_type` | `status.status` |
+| `Emit`'s `type_` | Event | `LifecycleRecord` implementation | `events.event_type` | `status.status` |
 |-------------------|------|------------------------|---------------------|-----------------|
-| `"seed"` | `SeedInputEvent` | `"seed"` | `"seed"` | `"seed"` |
-| `"fruit"` | `SeedRipenEvent` | `"ripen"` | `"ripen"` | `"ripen"` |
-| `"weed"` | `SeedWitherEvent` | `"wither"` | `"wither"` | `"wither"` |
-| `"prune"` | `SeedPruneEvent` | `"prune"` | `"prune"` | `"prune"` |
+| `"seed"` | `SeedInputEvent` | `SeedRecord` | `"seed"` | `"seed"` |
+| `"fruit"` | `SeedRipenEvent` | `RipenRecord` | `"ripen"` | `"ripen"` |
+| `"weed"` | `SeedWitherEvent` | `WitherRecord` | `"wither"` | `"wither"` |
+| `"prune"` | `SeedPruneEvent` | `PruneRecord` | `"prune"` | `"prune"` |
 | `"seal"` | `SealInputEvent` / `SealMergeEvent` | (produces no record) | — | — |
 
-> Naming layers: `Emit`'s `type_` uses botanical metaphors (`fruit` / `weed`), while `LifecycleRecord.Kind` and the persisted values use state semantics (`ripen` / `wither`). `LifecycleRecord.ParentIDs` comes from event fields: seed input uses `SeedInputEvent.Parents`, and ripen / wither / prune each use `[]int{SeedID}`.
+> Naming layers: `Emit`'s `type_` uses botanical metaphors (`fruit` / `weed`), while the concrete types and persisted values of `LifecycleRecord` use state semantics (`ripen` / `wither`). The `ParentIDs` of each record type come from event fields: seed input uses `SeedInputEvent.Parents`, and ripen / wither / prune each use `[]int{SeedID}`.
 
 ## Usage Examples
 
@@ -240,7 +241,7 @@ func main() {
 	double.SetEventClient(client) // 覆盖 AddPlot 注入的默认 client
 	format.SetEventClient(client) // 同一条链路必须共用同一实例
 
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }

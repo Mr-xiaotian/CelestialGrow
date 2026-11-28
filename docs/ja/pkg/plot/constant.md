@@ -1,6 +1,6 @@
 # pkg/plot/constant.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `constant.go` は `plot` パッケージ内の非公開定数の集合です。現在はセンチネル文字列を 1 つだけ定義しており、`runtime.Payload.Source` フィールドで「外部の呼び出し元」と「ある名前付きの上流 plot」を区別するために使用します。
 
@@ -32,7 +32,7 @@ const sourceInput = "__input__"
    ```go
    func (p *basePlot[S, F, Y]) Seal() {
        sealID := p.eventClient.Emit("seal", []int{})
-       p.emit(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
+       p.watcherHub.OnEvent(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
        p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
    }
    ```

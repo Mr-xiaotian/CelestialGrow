@@ -1,6 +1,6 @@
 # pkg/plot/option.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `option.go` defines the "functional options" configuration layer for all nodes. Every `Option` is a small closure that mutates `*plotOptions` once; `newBasePlot` first takes `defaultOptions()` and then applies the `Option`s passed in by the user in order, so `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` share the same configuration.
 
@@ -27,7 +27,7 @@ type plotOptions struct {
 
 `Option` is a function that "takes `*plotOptions`, mutates it in place, and returns nothing", the common optional-parameter pattern in Go.
 
-> The log level is **not** in `plotOptions`: it is passed by `Run(seeds, logLevel)` to `assembly.StartPlotResources` at runtime, so different runs of the same plot can use different log levels.
+> The log level is **not** in `plotOptions`: it is passed by `Run(seeds, logLevel)` at runtime to `assembly.StartLocalResources` (together with the plot's watcher hub, ticker hub, and `metronome.DefaultInterval`), so different runs of the same plot can use different log levels.
 
 ## Defaults
 
@@ -98,7 +98,7 @@ p := plot.NewSinglePlot("dedup",
 ## Notes
 
 - The `n` in `WithMaxRetries(n)` **does not include** the first execution; `n=0` means "no retry".
-- The `attempt` of `WithRetryDelay` is 1-based. The source calls `Sleep(retryDelay(attempt))` after every failure, **including the last one** (when no further retry will happen), so the backoff function is called one extra time at a position where an idle wait may occur.
+- The `attempt` of `WithRetryDelay` is 1-based. After errors are filtered by `retryIf`, the source calls `Sleep(retryDelay(attempt))` after every failure, **including the last one** (when no further execution will happen); when `retryIf` returns `false`, it breaks right before the `Sleep`.
 - The predicate of `WithPruneIf` is evaluated before the `cultivator` and **takes precedence over retry**: once the predicate returns `true`, the seed neither calls the `cultivator` nor enters the retry loop, and goes straight to `pruneSeed`. The predicate defaults to `nil` (no pruning).
 - Inside `WithPruneIf`, a type assertion restores `any` to `S`; if the assertion fails, it is treated as "no pruning". The generic parameter `S` is inferred from the parameter type of the passed predicate and need not be specified explicitly.
 - The log level is controlled by the `logLevel` parameter of `Run`; the `WithLogLevel` Option no longer exists.

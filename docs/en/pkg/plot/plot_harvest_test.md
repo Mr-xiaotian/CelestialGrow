@@ -1,6 +1,6 @@
 # pkg/plot/plot_harvest_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot_harvest_test.go` is the "**result snapshot**" test set of the `plot` package. It runs a batch through `SinglePlot.Run` and then calls `Harvest` to fetch the final lifecycle status of each seed (`ripen` / `wither` + `FruitJSON` + `WitherMessage`), verifying:
 
@@ -79,8 +79,8 @@ Verifies:
 
 - Test package: `package plot_test` (black-box testing); it does not access the unexported fields of `SinglePlot` directly;
 - It does not explicitly call `StartAsync` / `Seal`; all of that is done inside `Run(seeds, "INFO")`;
-- `Run` registers `MetricsWatcher` and `LifecycleWatcher` through `assembly.StartPlotResources`, so `GetCompleted` can read the metrics rebuilt from the event stream, and `Harvest` can find the persisted database through `LifecycleWatcher.DBPath()`;
-- Before `Run` returns it calls `resources.Stop()` to stop the watchers and close the database; `Harvest` then reopens the database with `persist.LoadLifecycleStatusesFromPath` for an offline query;
+- `Run` assembles the metrics, lifecycle, and log watchers through `assembly.StartLocalResources` (registered on the plot's watcher hub, and starting the metronome clock on the ticker hub), so `GetCompleted` can read the metrics rebuilt from the event stream, and `Harvest` can find the persisted database through `LifecycleWatcher.DBPath()`;
+- Before `Run` returns it calls the `stop()` returned by `StartLocalResources` to stop the watchers and close the database; `Harvest` then reopens the database with `persist.LoadLifecycleStatusesFromPath` for an offline query;
 - The cultivator of all three cases never returns "transient error then success", so they are unaffected by the default `maxRetries` value (`1`)—the failure cases are **deterministic failures** and the success cases **succeed on the first attempt**.
 
 ## How to run

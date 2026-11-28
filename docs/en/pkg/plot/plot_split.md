@@ -1,6 +1,6 @@
 # pkg/plot/plot_split.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot_split.go` defines `SplitPlot[S, F]`: a node that does **one-to-many splitting**. Its `cultivator` (whose constructor parameter is named `splitter`) returns `[]F`, and the node then forwards each element of the slice as a separate downstream yield.
 
@@ -146,7 +146,7 @@ head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 
 _ = f.AddPlot(split, head)
 _ = f.Connect([]plot.PlotNode{split}, []plot.PlotNode{head}) // 上游 yield int → 下游 seed int
-_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO")
+_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO", nil)
 ```
 
 ## Notes

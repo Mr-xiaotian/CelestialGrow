@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -60,7 +60,7 @@
 - **fan-out / fan-in counting**: `counts[seed]` comes from `head`'s `cultivator`, which is called concurrently, so the test protects it with a `sync.Mutex`; `GetSeedNum` / `GetFruitNum` / `GetWeedNum` instead read the aggregated results of `MetricsWatcher`.
 - **Failure routing**: `basePlot.witherSeed` only records the failure and emits `SeedWitherEvent` without forwarding it downstream; the number of fruits received by `head` is strictly equal to `midA.GetFruitNum() + midB.GetFruitNum()`, and this assertion is verified in `TestFarmStructure121PartialFailure`.
 - **Channel configuration**: `WithChanSize` is explicitly enlarged in `TestFarmStructure21FaninDifferentSpeed` to prevent a slow source from blocking writes from a fast source.
-- **Run entry point**: all four cases call `Run(inputs, "INFO")`, so they also cover the default batch path of `InjectTasks` and `InjectTerminations(sourceNodes)`.
+- **Run entry point**: all four cases call `Run(inputs, "INFO", nil)`, so they also cover the default batch path of `InjectTasks` and `InjectTerminations(sourceNodes)`.
 
 ## Related Source
 

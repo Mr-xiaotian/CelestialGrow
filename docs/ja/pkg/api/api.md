@@ -1,23 +1,25 @@
 # pkg/api/api.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
 `pkg/api` は CelestialGrow の**公開統一エントリパッケージ**です。新しい実装を一切導入せず、下位パッケージの主要な型とよく使う設定を 3 つの形式で再公開します。
 
-1. **型エイリアス**（`type X = pkg.Y`）：`Farm`、`SinglePlot`、`SplitPlot`、`RoutePlot`、`PlotNode`、`Option`；
-2. **コンストラクタの薄いラッパー**：`NewFarm`、`NewSinglePlot`、`NewSplitPlot`、`NewRoutePlot`；
+1. **型エイリアス**（`type X = pkg.Y`）：`Farm`、`SinglePlot`、`SplitPlot`、`RoutePlot`、`PlotNode`、`Option`、`PrintWatcher`、`Report`；
+2. **コンストラクタの薄いラッパー**：`NewFarm`、`NewSinglePlot`、`NewSplitPlot`、`NewRoutePlot`、`NewPrintWatcher`；
 3. **設定項目**：パッケージレベルの変数 `WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf`、およびジェネリック関数 `WithPruneIf`。
 
-下位の依存は 2 つのパッケージだけです。
+下位の依存は 4 つのパッケージです。
 
 | 下位パッケージ | 提供内容 |
 |--------|----------|
 | `pkg/farm` | `Farm`：ノード登録、ハイパーエッジ的な接続、全体のスケジューリングと外部注入 |
 | `pkg/plot` | `SinglePlot` / `SplitPlot` / `RoutePlot` / `PlotNode` / `Option` とその設定関数 |
+| `pkg/scarecrow` | `PrintWatcher`：イベントの進捗を標準出力へ出力するオブザーバー |
+| `pkg/reporter` | `Config`（`Report` エイリアスとしてエクスポート）：リモート報告とリモート注入の最小設定 |
 
-> 実行期のイベント観測機能（進捗出力、指標統計など）は `pkg/scarecrow` が提供し、`AddWatcher` を通じて注入します。`pkg/api` はいかなるオブザーバーコンストラクタも提供しません。進捗を出力する必要がある場合は `scarecrow.NewPrintWatcher` または独自の `scarecrow.Watcher` を使用してください。
+> 実行期のイベント観測機能（進捗出力、指標統計など）は `pkg/scarecrow` が提供し、`AddWatcher` を通じて注入します。`pkg/api` は標準出力オブザーバーのコンストラクタ `NewPrintWatcher` だけを追加で提供します。指標統計などの他のオブザーバーは、引き続き `pkg/scarecrow` から直接インポートするか、`scarecrow.Watcher` を独自実装する必要があります。
 
 エクスポート項目はすべてエイリアス、関数値、または 1 層のパススルーラッパーであるため、本パッケージの振る舞いの契約は完全に下位パッケージによって決まります。本ドキュメントでは「エクスポートシンボル一覧 + 型パラメータのセマンティクス + 既定値 + エラーシナリオ」に焦点を当てます。
 
@@ -31,10 +33,13 @@
 | `RoutePlot[S, Y]` | ジェネリック型エイリアス | `plot.RoutePlot[S, Y]` | ルーティングノード。処理関数は `map[string]Y` を返し、`key` は宛先となる下流の名前、`value` はその下流にのみ送信されます。 |
 | `PlotNode` | 型エイリアス | `plot.PlotNode` | ジェネリックパラメータを消去した統一ノードインターフェースで、`Farm` はこれを使って型の異なるノードを保持します。 |
 | `Option` | 型エイリアス | `plot.Option` | ノードのオプション設定で、実体は `func(*plotOptions)` です。`plotOptions` が非公開のため、パッケージ外では `Option` を**独自定義できません**。 |
-| `NewFarm(name string) *Farm` | コンストラクタ | `farm.NewFarm` | Farm を作成します（同時に内部のイベント Hub も作成します）。 |
+| `PrintWatcher` | 型エイリアス | `scarecrow.PrintWatcher` | イベントの進捗を標準出力へ出力するオブザーバー。 |
+| `Report` | 型エイリアス | `reporter.Config` | リモート報告の設定：サービスアドレス、セッション識別子、スナップショット周期と注入周期。 |
+| `NewFarm(name string) *Farm` | コンストラクタ | `farm.NewFarm` | Farm を作成します（同時に内部イベント Hub とティック Hub も作成します）。 |
 | `NewSinglePlot[S, F](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]` | コンストラクタ | `plot.NewSinglePlot` | 1 入力 1 出力ノードを作成します。 |
 | `NewSplitPlot[S, F](name string, splitter func(S) ([]F, error), opts ...Option) *SplitPlot[S, F]` | コンストラクタ | `plot.NewSplitPlot` | 分割ノードを作成します。 |
 | `NewRoutePlot[S, Y](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]` | コンストラクタ | `plot.NewRoutePlot` | ルーティングノードを作成します。 |
+| `NewPrintWatcher(name string) *PrintWatcher` | コンストラクタ | `scarecrow.NewPrintWatcher` | 標準出力の進捗オブザーバーを作成します。`name` は出力プレフィックスとして使用します。 |
 | `WithTenders(n int) Option` | パッケージレベル変数 | `plot.WithTenders` | 並行 tender 数。 |
 | `WithChanSize(n int) Option` | パッケージレベル変数 | `plot.WithChanSize` | seed チャネルのバッファサイズ。 |
 | `WithMaxRetries(n int) Option` | パッケージレベル変数 | `plot.WithMaxRetries` | 最大リトライ回数（初回実行は含みません）。 |
@@ -54,6 +59,8 @@ flowchart LR
         A3[PlotNode / Option]
         A4[NewFarm / New*Plot]
         A5[With*]
+        A6[PrintWatcher / NewPrintWatcher]
+        A7[Report]
     end
 
     subgraph FARM["pkg/farm"]
@@ -67,6 +74,14 @@ flowchart LR
         P4[PlotNode / Option<br/>インターフェースと設定]
     end
 
+    subgraph SCARECROW["pkg/scarecrow"]
+        S1[PrintWatcher<br/>標準出力オブザーバー]
+    end
+
+    subgraph REPORTER["pkg/reporter"]
+        R1[Config<br/>リモート報告設定]
+    end
+
     A1 -.別名.-> F1
     A2 -.別名.-> P1
     A2 -.別名.-> P2
@@ -77,6 +92,8 @@ flowchart LR
     A4 --> P2
     A4 --> P3
     A5 --> P4
+    A6 -.別名.-> S1
+    A7 -.別名.-> R1
 ```
 
 ## ジェネリックパラメータのセマンティクス
@@ -100,8 +117,9 @@ flowchart LR
 | `AddPlot(plots ...PlotNode) error` | 1 つ以上のノードを登録します。名前は空にできず、Farm 内で一意でなければなりません。登録後、ノードは Farm のイベントクライアントを共有します。 |
 | `Connect(fromPlots, toPlots []PlotNode) error` | 2 つのノードグループ間に**完全接続**（直積）を確立し、1 本ずつ上流の `ConnectTo` を呼び出して型検証を行います。 |
 | `AddWatcher(watcher scarecrow.Watcher) error` | Farm レベルの watcher を登録します。Farm イベントとすべての Plot イベントを同時に受信できます（Farm Hub は子 Hub として各 Plot に登録されます）。 |
-| `Run(inputs map[string][]any, logLevel string) error` | 同期実行：まず `inputs` を検証し、すべてのノードを起動してから、初期 seed を注入し、**ソースノード**へ終了信号を送信し、最後にすべての終了を待ちます。`logLevel` が空の場合は `INFO` として扱います。 |
-| `Start(logLevel string) error` | 組み立てと起動のみを行い、seed / 終了信号は一切注入しません。すべてのノードが終了するまでブロックします。外部駆動のシナリオに適しています。終了信号を注入する者がいない場合、`Start` は戻りません。 |
+| `AddTicker(ticker metronome.Ticker) error` | Farm レベルの ticker を登録し、Farm のティッククロックに従って動作させます。 |
+| `Run(inputs map[string][]any, logLevel string, report *reporter.Config) error` | 同期実行：まず `inputs` を検証し、すべてのノードを起動してから、初期 seed を注入し、**ソースノード**へ終了信号を送信し、最後にすべての終了を待ちます。`report` が `nil` の場合はローカルリソースのみを組み立てます。 |
+| `Start(logLevel string, report *reporter.Config) error` | 組み立てと起動のみを行い、seed / 終了信号は一切注入しません。すべてのノードが終了するまでブロックします。外部駆動のシナリオに適しています。終了信号を注入する者がいない場合、`Start` は戻りません。 |
 | `InjectTasks(tasks map[string][]any) error` | 指定したノードへ seed を注入します。`Start`/`Run` の実行中に呼び出せます。 |
 | `InjectTerminations(nodes []string) error` | 指定したノードへ終了信号を注入します。あるノードを終了させた後にそのノードへ seed を播いても処理されません。 |
 | `PlotCount() int` | 登録済みノード数。 |
@@ -116,6 +134,8 @@ flowchart LR
 | 実行中に継続的にタスクを投入（ストリーミング / 外部駆動） | ❌ 直ちに封口される | ✅ `InjectTasks` / `InjectTerminations` と組み合わせる |
 | 戻るタイミング | すべてのノードが処理を終えて終了した後 | すべての終了信号を受信し、処理が終わった後 |
 
+`logLevel` が空文字列または認識できないレベルの場合は `INFO` として扱います。`report` が `nil` の場合は純粋なローカル実行を意味し、指標・ライフサイクル・ログの各オブザーバーのみを組み立てます。非 nil の `*Report` を渡した場合は、さらにリモートプッシュ、定期スナップショット、リモート注入のポーリングを組み立てます。`Farm` は実行前に空の `SessionID` を補完します（形式は `<farm>@<ナノ秒タイムスタンプ>`）。
+
 ## Plot のよく使うメソッド
 
 `SinglePlot` / `SplitPlot` / `RoutePlot` は同じ `basePlot` メソッド群を共有します（ジェネリックなシグネチャは前述）。
@@ -123,7 +143,9 @@ flowchart LR
 | メソッド | 説明 |
 |------|------|
 | `AddWatcher(watcher scarecrow.Watcher) error` | ノードレベルの watcher を登録します。重複登録するとイベントを重複して受信します。`Run`/`StartAsync` の前に呼び出す必要があります。 |
-| `Run(seeds []S, logLevel string)` | standalone モード：ログ / ライフサイクル / 指標リソースを組み立て、ノードを起動し、seed を播いて封口し、終了を待ちます。**戻り値はありません**。 |
+| `AddTicker(ticker metronome.Ticker) error` | ノードレベルの ticker を登録します。Farm の実行時は Farm のティッククロックと一緒に駆動されます。 |
+| `GetTickerHub() *metronome.Hub` | ノードが保持するティック Hub を返します（Farm はこれを自身の Hub の下に接続します）。 |
+| `Run(seeds []S, logLevel string)` | standalone モード：ローカルリソースを組み立て、ノードを起動し、seed を播いて封口し、終了を待ちます。**戻り値はありません**。 |
 | `Harvest() ([]persist.LifecycleStatusRecord, error)` | このノードで永続化済みの seed 状態スナップショットを読み取ります。standalone の `Run` または `Farm.Run/Start` の終了後に呼び出せます。 |
 | `GetSeedNum() int` | 入力総数（外部注入 + 上流からの投入）。 |
 | `GetFruitNum() int` | 成功数（成熟）。 |
@@ -148,10 +170,13 @@ flowchart LR
 |------|------|
 | `GetName() string` | ノード名を返します。一意性の検証と接続時のアドレス解決に使用します。 |
 | `GetState() int32` | 状態を返します：`0` = idle、`1` = running、`2` = done。 |
+| `GetMeta() scarecrow.NodeMeta` | 構築期のメタ情報（クラス名、実行モード、最大並行数）を返し、Farm の起動イベントに使用します。 |
 | `GetSeedChanAny() any` | seed チャネルを `any` として返し、`ConnectTo` が型アサーションを行うために使用します。 |
 | `ConnectTo(next PlotNode) error` | 本ノードの産出を下流の入力に接続します。上流下流の型が互換でない場合はエラーを返します。 |
 | `AddUpstream(name string)` | 上流の名前を登録します（上流が `ConnectTo` 内で呼び出します）。seal の集約に使用します。 |
 | `AddWatcher(listener scarecrow.Watcher) error` | オブザーバーを登録します。 |
+| `AddTicker(ticker metronome.Ticker) error` | ノードレベルの ticker を登録します。 |
+| `GetTickerHub() *metronome.Hub` | ノードレベルのティック Hub を返します。 |
 | `SetEventClient(eventClient runtime.EventClient)` | イベントクライアントを注入します。`Farm.AddPlot` はすべてのノードに Farm のクライアントを共有させます。 |
 | `StartAsync()` | スケジューラを非同期に起動します。 |
 | `WaitAsync()` | バックグラウンドのコルーチンが終了するのを待機します。 |
@@ -168,7 +193,7 @@ flowchart LR
 
 - `name`：Farm の名前で、ログの識別と `FarmStartEvent` / `FarmEndEvent` に使用します。
 - error は返しません。作成後すぐに `AddPlot` / `Connect` / `Run` を実行できます。
-- Farm 自身のログレベルはここでは設定せず、`Run(inputs, logLevel)` / `Start(logLevel)` のときに渡します。
+- Farm 自身のログレベルとリモート報告設定はここでは設定せず、`Run(inputs, logLevel, report)` / `Start(logLevel, report)` のときに渡します。
 
 ### `NewSinglePlot[S any, F any](name string, cultivator func(S) (F, error), opts ...Option) *SinglePlot[S, F]`
 
@@ -186,6 +211,14 @@ flowchart LR
 ### `NewRoutePlot[S any, Y any](name string, cultivator func(S) (map[string]Y, error), opts ...Option) *RoutePlot[S, Y]`
 
 ルーティングノードを作成します。`cultivator` が返すルーティングテーブルでは、`key` が宛先となる下流の名前、`value` がその下流へ送る yield です。異なる下流は異なる yield を受け取ることができ、ルーティングされていない下流は一切データを受け取りません。ルーティングテーブルに存在しても接続されていない下流はスキップされ、他のルーティング項目には影響しません。
+
+### `NewPrintWatcher(name string) *PrintWatcher`
+
+イベントの進捗を標準出力へ出力するオブザーバーを作成します。
+
+- `name`：出力プレフィックスで、異なる Plot / Farm の進捗行を区別するために使用します。
+- 返される `*PrintWatcher` は `scarecrow.Watcher` を実装しており、`Farm.AddWatcher` や `Plot.AddWatcher` に取り付けられます。
+- error は返しません。
 
 ## 設定関数
 
@@ -246,7 +279,6 @@ import (
     "fmt"
 
     grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
-    "github.com/Mr-xiaotian/CelestialGrow/pkg/scarecrow"
 )
 
 // double 将种子翻倍。
@@ -271,13 +303,14 @@ func main() {
     }
 
     // Farm 级 watcher：同时收到 Farm 事件与所有 Plot 事件。
-    if err := f.AddWatcher(scarecrow.NewPrintWatcher("demo_farm")); err != nil {
+    if err := f.AddWatcher(grow.NewPrintWatcher("demo_farm")); err != nil {
         panic(err)
     }
 
+    // 第三个参数为 report；nil 表示不启用远程上报。
     if err := f.Run(map[string][]any{
         "double": {1, 2, 3, 4},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 
@@ -388,7 +421,7 @@ func main() {
 
     if err := f.Run(map[string][]any{
         "split": {1, 2, 3},
-    }, "INFO"); err != nil {
+    }, "INFO", nil); err != nil {
         panic(err)
     }
 }
@@ -429,7 +462,7 @@ func main() {
     }
 
     errCh := make(chan error, 1)
-    go func() { errCh <- f.Start("INFO") }()
+    go func() { errCh <- f.Start("INFO", nil) }()
 
     <-started // 等节点启动，Farm Hub 已接入，指标统计才完整
 
@@ -450,6 +483,46 @@ func main() {
 
 > `Start` は初期タスクを一切注入しません。**ソースノード**に対して `InjectTerminations` を呼び出さない場合、またはグラフ内に上流の seal を待ち続けるノードが残っている場合、`Start` は戻りません。
 
+### 例 5：リモート報告とリモート注入
+
+非 nil の `*grow.Report` を渡すと、Farm は追加でプッシュオブザーバー、定期スナップショット、リモート注入のポーリングを組み立てます。スナップショット / 注入の周期はティック単位で、`0` の場合は `pkg/reporter` の既定値（スナップショット 1 ティック、注入 5 ティック）を使用します。
+
+```go
+package main
+
+import (
+    "fmt"
+
+    grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"
+)
+
+func main() {
+    root := grow.NewSinglePlot("root", func(seed int) (int, error) {
+        return seed * 2, nil
+    })
+
+    f := grow.NewFarm("report_farm")
+    if err := f.AddPlot(root); err != nil {
+        panic(err)
+    }
+
+    report := &grow.Report{
+        URL:             "http://127.0.0.1:8000",
+        SessionID:       "", // 留空时 Farm 生成 <farm>@<纳秒时间戳>
+        SnapshotPeriod:  2,  // 每 2 拍推送一次整图快照
+        InjectionPeriod: 5,  // 每 5 拍拉取一次远程注入
+    }
+
+    if err := f.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", report); err != nil {
+        panic(err)
+    }
+
+    fmt.Println("done")
+}
+```
+
+> リモートサービスに到達できなくてもローカル実行は妨げられません。プッシュの失敗はログに書かれるだけで、注入ポーリングの失敗はティック Hub のエラーハンドラが消費します。リモートから注入されたタスクと終了信号は、引き続き `InjectTasks` / `InjectTerminations` を通じて Farm に入ります。
+
 ## エラーシナリオ
 
 | エントリ | 発生しうる error |
@@ -457,24 +530,26 @@ func main() {
 | `Farm.AddPlot` | `nil` ノードの指定、名前が空、名前の重複（`plot %q already exists`）。 |
 | `Farm.Connect` | `from` / `to` を重複除去して nil を除いた結果が空；ノードがその Farm に未登録；上流下流の型が非互換（`ConnectTo` のアサーション失敗）。 |
 | `Farm.AddWatcher` / `Plot.AddWatcher` | watcher が `nil`；登録により Hub の環が形成される。 |
-| `Farm.Run` | `inputs` に未登録のノード名が含まれる；assembly のリソース組み立てまたは内部 watcher 登録に失敗；seed 注入時に型が一致しない。注入に失敗した場合もソースノードを封口して終了を待ち、その後でそのエラーを返します。 |
-| `Farm.Start` | assembly のリソース組み立てまたは内部 watcher 登録に失敗；その他のエラーは `InjectTasks` / `InjectTerminations` を通じて自身で確認する必要があります。 |
+| `Farm.AddTicker` / `Plot.AddTicker` | ticker が `nil`、重複登録、ティック周期が不正、または Hub の環が形成される。 |
+| `Farm.Run` | `inputs` に未登録のノード名が含まれる；実行期リソースの組み立てに失敗（Hub が nil、報告設定が不正など）；seed 注入時に型が一致しない。注入に失敗した場合もソースノードを封口して終了を待ち、その後でそのエラーを返します。 |
+| `Farm.Start` | 実行期リソースの組み立てに失敗；その他のエラーは `InjectTasks` / `InjectTerminations` を通じて自身で確認する必要があります。 |
 | `Farm.InjectTasks` | 対象ノードが未登録（まず全体を検証し、未登録なら注入しません）；seed 型がノードの `S` と一致しない（`plot %q seed type mismatch: got %T`）。型エラーは一部のノードへの注入が済んだ後に返されることがあります。 |
 | `Farm.InjectTerminations` | 対象ノードが未登録（まず全体を検証し、未登録なら終了信号を一切送信しません）。 |
 | `Plot.SeedAny` | 渡した値をノードの `S` にアサートできない。 |
-| `Plot.Harvest` | ライフサイクルオブザーバーが未組み立て（`Run` / `Farm.Run` 経由で起動していないなど）；またはデータベースパスがまだ準備できていない。 |
-| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` | error は返しません。 |
-| `Plot.Run` | **error は返しません**；assembly の組み立てに失敗した場合は静かに戻り、ノードは実行されません。 |
+| `Plot.Harvest` | ライフサイクルオブザーバーが未組み立て（`plot %q lifecycle watcher is not registered`）；データベースパスがまだ準備できていない（`plot %q lifecycle database is not ready`）。 |
+| `NewFarm` / `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` / `NewPrintWatcher` | error は返しません。 |
+| `Plot.Run` | **error は返しません**；リソースの組み立てに失敗した場合（Hub が nil など）は静かに戻り、ノードは実行されません。 |
 
 ## 注意事項
 
-1. **型エイリアス ≠ 新しい型**：`Farm`、`SinglePlot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]`、`PlotNode`、`Option` はいずれも `type X = pkg.Y` であり、下位の型と互換的に使用できます。
+1. **型エイリアス ≠ 新しい型**：`Farm`、`SinglePlot[S, F]`、`SplitPlot[S, F]`、`RoutePlot[S, Y]`、`PlotNode`、`Option`、`PrintWatcher`、`Report` はいずれも `type X = pkg.Y` であり、下位の型と互換的に使用できます。
 2. **Option は拡張不可**：`Option` の実体は `func(*plotOptions)` であり、`plotOptions` が非公開のためパッケージ外では `Option` を独自定義できず、組み込みの `With*` のみ使用できます。設定は渡された順に適用され、同じフィールドでは後から渡したものが前のものを上書きします。既定値は `pkg/plot/option.go` の `defaultOptions()` が管理します。
 3. **`With*` は変数**：`WithTenders`、`WithChanSize`、`WithMaxRetries`、`WithRetryDelay`、`WithRetryIf` はいずれも関数宣言ではなくパッケージレベル変数であり、実行時に代入するとパッケージ全体の振る舞いが変わります。**再代入しないでください**。
 4. **指標は事前の組み立てが必要**：6 つの指標メソッドと `IsFinish` は `MetricsWatcher` に依存します。`Run` / `Farm.Run` / `Farm.Start` は自動登録しますが、実行前に呼び出すと `0` / `false` しか得られません。`Start` のシナリオでは Farm Hub が `FarmStartEvent` の後に各 Plot へ接続されるため、`PlotStartEvent` を待ってからタスクを注入することを推奨します。そうして初めてイベントが指標統計に入ります。
 5. **watcher の登録タイミング**：`AddWatcher` は `Run` / `Start` の前に完了させることを推奨します。Farm レベルの watcher は Farm イベントとすべての Plot イベントを同時に受信します。`PrintWatcher` を Farm に付けた場合は**すべての Plot の累計入力**（ノード間で転送される seed を含む）を統計し、単一の Plot に付けた場合はそのノードのみを対象とします。
 6. **接続は実行期の検証**：`Farm.Connect` はソースグループとターゲットグループを完全接続し、1 本ずつ `ConnectTo` を呼び出して型アサーションで「上流の `F`/`Y` と下流の `S`」が一致するかを検証し、失敗すると直ちにエラーを返します。
 7. **終了のセマンティクス**：`InjectTerminations` / `Seal` は外部からの強制終了であり、残りの上流の seal を待ちません。ノードは受信済みの seed を処理し終えてから下流へ seal をマージします。封口済みのノードへさらに seed を播いても処理されません。
-8. **`Run` は組み立てエラーを飲み込む**：standalone の `Plot.Run` は戻り値がなく、assembly に失敗した場合（`lifecycles/` ディレクトリを作成できない、SQLite を開けないなど）はノードが実行されず、その後 `Harvest` は「ライフサイクルオブザーバーが未登録」といったエラーを返します。
+8. **`Run` は組み立てエラーを飲み込む**：standalone の `Plot.Run` は戻り値がなく、リソースの組み立てに失敗した場合（Hub が nil、`lifecycles/` ディレクトリを作成できない、SQLite を開けないなど）はノードが実行されず、その後 `Harvest` は「ライフサイクルオブザーバーが未登録」または「データベースが未準備」といったエラーを返します。
 9. **実行時の生成物は作業ディレクトリに置かれる**：ライフサイクル SQLite は `<cwd>/lifecycles/<日期>/`、ログは `<cwd>/logs/` に書き込まれるため、デプロイ環境では書き込み権限を確保する必要があります。
 10. **インポート別名**：`grow "github.com/Mr-xiaotian/CelestialGrow/pkg/api"` を推奨します。ローカル変数名（`farm`、`plot`）との衝突を避けられます。
+11. **`Report` は設定にすぎない**：`Report` は `reporter.Config` のエイリアスであり、それ自体は報告を開始しません。それを `Farm.Run` / `Farm.Start` に渡して初めてリモートリソースが組み立てられます。`URL` が空、または http/https でない場合は組み立てに失敗します。

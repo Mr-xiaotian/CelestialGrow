@@ -1,6 +1,6 @@
 # pkg/funnel/spout.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `pkg/funnel/spout.go` は `Spout[T]` ジェネリック抽象を定義する——CelestialGrow の非同期消費基盤における**消費側**（読み取り側）である。バッファ付きの Go channel を保持し、バックグラウンド goroutine で継続的にレコードを読み取って `RecordHandler[T]` に引き渡す。同時に `BeforeStart` / `HandleRecord` / `AfterStop` という 3 段階のインターフェースによってリソースのライフサイクルを明確にする。
 
@@ -192,10 +192,10 @@ funnel.Spout[T]（单后台 goroutine）──HandleRecord(T)──▶ persist.L
 
 - `persist.LogRecordHandler` / `persist.LifecycleRecordHandler` はいずれも `RecordHandler[T]` を実装している：
   - `BeforeStart`：`logs/` ディレクトリを作成し、日付ごとにログファイルを開く / `lifecycles/<date>/` ディレクトリを作成し、SQLite を開く。
-  - `HandleRecord`：1 行のテキストに整形してファイルへ追記する / `Kind`（`seed` / `ripen` / `wither` / `prune`）に応じてイベントを書き込み、状態を更新する。
+  - `HandleRecord`：1 行のテキストに整形してファイルへ追記する / レコード種別（`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`）に応じてイベントを書き込み、状態を更新する。
   - `AfterStop`：ログファイルを閉じる / SQLite 接続を閉じる。
 - `persist.LogWatcher` / `LifecycleWatcher` は非エクスポートの `newLogWatcher` / `newLifecycleWatcher` 内で `funnel.NewSpout(handler, 100, time.Second)` により `Spout` を構築し、さらに `funnel.NewInlet(spout.GetQueue(), time.Second)` で対となる `Inlet` を構築する。
-- `pkg/assembly` がライフサイクルを一元管理する：`StartPlotResources` / `StartFarmResources` が 2 つのオブザーバーを作成し、**先に `lifecycle.Start()`、その後に `log.Start()`** を呼んでから `*scarecrow.Hub` に登録する。`Resources.Stop`（`sync.Once` で保護）は逆順に、先に `log.Stop()`、その後に `lifecycle.Stop()` を実行する。
+- `pkg/assembly` がライフサイクルを一元管理する：`StartLocalResources` / `StartReportResources` がオブザーバーを作成し、**先に `*scarecrow.Hub` へ登録**してから、`watcherHub.Start()` が登録順に起動する（`lifecycle.Start()` → `log.Start()`）。`StopFunc` は起動の逆順で回収する（先に `log.Stop()`、その後に `lifecycle.Stop()`）。
 - `Plot` / `Farm` は `Hub` だけを保持し、`Spout` を直接保持しない。`BindInlet` / `StartSpouts` / `StopSpouts` のようなインターフェースも持たない——チャネルの作成とバインドはすべて `persist` のオブザーバーのコンストラクタに封じ込められている。
 
 ## Inlet との協調（inlet ← spout）
@@ -275,6 +275,6 @@ func main() {
   - `timeout` が大きいほど終了は「穏やか」になるが、プロセス終了時にはより長く待たされることになる。
 - `RecordHandler.HandleRecord` と `AfterStop` のエラーはどちらも無視されるため、重大なエラー状態を戻り値だけに書き込んでは**ならない**。失敗を可観測にしたい場合は handler の内部で自ら記録すべきである（`persist` の handler は現在エラーを戻り値で伝えているが、呼び出し側は受け取れない）。
 - **`Start` は繰り返し呼べない**：2 回呼ぶと `BeforeStart` が 2 回実行され（ファイルを二重に開く可能性がある）、消費 goroutine も 2 つ起動する。両者は同じチャネルを奪い合い、`HandleRecord` が並行実行される可能性がある。
-- **`Stop` はべき等ではない**：`ch` はすでに閉じられているため、再度 `Stop` すると panic する（`close of closed channel`）。`pkg/assembly` は `sync.Once` で 1 層ラップし、1 回だけ停止することを保証している。
+- **`Stop` はべき等ではない**：`ch` はすでに閉じられているため、再度 `Stop` すると panic する（`close of closed channel`）。`pkg/assembly` は `StopFunc` 内部の `stopped` ブール値で 1 層ラップし、1 回だけ停止することを保証している（この保護は並行安全ではない）。
 - `Stop` は `Start` より前に呼び出すこともできる：チャネルを閉じ、`wg.Wait()` を即座に通過し、その後 `AfterStop` を呼び出す。そのため handler の `AfterStop` は「`BeforeStart` が実行されていない」状態を許容できなければならない。
 - `Handler()` が返す参照は読み取り専用であり、その内部状態を外部から変更することは許容される（例えば書き込み済み件数の照会）。ただし handler 全体を差し替えても効果はない。

@@ -1,6 +1,6 @@
 # pkg/plot/plot_split.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot_split.go` は `SplitPlot[S, F]` を定義します。これは**1 つを複数に分割する**ノードです。その `cultivator`（構築パラメータ名は `splitter`）は `[]F` を返し、ノードはスライス内の各要素を個別の下流 yield として転送します。
 
@@ -146,7 +146,7 @@ head := plot.NewSinglePlot("head", func(seed int) (int, error) {
 
 _ = f.AddPlot(split, head)
 _ = f.Connect([]plot.PlotNode{split}, []plot.PlotNode{head}) // 上游 yield int → 下游 seed int
-_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO")
+_ = f.Run(map[string][]any{"split": {"1,2,3"}}, "INFO", nil)
 ```
 
 ## 注意事項

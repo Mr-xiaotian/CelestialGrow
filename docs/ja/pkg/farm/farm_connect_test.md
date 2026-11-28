@@ -1,6 +1,6 @@
 # pkg/farm/farm_connect_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -18,8 +18,8 @@
 ## 重要なアサーション
 
 - `TestFarmAddPlot` は `GetPlot` で得たポインタが元の `SinglePlot` と一致することも検証する——`Farm.plots` はインターフェース値として保持され、ノードのコピーは行わない。
-- `TestFarmConnectHyperEdge` で重複して現れる `targetA` によって `source → targetA` が 2 回張られることはない。内部の `uniquePlots` が `Connect` を呼び出す前に重複排除を完了する。
-- `TestFarmConnectHyperEdge` は `Run` の後に、`targetA` / `targetB` の `GetSeedNum()` と `GetFruitNum()` がともに 1 であることも検証し、ハイパーエッジが同一の fruit を確かに 2 つの下流へ配信したことを確認する。
+- `TestFarmConnectHyperEdge` で重複して現れる `targetA` によって `source → targetA` が 2 回張られることはない。`Connect` 内部でまず `uniquePlots` により重複排除してから、直積接続のループに入る。
+- `TestFarmConnectHyperEdge` は `Run(..., "INFO", nil)` の後に、`targetA` / `targetB` の `GetSeedNum()` と `GetFruitNum()` がともに 1 であることも検証し、ハイパーエッジが同一の fruit を確かに 2 つの下流へ配信したことを確認する。
 - `TestFarmConnectTypeMismatch` では上流と下流の `SinglePlot[S, F]` の `F` と `S` が異なるため、`ConnectTo` 内の `next.GetSeedChanAny()` に対する `.(chan runtime.Payload[Y])` 型アサーションが失敗する。したがって `Connect` 全体が error を返し、`OrderGraph` には `AddEdge` の記録が残らない。
 
 ## 関連ソース

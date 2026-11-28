@@ -1,6 +1,6 @@
 # pkg/funnel/inlet.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `pkg/funnel/inlet.go` は `Inlet[T]` ジェネリック抽象を定義する——CelestialGrow の非同期消費基盤における**生産側**（書き込み側）である。上流コンポーネントのレコードをバッファ付きの Go channel に送り込み、対となる `Spout[T]` が非同期に消費する。`Inlet` には独立した `context.Context` が組み込まれており、`Close` で能動的にキャンセルできる。さらに各送信にはタイムアウト保護があり、上流が遅い消費者によって無限にブロックされることを防ぐ。
 
@@ -87,7 +87,7 @@ funnel.Spout[T] ──HandleRecord──▶ RecordHandler[T]
 - 2 つのオブザーバーのキュー設定は同じである：`funnel.NewSpout(handler, 100, time.Second)` + `funnel.NewInlet(..., time.Second)`、すなわち**バッファ 100 件**で、`Send` のタイムアウトと `Spout.Stop` のグレースフルシャットダウンのタイムアウトはいずれも **1 秒**である。
 - `LogWatcher` は `OnEvent` と `Send` の間にもう 1 層のレベルフィルタを持つ：私有メソッド `log(level, message, at)` は `minLevel` 未満のレコードを破棄し、これらのレコードはチャネルを**占有しない**。
 - `Send` のエラーは `OnEvent` を通じてそのまま返される（`LogWatcher.OnEvent` / `LifecycleWatcher.OnEvent` は `Send` の error をそのまま戻り値にする）。ただし `Hub` はオブザーバーのエラーを捕捉して `ErrorHandler` に渡し、常に `nil` を返すため、タイムアウトが業務の実行を中断することはない。
-- `Plot` / `Farm` は `Inlet` や `Spout` を**もはや**直接保持しない：保持するのは `scarecrow.Hub` だけであり、オブザーバーは `pkg/assembly` の `StartPlotResources` / `StartFarmResources` が作成して起動し、実行終了時には `Resources.Stop`（内部で `sync.Once`）が先にログを停止し、その後にライフサイクルを停止する。
+- `Plot` / `Farm` は `Inlet` や `Spout` を**もはや**直接保持しない：保持するのは `scarecrow.Hub` と `metronome.Hub` だけで、オブザーバーは `pkg/assembly` の `StartLocalResources` / `StartReportResources` が作成し、登録後に `watcherHub.Start()` が一括して起動する。実行終了時は `StopFunc` がまず節拍クロックを止め、次に ticker Hub、最後にオブザーバー Hub を止める；オブザーバーは登録の逆順で停止する（リモートモードは `push → log → lifecycle`、ローカルモードは `log → lifecycle`）。
 
 ## 使用例
 

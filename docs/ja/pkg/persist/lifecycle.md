@@ -1,6 +1,6 @@
 # pkg/persist/lifecycle.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -16,35 +16,38 @@
 
 ## 主要オブジェクト
 
-### `LifecycleRecord` — キューのペイロード
+### `LifecycleRecord` — 閉じた記録型の共用体
 
 ```go
-type LifecycleRecord struct {
-    Kind           string
-    InputEventID   int
-    CurrentEventID int
-    ParentIDs      []int
-    PlotName       string
-    SeedJSON       string
-    FruitJSON      string
-    WitherType     string
-    WitherMessage  string
-    TS             float64
+type LifecycleRecord interface {
+    lifecycleRecord()
 }
 ```
 
+インターフェースを実装するのはパッケージ内の 4 種類の記録だけで、具体型がそのまま `events.event_type` を決めます。実行期の `Kind` フィールドには依存しません：
+
+| 記録型 | フィールド | 用途 |
+|----------|------|------|
+| `SeedRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `SeedJSON` / `TS` | 種子の入力 |
+| `RipenRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `FruitJSON` / `TS` | 種子の成熟 |
+| `WitherRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `WitherType` / `WitherMessage` / `TS` | 種子の枯死 |
+| `PruneRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `TS` | 種子の剪定 |
+
+4 種類の記録に共通するフィールドの意味：
+
 | フィールド | 意味 |
 |------|------|
-| `Kind` | 操作種別。パッケージ内定数 `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` / `lifecyclePrune`（すなわち `seed` / `ripen` / `wither` / `prune`）を取る。同時に `events.event_type` として書き込まれる |
 | `InputEventID` | この種子（入力）のイベント ID。`status.input_event_id` に対応 |
-| `CurrentEventID` | 今回生成されたイベント ID。`events.event_id` と `status.current_event_id` に対応し、`seed` 時は `InputEventID` と等しい |
+| `CurrentEventID` | 今回生成されたイベント ID。`events.event_id` と `status.current_event_id` に対応し、`SeedRecord` では `InputEventID` と等しい |
 | `ParentIDs` | 親イベント ID のリスト。`event_parents` の辺に書き込む。外部から注入された種子は `nil` |
 | `PlotName` | イベントが属する Plot 名。`events.plot` と `status.plot` に書き込む |
-| `SeedJSON` | 種子ペイロードの JSON。`seed` 記録のみ設定 |
-| `FruitJSON` | 果実の JSON。`ripen` 記録のみ設定 |
-| `WitherType` | 枯死エラーの型。`wither` 記録のみ設定（`fmt.Sprintf("%T", err)`） |
-| `WitherMessage` | 枯死エラーのテキスト。`wither` 記録のみ設定（`fmt.Sprintf("%v", err)`） |
+| `SeedJSON` | 種子ペイロードの JSON。`SeedRecord` のみが保持 |
+| `FruitJSON` | 果実の JSON。`RipenRecord` のみが保持 |
+| `WitherType` | 枯死エラーの型。`WitherRecord` のみが保持（`fmt.Sprintf("%T", err)`） |
+| `WitherMessage` | 枯死エラーのテキスト。`WitherRecord` のみが保持（`fmt.Sprintf("%v", err)`） |
 | `TS` | イベント時刻（Unix 秒、浮動小数点、ミリ秒精度）。イベントの `Time` フィールドから換算 |
+
+> `lifecycleRecord()` は非公開メソッドのため、パッケージ外から新しい実装を追加できません。イベント種別を追加するときは、本ファイルの記録型と handler の switch を同時に拡張する必要があります。
 
 ### `LifecycleRecordHandler` — コンシューマ側
 
@@ -60,7 +63,7 @@ type LifecycleRecordHandler struct {
 | メソッド | 呼び出しタイミング | 動作 |
 |------|----------|------|
 | `BeforeStart() error` | `Spout.Start()` 内、消費ループ開始前 | `lifecycles/<YYYY-MM-DD>/` を作成し（権限 `0755`）、`grow_lifecycle(<HH-MM-SS.mmm>).sqlite3` のパスを組み立て、`OpenLifecycleSQLite` を呼んでデータベースを開いてテーブルを作成する。パスは `SQLitePath` に、ハンドルは `sqliteDB` に保存する |
-| `HandleRecord(record LifecycleRecord) error` | 各記録のデキュー時 | まず `sqliteDB != nil` を検証し、次に `Kind` に従って先にイベントを書き、その後で状態スナップショットを書き込み／昇格する |
+| `HandleRecord(record LifecycleRecord) error` | 各記録のデキュー時 | まず `sqliteDB != nil` を検証し、次に記録の具体型に従って先にイベントを書き、その後で状態スナップショットを書き込み／昇格する |
 | `AfterStop() error` | `Spout.Stop()` の終了処理 | `sqliteDB` をクローズして nil にする。ハンドルがもともと空ならそのまま `nil` を返す |
 
 > `SQLitePath` は公開フィールドで、`AfterStop` の後も最後に開いたパスが残ります。オフライン読み取りは `LoadLifecycleStatusesFromPath`（[`sqlite.md`](./sqlite.md) 参照）で行い、`LifecycleRecordHandler` 自身はクエリメソッドを提供しません。
@@ -80,7 +83,7 @@ type LifecycleWatcher struct {
 | `Start() error` | `spout.Start()` に委譲する：`BeforeStart` を発火してディレクトリ作成・データベースオープンを行い、バックグラウンド消費 goroutine を起動する |
 | `Stop() error` | `spout.Stop()` に委譲する：チャネルを閉じ、キューが空になるまで待ち（最大 1s）、最後に `AfterStop` でデータベースを閉じる。タイムアウト時は `shutdown timeout` を返す |
 | `DBPath() string` | 下位 handler の `SQLitePath` を返す。消費ループがまだ `Start` していない場合は空文字列 |
-| `OnEvent(event scarecrow.Event) error` | イベント種別に応じて `LifecycleRecord` を構築し `inlet.Send` する。関心のないイベントはそのまま `nil` を返す |
+| `OnEvent(event scarecrow.Event) error` | イベント種別に応じて `SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord` を構築し `inlet.Send` する。関心のないイベントはそのまま `nil` を返す |
 
 > `newLifecycleWatcher(handler funnel.RecordHandler[LifecycleRecord])` はパッケージ内コンストラクタで、テストはこれを使ってキャプチャ用 handler を注入します。この場合 `DBPath()` は handler が `*LifecycleRecordHandler` ではないため空文字列を返します。
 
@@ -88,12 +91,12 @@ type LifecycleWatcher struct {
 
 `OnEvent` は 4 種類の種子結果イベントのみを処理し、それ以外のイベントはすべて無視します：
 
-| `scarecrow` イベント | `Kind` | `InputEventID` | `CurrentEventID` | `ParentIDs` | ペイロード |
-|------------------|--------|----------------|------------------|-------------|------|
-| `SeedInputEvent` | `seed` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
-| `SeedRipenEvent` | `ripen` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
-| `SeedWitherEvent` | `wither` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`、`WitherMessage = %v(ev.Err)` |
-| `SeedPruneEvent` | `prune` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | なし |
+| `scarecrow` イベント | 記録型 | `InputEventID` | `CurrentEventID` | `ParentIDs` | ペイロード |
+|------------------|----------|----------------|------------------|-------------|------|
+| `SeedInputEvent` | `SeedRecord` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
+| `SeedRipenEvent` | `RipenRecord` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
+| `SeedWitherEvent` | `WitherRecord` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`、`WitherMessage = %v(ev.Err)` |
+| `SeedPruneEvent` | `PruneRecord` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | なし |
 
 明示的に無視される（`return nil`、書き込みなし）イベント：`FarmStartEvent`、`FarmEndEvent`、`PlotStartEvent`、`PlotEndEvent`、`SeedReplantEvent`、`SealInputEvent`、`SealMergeEvent`。パッケージ外から新たなイベント種別を追加することはできず（`scarecrow.Event` の `isEvent()` は非公開メソッド）、したがって switch の外側のフォールバック分岐が実際に発火することはありません。
 
@@ -126,7 +129,7 @@ sequenceDiagram
     Note over Sp: バックグラウンド goroutine が消費を開始
 
     Hub->>W: OnEvent(SeedInputEvent)
-    W->>W: LifecycleRecord{Kind: seed, ...} を生成
+    W->>W: SeedRecord{SeedJSON: ..., Parents: ...} を構築
     W->>In: Send(record)
     In->>Q: キュー投入（満杯なら 1s 後にエラー）
     Q->>Sp: デキュー
@@ -134,7 +137,7 @@ sequenceDiagram
     H->>DB: InsertLifecycleEvent + UpsertLifecycleStatusSeed
 
     Hub->>W: OnEvent(SeedRipenEvent)
-    W->>In: Send({Kind: ripen, FruitJSON: ...})
+    W->>In: Send(RipenRecord{FruitJSON: ...})
     In->>Q: キュー投入
     Q->>Sp: デキュー
     Sp->>H: HandleRecord(record)
@@ -146,7 +149,7 @@ sequenceDiagram
     H->>DB: sqliteDB.Close()
 ```
 
-### `HandleRecord` の Kind ルーティング
+### `HandleRecord` の型ルーティング
 
 ```go
 func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
@@ -154,24 +157,25 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
         return fmt.Errorf("生命周期 sqlite 未初始化")
     }
 
-    switch record.Kind {
-    case lifecycleSeed:
-        if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+    switch rec := record.(type) {
+    case SeedRecord:
+        if err := InsertLifecycleEvent(l.sqliteDB, rec.CurrentEventID, "seed", rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
             return err
         }
-        return UpsertLifecycleStatusSeed(l.sqliteDB, record.InputEventID, record.SeedJSON, record.PlotName, record.TS)
-    // ripen / wither / prune 同理：先 InsertLifecycleEvent，再 PromoteLifecycleStatusXxx
+        return UpsertLifecycleStatusSeed(l.sqliteDB, rec.InputEventID, rec.SeedJSON, rec.PlotName, rec.TS)
+    // RipenRecord / WitherRecord / PruneRecord 同理：先 InsertLifecycleEvent，再 PromoteLifecycleStatusXxx
     default:
-        return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
+        return fmt.Errorf("unsupported lifecycle record: %T", record)
     }
 }
 ```
 
 要点：
 
-- 4 種類の `Kind` はいずれも先に `events`（`event_parents` 親辺を含む）を書き、成功した後に `status` を書きます。イベントの書き込みに失敗した場合、状態は変更されず、両者の整合性が保たれます。
-- `ripen` / `wither` / `prune` は `UPDATE status ... WHERE input_event_id = ?` で昇格するため、対応する `seed` 記録がすでに書き込まれている必要があります（`UPDATE` がヒットしなくてもエラーにはなりません。[`sqlite.md`](./sqlite.md) 参照）。
-- `kind` が不正な場合は `unsupported lifecycle operation: <kind>` を返し、`sqliteDB == nil` の場合は `生命周期 sqlite 未初始化` を返します。
+- 4 種類の記録はいずれも先に `events`（`event_parents` 親辺を含む）を書き、成功した後に `status` を書きます。イベントの書き込みに失敗した場合、状態は変更されず、両者の整合性が保たれます。
+- `event_type` は具体型によって `seed` / `ripen` / `wither` / `prune` に固定され、記録のフィールドから読み取ることはありません。
+- `ripen` / `wither` / `prune` は `UPDATE status ... WHERE input_event_id = ?` で昇格するため、対応する `SeedRecord` がすでに書き込まれている必要があります（`UPDATE` がヒットしなくてもエラーにはなりません。[`sqlite.md`](./sqlite.md) 参照）。
+- 記録型が 4 種類のいずれでもない場合は `unsupported lifecycle record: <型>` を返し、`sqliteDB == nil` の場合は `生命周期 sqlite 未初始化` を返します。`LifecycleRecord` のマーカーメソッドは非公開のため、パッケージ外から 5 種類目の記録を構築することはできません。
 - すべてのエラーはそのまま上位へ返され、`Spout` の消費ループで破棄されます（`Spout` は `HandleRecord` の戻り値を検査しません）。書き込み失敗を観測したい場合は、SQLite ファイル自体かログに頼るしかありません。
 
 ### DB パスとディレクトリ
@@ -183,7 +187,7 @@ lifecycles/<YYYY-MM-DD>/grow_lifecycle(<HH-MM-SS.mmm>).sqlite3
 - 日付 `2006-01-02`、時刻 `15-04-05.000` は `BeforeStart` 内でそれぞれ一度ずつ `time.Now()` を取ります。同じ日に複数回起動すると複数のファイルができます。
 - ディレクトリ権限は `0755`。ファイルは `sql.Open("sqlite", "file:...")` が自動的に作成し、`BeforeStart` は明示的にファイルを作りません。
 - `os.MkdirAll` の失敗 → `创建生命周期目录失败: %w`、データベースのオープン失敗 → `打开生命周期 sqlite 失败: %w`。
-- `Start` に失敗した場合、起動済みの消費ループは残りません。`assembly` は `Start` が成功してからでないとオブザーバを Hub に登録しません。
+- `Start` に失敗した場合、`Spout` は消費ループを起動しません。`assembly` はまずオブザーバを登録し、その後 `watcherHub.Start()` で一括起動し、起動失敗時は Hub が起動済み項目を逆順にロールバックします。
 
 ### `toLifecycleJSON` のフォールバック
 
@@ -207,10 +211,14 @@ func toLifecycleJSON(value any) string {
 
 | シンボル | 種別 | 用途 |
 |------|------|------|
-| `LifecycleRecord` | 型 | キューのペイロード（`Kind` + イベントフィールド + 状態フィールド） |
+| `LifecycleRecord` | インターフェース | 閉じた記録の共用体で、4 種類の記録のみが実装 |
+| `SeedRecord` | 型 | 種子の入力記録 |
+| `RipenRecord` | 型 | 種子の成熟記録 |
+| `WitherRecord` | 型 | 種子の枯死記録 |
+| `PruneRecord` | 型 | 種子の剪定記録 |
 | `LifecycleRecordHandler` | 型 | `funnel.RecordHandler[LifecycleRecord]` 実装。書き込みを担当 |
 | `(*LifecycleRecordHandler).BeforeStart` | メソッド | ディレクトリ作成、データベースオープン、テーブル作成 |
-| `(*LifecycleRecordHandler).HandleRecord` | メソッド | `Kind` に従ってイベントを書き、状態を進める |
+| `(*LifecycleRecordHandler).HandleRecord` | メソッド | 記録型に従ってイベントを書き、状態を進める |
 | `(*LifecycleRecordHandler).AfterStop` | メソッド | データベースハンドルをクローズする |
 | `LifecycleWatcher` | 型 | `scarecrow.Watcher` 実装。イベント → 記録 |
 | `NewLifecycleWatcher` | 関数 | オブザーバを作成する（デフォルト handler、バッファ 100、タイムアウト 1s） |
@@ -264,7 +272,7 @@ func main() {
         panic(err)
     }
 
-    // Stop 後 SQLitePath 仍保留，可离线查询
+    // Stop 后 SQLitePath 仍保留，可离线查询
     dbPath := watcher.DBPath()
     statuses, err := persist.LoadLifecycleStatusesFromPath(dbPath, "stage_a")
     if err != nil {

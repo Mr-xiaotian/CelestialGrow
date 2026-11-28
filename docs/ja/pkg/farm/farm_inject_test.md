@@ -1,12 +1,12 @@
 # pkg/farm/farm_inject_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
 `farm_inject_test.go` は `package farm_test` として `Farm` の**外部駆動モード**をカバーする：
 
-- `Start(logLevel)` 自体は種子も終了シグナルも注入しない；
+- `Start(logLevel, report)` 自体は種子も終了シグナルも注入しない；
 - 呼び出し側は `Start` がブロックしている間に `InjectTasks` / `InjectTerminations` を通じてタスクフローを動的に制御できる；
 - Farm レベルの watcher（`Farm.AddWatcher`）は Farm イベントと Plot イベントを同時に受信できる。
 
@@ -40,7 +40,7 @@ sequenceDiagram
 
     T->>F: NewFarm("start_injection") / AddPlot(root)
     T->>F: AddWatcher(WatcherFunc)
-    T-)F: go Start("INFO")
+    T-)F: go Start("INFO", nil)
     Note over F: データを一切注入せず、WaitAsync でブロックする
     T->>F: InjectTasks({"root": [1,2,3]})
     F->>P: SeedAny(1) / SeedAny(2) / SeedAny(3)
@@ -54,7 +54,7 @@ sequenceDiagram
 
 ### 1. `Start` は注入しない
 
-`Start` は `sourceNodes` を計算して `start(logLevel, nil)` を呼ぶだけである；`prepare` が `nil` のとき `InjectTasks` / `InjectTerminations` は呼ばれない。テストはまず注入しなければならず、そうでなければ `Start` は永遠に返らない。
+`Start` は `sourceNodes` を計算して `start(logLevel, report, nil)` を呼ぶだけである；テストは `report = nil` を渡し、`prepare` が `nil` のとき `InjectTasks` / `InjectTerminations` は呼ばれない。テストはまず注入しなければならず、そうでなければ `Start` は永遠に返らない。
 
 ### 2. 実行時注入のタイミング
 
@@ -68,7 +68,7 @@ sequenceDiagram
 
 ### 3. Farm レベル watcher の階層配信
 
-`AddWatcher` は Farm Hub へ登録され；`start` の中で Farm Hub はさらに `root` の Hub へ登録される。したがって同じ watcher が以下を受信する：
+`AddWatcher` は Farm の `watcherHub` へ登録され；`start` の中でその Hub はさらに `root` の Hub へ登録される。したがって同じ watcher が以下を受信する：
 
 | イベント | 発生源 | アサーション |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ sequenceDiagram
 ## 関連ソース
 
 - `pkg/farm/farm.go`：`Start` / `start` / `InjectTasks` / `InjectTerminations` / `AddWatcher`
-- `pkg/assembly/assembly.go`：`StartFarmResources`（`Start` も同様にリソースを組み立てる）
+- `pkg/assembly/assembly.go`：`StartLocalResources`（`Start` も同様にローカルリソースを組み立てる）
 - `pkg/plot/plot.go`：`StartAsync` / `SeedAny` / `Seal` / `AddWatcher` / `notifyStart`
 - `pkg/scarecrow/watcher.go`：`Watcher` / `WatcherFunc`
 - `pkg/scarecrow/event.go`：`FarmStartEvent` / `PlotStartEvent`

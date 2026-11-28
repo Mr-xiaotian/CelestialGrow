@@ -1,6 +1,6 @@
 # pkg/plot/plot_single.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot_single.go` は `pkg/plot` で最もよく使われるノード型 `SinglePlot[S, F]` を定義します。「seed を受け取る → cultivator を並行実行する → fruit を 1 つ生成する → 接続済みのすべての下流へブロードキャストする」という流れを、接続可能・観測可能・再試行可能なジェネリックノードとしてカプセル化します。
 
@@ -55,7 +55,7 @@ type SinglePlot[S any, F any] struct {
 
 1. まず `var p *SinglePlot[S, F]` を宣言し、次に `newBasePlot[S, F, F]` で共有骨格を構築し、最後に `base` を `p` に代入します。
 2. `newBasePlot` に渡す `ripenSeed` フックはクロージャであり、内部で `p.ripenSeed(...)` を呼び出します。これはまだ代入されていない `p` を捕捉しますが、このクロージャは `StartAsync` 以降の `sprout` / `tend` 経路でしか呼ばれないため、その時点で `p` への代入は必ず完了しています。
-3. channel の確保、既定の `EventClient` と `Hub` の初期化、`context` の派生はすべて `newBasePlot` 内で行われます（`plot.md` の「構築」の節を参照）。
+3. channel の確保、既定の `EventClient`、watcher `Hub` と ticker `Hub` の初期化、`context` の派生はすべて `newBasePlot` 内で行われます（`plot.md` の「構築」の節を参照）。
 
 ### `ripenSeed(seedPayload runtime.Payload[S], fruit F, startTime time.Time)`（未エクスポート）
 
@@ -198,7 +198,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

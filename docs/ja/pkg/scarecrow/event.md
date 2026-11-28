@@ -1,6 +1,6 @@
 # pkg/scarecrow/event.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -19,7 +19,7 @@ type Event interface {
 ```
 
 - メソッドが未エクスポートのため、**パッケージ外から新しいイベント型を追加できません**。したがってすべての `type switch` は全イベントを網羅していると確信できます。代償として、イベントを追加する際は本パッケージを変更し、すべての消費側も同時に更新する必要があります。
-- イベントは**値**で渡され（`Hub.OnEvent(event Event)`）、インターフェースの動的型は常に下表の構造体値であり、ポインタではありません。
+- イベントは**値**で渡され（`Hub.OnEvent(event Event)`）：本プロジェクトのすべての生成側は上表の構造体値を送出します。値レシーバのメソッドによりポインタ型も `Event` を満たせますが、ポインタ形式は使用すべきではありません（消費側は一般に値で型アサーションを行います）。
 
 ### イベント一覧
 
@@ -46,6 +46,7 @@ type FarmStartEvent struct {
     Plots       []string            // Plot 名称列表
     Edges       map[string][]string // 出边邻接表
     SourcePlots []string            // 源 Plot 名称列表
+    NodeMeta    map[string]NodeMeta // Plot 名称 -> 构建期元信息
     Structure   []string            // 预先渲染的结构行
     StartTime   time.Time           // 启动时间
 }
@@ -60,8 +61,29 @@ type FarmEndEvent struct {
 | フィールド | 説明 |
 |------|------|
 | `Plots` / `Edges` / `SourcePlots` | `Farm.Nodes()`、`Farm.OutEdges()`、`SourceNodes(OrderGraph)` からのスナップショット |
+| `NodeMeta` | `Farm.getNodeMeta()` が集約した各 Plot の `GetMeta()` の結果。キーは Plot 名 |
 | `Structure` | `Farm.getStructureList()` が事前レンダリングしたグラフ構造のテキスト行。ログや端末で直接出力できるよう、オブザーバがレンダリングを重複実装するのを避ける |
 | `IsDAG` | `IsDAG(OrderGraph)` の結果。非 DAG トポロジーでは構造レンダリングの意味が異なる |
+
+### `NodeMeta`
+
+`NodeMeta` は単一の Plot について**構築期**に確定し、実行期には変化しないメタ情報を表します。`FarmStartEvent` とともに一度だけ報告され、毎拍の状態スナップショットには現れません。
+
+```go
+type NodeMeta struct {
+    ClassName     string `json:"class_name"`     // Plot 类型名
+    ExecutionMode string `json:"execution_mode"` // 执行模式
+    MaxWorkers    int    `json:"max_workers"`    // 最大并发数
+}
+```
+
+| フィールド | 取得元 | 説明 |
+|------|------|------|
+| `ClassName` | 各 Plot の `GetMeta()` | `SinglePlot` / `SplitPlot` / `RoutePlot` |
+| `ExecutionMode` | `basePlot.meta()` | 現在の実装では固定で `"thread"` |
+| `MaxWorkers` | `basePlot.meta()` | `numTenders` と等しい（`WithTenders` で設定した並行 tender 数） |
+
+`pkg/reporter` の `PushWatcher` は `FarmStartEvent` を受信すると、`NodeMeta` をそのままグラフメタ情報レコードの `node_meta` フィールドへ格納します（JSON キーは上表の tag）。毎拍の状態スナップショットは [`MetricsWatcher`](./metrics.md) の `PlotMetrics` に由来し、両者の役割は異なります。詳細は [`metrics.md`](./metrics.md) の「`pkg/reporter` との契約」を参照してください。
 
 ### Plot イベント
 
@@ -156,6 +178,8 @@ type SeedReplantEvent struct {
 | `Attempt` | すでに失敗して再試行が発生した回数。**1 から始まる**。最大でも `maxRetries` 件 |
 | `Err` | 枯死の原因となった最終エラー、または今回の再試行を招いたエラー。`SeedWitherEvent` では `cultivator panic` 由来のラップ済みエラーの場合がある |
 | `Elapsed` | 栽培／判定の所要時間。`tend` 内で `startTime` を取得した時点から起算し、再試行ループの `retryDelay` 待機を**含む**が、`seedChan` での待ち行列と並行トークン待ちの時間は**含まない** |
+
+> `pkg/reporter` の `PushWatcher` は `SeedWitherEvent` のみをタスク失敗として報告します：`WeedID` を `event_id`、`Plot` を `node`、`Seed` を `task_json`、`Err` の `%T` / `%v` をそれぞれ `error_type` / `error_message` として扱います。`SeedRepr` / `FruitRepr` は人間が読むためだけのもので、報告ペイロードには入りません。
 
 ### Seal イベント
 

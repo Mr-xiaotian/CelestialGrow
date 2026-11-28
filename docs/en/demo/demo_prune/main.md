@@ -1,6 +1,6 @@
 # demo/demo_prune/main.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -102,7 +102,7 @@ The relevant APIs used in this example (constructors and configuration come from
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 ```
@@ -212,7 +212,7 @@ func farmDedup() {
 	}
 	if err := farm.Run(map[string][]any{
 		"double": {1, 2, 2, 3, 3, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

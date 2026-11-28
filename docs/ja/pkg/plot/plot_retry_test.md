@@ -1,6 +1,6 @@
 # pkg/plot/plot_retry_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `plot_retry_test.go` は `SinglePlot` の**再試行セマンティクス**に焦点を当てます。`WithMaxRetries` / `WithRetryDelay` / `WithRetryIf` の 3 つの Option が `basePlot.tend` の再試行ループにどう影響するかを検証し、最終的に `Harvest` を通じて結果をライフサイクルスナップショットとして確定させます。
 
@@ -82,7 +82,7 @@
 
 - テストパッケージ：`package plot_test`（ブラックボックス）であり、`SinglePlot` の未エクスポートフィールドには直接アクセスしません。
 - `attempts` は `sync/atomic.Int32` を使いゴルーチンをまたいで安全に加算し、再試行回数のアサーションが並行の影響を受けないようにします。
-- `plot_harvest_test.go` で定義された `mustHarvest(t, plot harvestable)`（`harvestable` はテスト内のローカルインターフェース `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`）を再利用してスナップショットを取得するため、`Run` 内で `assembly.StartPlotResources` が組み立てる `LifecycleWatcher` と `Harvest` の連携が暗黙的に検証されます。
+- `plot_harvest_test.go` で定義された `mustHarvest(t, plot harvestable)`（`harvestable` はテスト内のローカルインターフェース `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`）を再利用してスナップショットを取得するため、`Run` 内で `assembly.StartLocalResources` が組み立てる `LifecycleWatcher` と `Harvest` の連携が暗黙的に検証されます。
 - 4 つのケースはいずれも `WithTenders(1)` を使用します。並行な tender は総呼び出し回数を変えませんが、`attempts.Add(1)` のタイミングのアサーションを難しくするため、直列化してはじめて再試行回数が確定値になります。
 
 ## 実行方法

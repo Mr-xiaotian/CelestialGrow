@@ -1,6 +1,6 @@
 # pkg/farm/farm_start_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -16,7 +16,7 @@
 
 - `root`（`seed * 2`、`WithTenders(2)`）と `head`（seed を収集、`WithTenders(2)`）を作成する。
 - `Connect(root → head)`。
-- `Run` 時に `root` へ `{1, 2, 3}` を注入し、ログレベルには `"INFO"` を渡す。
+- `Run` 時に `root` へ `{1, 2, 3}` を注入し、ログレベルには `"INFO"` を渡し、報告設定には `nil`（ローカル実行）を渡す。
 - 期待：
   - `head` は合計 3 つの seed を受信し、ソートすると `[2, 4, 6]` になる。
   - `root.GetState() == 2`、`head.GetState() == 2`（すなわち `notifyFinish` が発火済み）。

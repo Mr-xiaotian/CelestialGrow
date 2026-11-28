@@ -1,6 +1,6 @@
 # pkg/farm/farm_structure_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -60,7 +60,7 @@
 - **fan-out / fan-in のカウント**：`counts[seed]` は `head` の `cultivator` に由来し、並行に呼び出されるため、テストでは `sync.Mutex` で保護する；`GetSeedNum` / `GetFruitNum` / `GetWeedNum` は `MetricsWatcher` の集計結果を読み取る。
 - **失敗のルーティング**：`basePlot.witherSeed` は失敗を記録して `SeedWitherEvent` を発するだけで、下流へは転送しない；`head` が受信する fruit 数と `midA.GetFruitNum() + midB.GetFruitNum()` は厳密に等しく、このアサーションは `TestFarmStructure121PartialFailure` で検証される。
 - **チャネル設定**：`WithChanSize` は `TestFarmStructure21FaninDifferentSpeed` で明示的に大きくし、遅い source が速い source の書き込みをブロックすることを避ける。
-- **実行エントリ**：4 つのケースはいずれも `Run(inputs, "INFO")` を呼ぶため、`InjectTasks` と `InjectTerminations(sourceNodes)` のデフォルトのバッチ処理経路を同時にカバーする。
+- **実行エントリ**：4 つのケースはいずれも `Run(inputs, "INFO", nil)` を呼ぶため、`InjectTasks` と `InjectTerminations(sourceNodes)` のデフォルトのバッチ処理経路を同時にカバーする。
 
 ## 関連ソース
 

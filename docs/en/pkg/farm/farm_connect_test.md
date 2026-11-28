@@ -1,6 +1,6 @@
 # pkg/farm/farm_connect_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -18,8 +18,8 @@
 ## Key Assertions
 
 - `TestFarmAddPlot` also verifies that the pointer obtained from `GetPlot` is identical to the original `SinglePlot` — `Farm.plots` stores interface values and does not copy nodes.
-- The duplicated `targetA` in `TestFarmConnectHyperEdge` does not cause `source → targetA` to be created twice: the internal `uniquePlots` completes deduplication before `Connect` is called.
-- `TestFarmConnectHyperEdge` additionally verifies, after `Run`, that `GetSeedNum()` and `GetFruitNum()` of `targetA` / `targetB` are both 1, confirming that the hyper-edge really distributed the same fruit to both downstream plots.
+- The duplicated `targetA` in `TestFarmConnectHyperEdge` does not cause `source → targetA` to be created twice: `Connect` first deduplicates with `uniquePlots` internally, then enters the Cartesian-product connection loop.
+- `TestFarmConnectHyperEdge` additionally verifies, after `Run(..., "INFO", nil)`, that `GetSeedNum()` and `GetFruitNum()` of `targetA` / `targetB` are both 1, confirming that the hyper-edge really distributed the same fruit to both downstream plots.
 - In `TestFarmConnectTypeMismatch`, the upstream and downstream `SinglePlot[S, F]` have different `F` and `S`, so the `.(chan runtime.Payload[Y])` type assertion on `next.GetSeedChanAny()` inside `ConnectTo` fails; therefore `Connect` returns an error as a whole, and no `AddEdge` record is left in the `OrderGraph`.
 
 ## Related Source

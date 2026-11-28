@@ -1,6 +1,6 @@
 # pkg/plot/constant.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `constant.go` is the collection of private constants in the `plot` package, and currently defines only a single sentinel string, used to distinguish "external caller" from "some named upstream plot" in the `runtime.Payload.Source` field.
 
@@ -32,7 +32,7 @@ const sourceInput = "__input__"
    ```go
    func (p *basePlot[S, F, Y]) Seal() {
        sealID := p.eventClient.Emit("seal", []int{})
-       p.emit(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
+       p.watcherHub.OnEvent(scarecrow.SealInputEvent{Plot: p.name, SealID: sealID, Time: time.Now()})
        p.seedChan <- runtime.Payload[S]{Signal: runtime.SignalSeal, Source: sourceInput, EventID: sealID}
    }
    ```

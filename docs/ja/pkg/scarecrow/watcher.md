@@ -1,10 +1,10 @@
 # pkg/scarecrow/watcher.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
-`pkg/scarecrow/watcher.go` は `scarecrow` パッケージのファイル入り口（パッケージコメントのあるファイル）であり、同時に実行期イベントの**受信側の契約** `Watcher` と軽量アダプタ `WatcherFunc` を定義します。`Hub` はこの 1 つのインターフェースしか認識しないため、メトリクス集計、ログの永続化、ライフサイクル記録、端末出力を統一的に登録し、統一的に配信できます。
+`pkg/scarecrow/watcher.go` は `scarecrow` パッケージのファイル入り口（パッケージコメントのあるファイル）であり、同時に実行期イベントの**受信側の契約** `Watcher`、`Hub` が一括で起動／停止できるリソース契約 `Lifecycle`、そして軽量アダプタ `WatcherFunc` を定義します。`Hub` は `Watcher` でイベントを配信し、`Lifecycle` でバックグラウンドループを必要とするオブザーバを管理するため、メトリクス集計、ログの永続化、ライフサイクル記録、端末出力、リモート報告を統一的に登録し、統一的に起動／停止できます。
 
 ## 主要オブジェクト
 
@@ -26,6 +26,24 @@ type Watcher interface {
 2. **速やかに返す**：`Hub` は `OnEvent` を同期的に呼ぶため、Watcher の所要時間はそのまま実行経路に直列に加算されます。遅い I/O が必要な実装（`persist.LogWatcher`、`persist.LifecycleWatcher` など）は、記録を `funnel` キューへ投入し、バックグラウンドの Spout に消費させるべきです。
 3. **イベントは読み取り専用**：`Event` は値で渡されますが、内部のスライス／マップは生成側と共有されているため、変更してはいけません。
 
+### `Lifecycle` インターフェース
+
+```go
+type Lifecycle interface {
+    Start() error
+    Stop() error
+}
+```
+
+一括で起動／停止できるリソースの能力です。`Hub` は**登録済みの `Watcher`** の中からこれを見つけます：`Start` は登録順に起動し、`Stop` は逆順に停止します。このインターフェースを実装しない `Watcher` はイベント配信にだけ参加します。インターフェース自体は実装側が `Watcher` であることを**要求しません**が、`Hub` に一括管理させたい場合は `Watcher` も同時に実装する（または `Watcher` でラップする）必要があります。
+
+| メソッド | 契約 |
+|------|------|
+| `Start() error` | リソースを取得し、バックグラウンドループを開始する。エラーを返すと `Hub` は今回起動した子項目をロールバックし、自身を `hubStopped` にする |
+| `Stop() error` | リソースを解放し、バックグラウンドループの終了を待つ。エラーを返しても可能な限りクリーンアップを完了すべきである。`Hub` は `errors.Join` ですべての子項目のエラーを集約する |
+
+典型的な実装：`persist.LogWatcher` / `persist.LifecycleWatcher` / `reporter.PushWatcher` はいずれも `Start` で `funnel.Spout` の消費ループを起動し、`Stop` でチャネルを閉じます。`Hub` 自身も `Lifecycle` を実装しているため、ネストした Hub は再帰的に起動／停止します。
+
 ### `WatcherFunc` アダプタ
 
 ```go
@@ -40,13 +58,14 @@ func (f WatcherFunc) OnEvent(event Event) error {
 
 ### 本パッケージとプロジェクト内の実装
 
-| 実装 | 位置 | 説明 |
-|------|------|------|
-| `Hub` | [`hub.md`](./hub.md) | 自身が `Watcher` を実装し、別の Hub にネスト登録できる |
-| `MetricsWatcher` | [`metrics.md`](./metrics.md) | イベント列から各 Plot のメトリクスを再構築する |
-| `PrintWatcher` | [`print.md`](./print.md) | 累計進捗を `os.Stdout` へ出力する |
-| `persist.LogWatcher` | `pkg/persist/log.go` | 実行ログを非同期で永続化し、`MetricsWatcher` を読んでカウントを補完する |
-| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | seed の血縁を SQLite へ書き込む |
+| 実装 | 位置 | `Lifecycle` の実装 | 説明 |
+|------|------|:----------------:|------|
+| `Hub` | [`hub.md`](./hub.md) | ✅ | 自身が `Watcher` を実装し、別の Hub にネスト登録できる。同時に子項目を再帰的に起動／停止する |
+| `MetricsWatcher` | [`metrics.md`](./metrics.md) | ❌ | イベント列から各 Plot のメトリクスを再構築する。純粋なメモリ上の累加 |
+| `PrintWatcher` | [`print.md`](./print.md) | ❌ | 累計進捗を `os.Stdout` へ出力する |
+| `persist.LogWatcher` | `pkg/persist/log.go` | ✅ | 実行ログを非同期で永続化し、`MetricsWatcher` を読んでカウントを補完する |
+| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | ✅ | seed の血縁を SQLite へ書き込む |
+| `reporter.PushWatcher` | `pkg/reporter/push.go` | ✅ | Farm のイベントと周期スナップショットをリモートサービスへ非同期で送信する |
 
 ## 主要なフロー
 
@@ -78,6 +97,9 @@ sequenceDiagram
 - **エラーの意味論**：`Watcher` の `error` は**報告**のためだけに使われ、制御フローではありません。`OnEvent` が `nil` を返したことはすべての Watcher が成功したことを意味せず、配信処理自体が中断しなかったことだけを意味します。
 - **`WatcherFunc` が nil の場合**：`var f WatcherFunc; f.OnEvent(...)` は nil 関数の呼び出しで panic します。`Hub` 経由で配信する場合は panic が `Hub.deliver` に捕捉され、`scarecrow: ... panicked on ...` の報告エラーに変換されます。直接呼び出す場合は保護がありません。
 - **型が nil のインターフェース値**：`hub.AddWatcher(nil)` は拒否されますが、`var p *PrintWatcher; hub.AddWatcher(p)` が渡すのは**非 nil のインターフェース**（動的型は非空、値は nil）であるため登録は通り、呼び出し時に nil レシーバ上で操作して panic し、最終的にはこれも `Hub` に捕捉されて報告されます。「任意登録」が必要な場合は、ポインタが nil かどうかを明示的に判定してください。
+- **`Lifecycle` と `Watcher` は独立した 2 つのインターフェース**：`Lifecycle` は `Watcher` の実装を要求しませんが、`Hub.Start` は登録済みの `Watcher` だけを走査するため、`Hub` に接続するリソースは `OnEvent` も同時に実装する必要があります（またはラップ型で提供する）。
+- **起動／停止のエラーは `ErrorHandler` を通らない**：`Lifecycle.Start` / `Stop` のエラーはそのまま `Hub.Start` / `Hub.Stop` の戻り値として送出され（`Stop` は `errors.Join` で集約）、呼び出し側（`pkg/assembly` など）が扱い方を決めます。
+- **起動は登録スナップショットのみを対象とする**：`Hub.Start` はその時点のスナップショットで `Lifecycle` を実装しているオブザーバだけを起動します。`Start` の後に `AddWatcher` した `Lifecycle` は自動起動されないため、起動前に登録を済ませる必要があります。
 
 ## 使用例
 

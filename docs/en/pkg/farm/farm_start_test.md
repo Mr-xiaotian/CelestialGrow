@@ -1,6 +1,6 @@
 # pkg/farm/farm_start_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -16,7 +16,7 @@
 
 - Creates `root` (`seed * 2`, `WithTenders(2)`) and `head` (collects seeds, `WithTenders(2)`).
 - `Connect(root → head)`.
-- During `Run`, injects `{1, 2, 3}` into `root` and passes `"INFO"` as the log level.
+- During `Run`, injects `{1, 2, 3}` into `root`, passes `"INFO"` as the log level, and passes `nil` as the reporting config (a local run).
 - Expectations:
   - `head` receives 3 seeds in total, `[2, 4, 6]` after sorting.
   - `root.GetState() == 2`, `head.GetState() == 2` (i.e. `notifyFinish` has fired).

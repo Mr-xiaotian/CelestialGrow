@@ -1,6 +1,6 @@
 # pkg/persist/lifecycle_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -30,7 +30,7 @@ func (h *captureLifecycleHandler) snapshot() []LifecycleRecord { /* 加锁拷贝
 
 | Test | Capability covered | Key invariant |
 |------|----------|-----------|
-| `TestLifecycleWatcherTranslatesEvents` | Delivers 7 events, covering 4 seed result event types + 2 ignored event types | Only 5 records are produced; `Kind` / `InputEventID` / `CurrentEventID` / `ParentIDs` / JSON payload / timestamp all follow the mapping rules |
+| `TestLifecycleWatcherTranslatesEvents` | Delivers 7 events, covering 4 seed result event types + 2 ignored event types | Only 5 records are produced; record type / `InputEventID` / `CurrentEventID` / `ParentIDs` / JSON payload / timestamp all follow the mapping rules |
 
 ## `TestLifecycleWatcherTranslatesEvents`
 
@@ -65,13 +65,13 @@ if len(records) != 5 { t.Fatalf(...) }
 
 ### Assertions
 
-| Index | Source event | `Kind` | `InputEventID` | `CurrentEventID` | Other assertions |
-|:----:|----------|--------|----------------|------------------|----------|
-| 0 | `SeedInputEvent` (plot `a`) | `seed` | 1 | 1 | `PlotName == "a"`, `SeedJSON == "1"`, `ParentIDs == nil`, `TS ≈ 1700000000.123` (tolerance `1e-6`) |
-| 1 | `SeedRipenEvent` | `ripen` | 1 | 2 | `FruitJSON == "2"`, `ParentIDs == [1]` |
-| 2 | `SeedInputEvent` (plot `b`, `Parents: [2]`) | `seed` | 3 | 3 | `PlotName == "b"`, `SeedJSON == "2"`, `ParentIDs == [2]` |
-| 3 | `SeedWitherEvent` | `wither` | 3 | 4 | `WitherMessage == "boom"`, `WitherType != ""` |
-| 4 | `SeedPruneEvent` | `prune` | 5 | 6 | — |
+| Index | Source event | Record type | `InputEventID` | `CurrentEventID` | Other assertions |
+|:----:|----------|----------|----------------|------------------|----------|
+| 0 | `SeedInputEvent` (plot `a`) | `SeedRecord` | 1 | 1 | `PlotName == "a"`, `SeedJSON == "1"`, `ParentIDs == nil`, `TS ≈ 1700000000.123` (tolerance `1e-6`) |
+| 1 | `SeedRipenEvent` | `RipenRecord` | 1 | 2 | `FruitJSON == "2"`, `ParentIDs == [1]` |
+| 2 | `SeedInputEvent` (plot `b`, `Parents: [2]`) | `SeedRecord` | 3 | 3 | `PlotName == "b"`, `SeedJSON == "2"`, `ParentIDs == [2]` |
+| 3 | `SeedWitherEvent` | `WitherRecord` | 3 | 4 | `WitherMessage == "boom"`, `WitherType != ""` |
+| 4 | `SeedPruneEvent` | `PruneRecord` | 5 | 6 | — |
 
 - `PlotStartEvent` and `SealMergeEvent` are explicitly ignored by the watcher, so 7 events produce only 5 records — this is the indirect assertion of the "ignore branch".
 - Index 2 covers the "upstream delivery" scenario: the `From` field does not affect persistence and the parent edges come from `Parents`; when `Seed` is `2`, `SeedJSON` is exactly `"2"`.
@@ -81,13 +81,13 @@ if len(records) != 5 { t.Fatalf(...) }
 ## How to Run
 
 ```bash
-# Run this file
+# 运行本文件
 go test ./pkg/persist -run 'TestLifecycleWatcher'
 
-# Show detailed results
+# 查看详细结果
 go test ./pkg/persist -run 'TestLifecycleWatcher' -v
 
-# Run the whole package
+# 运行整包
 go test ./pkg/persist/...
 ```
 
@@ -95,6 +95,6 @@ go test ./pkg/persist/...
 
 - **`Stop` is the synchronization point**: `Spout.Stop` closes the channel and waits for the consume loop to drain (at most 1s), and only then can `snapshot` see all records; if you only call `OnEvent` without `Stop`, the assertions fail randomly because records have not been consumed yet.
 - **`Start` cannot be omitted**: `OnEvent` itself only delivers to the `Inlet`, and consumption depends on the goroutine started by `Start`.
-- **Persistence is not covered**: `captureLifecycleHandler` writes no SQL; the Kind routing of `HandleRecord` and the call order of `InsertLifecycleEvent` / `Promote*` are guaranteed by [`sqlite_test.md`](./sqlite_test.md) and the source code; this test only locks down the field mapping of "event → record".
-- **Error branches are not covered**: errors such as `unsupported lifecycle operation` and `生命周期 sqlite 未初始化` are not asserted in this file; `OnEvent` returns `nil` for unrecognized events, so there is no error path to test either.
+- **Persistence is not covered**: `captureLifecycleHandler` writes no SQL; the record-type routing of `HandleRecord` and the call order of `InsertLifecycleEvent` / `Promote*` are guaranteed by [`sqlite_test.md`](./sqlite_test.md) and the source code; this test only locks down the type and field mapping of "event → record".
+- **Error branches are not covered**: errors such as `unsupported lifecycle record` and `生命周期 sqlite 未初始化` are not asserted in this file; `OnEvent` returns `nil` for unrecognized events, so there is no error path to test either.
 - **Time assertions use a `math.Abs` tolerance**: `TS` is `float64(UnixMilli())/1000`, so floating-point comparison must leave a tolerance (the test uses `1e-6`).

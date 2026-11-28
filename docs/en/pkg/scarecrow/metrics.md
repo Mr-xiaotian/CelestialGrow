@@ -1,6 +1,6 @@
 # pkg/scarecrow/metrics.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -26,6 +26,8 @@ const (
 | `PlotRunning` | 1 | `running` |
 | `PlotStopped` | 2 | `stopped` |
 | Other values | — | `not_started` (the `default` branch of `String()`) |
+
+`PlotStatus` implements `fmt.Stringer`: `func (s PlotStatus) String() string` returns `running` / `stopped` / `not_started`, and logs and `fmt.Println` use that name directly.
 
 > `PlotStatus` shares the numeric values of `plot.GetState()`'s `0=idle / 1=running / 2=done`, but they are two independent types; do not assign one to the other.
 
@@ -98,6 +100,33 @@ Internal cell `plotMetrics` versus the snapshot: the cell uses private fields (`
 |------|------|------|
 | `GetPlot` | `func (m *MetricsWatcher) GetPlot(name string) (PlotMetrics, bool)` | Returns the zero value and `false` when unregistered; returns a copied snapshot when registered |
 | `GetPlots` | `func (m *MetricsWatcher) GetPlots() map[string]PlotMetrics` | Returns a new map of all registered Plots; returns an empty (non-nil) map when there is no data |
+
+## Contract with `pkg/reporter`
+
+`pkg/reporter` consumes this file through a minimal interface and does not depend on the concrete `*MetricsWatcher` type:
+
+```go
+type MetricsView interface {
+    GetPlots() map[string]scarecrow.PlotMetrics
+}
+```
+
+Both `NewSnapshotTicker` and `NewPushWatcher` accept a `MetricsView`; `toStatusSnapshot` in `snapshot.go` projects `PlotMetrics` into the web-side `NodeStatus`:
+
+| `PlotMetrics` field | `NodeStatus` field | Conversion |
+|--------------------|-------------------|------|
+| `Status` | `Status` | `int(item.Status)`, i.e. `0/1/2` |
+| `InputTotal` | `TasksInput` | Assigned directly |
+| `Processed` | `TasksProcessed` | Assigned directly |
+| `Pending` | `TasksPending` | Assigned directly |
+| `Succeeded` | `TasksSucceeded` | Assigned directly |
+| `Failed` | `TasksFailed` | Assigned directly |
+| `Skipped` | `TasksSkipped` | Assigned directly |
+| `UpstreamCounts` | `UpstreamCounts` | Assigned directly (the snapshot has already rebuilt the map) |
+| `DownstreamCounts` | `DownstreamCounts` | Assigned directly (the snapshot has already rebuilt the map) |
+| `StartTime` / `EndTime` | `StartTime` / `EndTime` | Converted to Unix seconds; a zero time is emitted as `0` |
+
+`NodeStatus` contains neither the Plot name (the name is the key of the outer `map[string]NodeStatus`) nor `NodeMeta`; a node's build-time metadata is reported separately via `FarmStartEvent.NodeMeta`, see the `NodeMeta` section of [`event.md`](./event.md).
 
 ## Key Event Mappings
 

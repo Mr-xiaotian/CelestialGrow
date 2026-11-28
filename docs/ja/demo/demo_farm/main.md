@@ -1,6 +1,6 @@
 # demo/demo_farm/main.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
@@ -40,10 +40,10 @@ flowchart LR
 | 呼び出し | 由来 | 役割 |
 |------|------|------|
 | `grow.NewSinglePlot[S, F](name, cultivator, opts...)` | `pkg/api` → `plot.NewSinglePlot` | 1 入力 1 出力のジェネリックな並行ノードを構築します。`S` は seed 型、`F` は fruit 型です。 |
-| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | Farm を構築し、内部でイベントクライアントとオブザーバー Hub を作成します。ログレベルは `Run` / `Start` で渡す方式に変更されました。 |
+| `grow.NewFarm(name)` | `pkg/api` → `farm.NewFarm` | Farm を構築し、内部でイベントクライアント、オブザーバー Hub、節拍 Hub を作成します。ログレベルは `Run` / `Start` で渡す方式に変更されました。 |
 | `farm.AddPlot(plots ...plot.PlotNode)` | `pkg/farm` | 複数の `PlotNode` を Farm に登録し、トポロジグラフに追加します。 |
 | `farm.Connect(fromPlots, toPlots []plot.PlotNode)` | `pkg/farm` | ソースグループとターゲットグループの間に完全接続（直積）を確立し、各接続について seed/fruit 型の検証を行います。 |
-| `farm.Run(inputs map[string][]any, logLevel string)` | `pkg/farm` | グラフ全体を同期的に実行します。`logLevel` は今回の実行のログ最低レベル（空文字列は `INFO`）で、すべての Plot が完了するまでブロックします。 |
+| `farm.Run(inputs map[string][]any, logLevel string, report *reporter.Config)` | `pkg/farm` | グラフ全体を同期的に実行します。`logLevel` は今回の実行のログ最低レベル（空文字列は `INFO`）、`report` はリモート報告設定（`nil` はローカル実行）で、すべての Plot が完了するまでブロックします。 |
 | `grow.WithTenders(n int)` | `pkg/api` → `plot.WithTenders` | Plot の並行 tender（世話をするコルーチン）数を設定します。既定は `runtime.NumCPU()` です。 |
 | `grow.PlotNode` | `pkg/api` → `plot.PlotNode` | `Farm.Connect` の引数で使用される統一インターフェースで、`SinglePlot` / `SplitPlot` / `RoutePlot` のジェネリクスを消去しています。 |
 
@@ -53,10 +53,10 @@ flowchart LR
 
 1. `root` ノードを構築します。cultivator は `double`、並行 tender 数は 2 です。
 2. `head` ノードを構築します。cultivator は `addOne`、並行 tender 数は 2 です。
-3. `demo_farm` を作成します。`NewFarm` は Farm の構築（イベントクライアント、Hub、レジストリ、トポロジグラフ）のみを行い、ログレベルは受け取りません。
+3. `demo_farm` を作成します。`NewFarm` は Farm の構築（イベントクライアント、オブザーバー Hub、節拍 Hub、レジストリ、トポロジグラフ）のみを行い、ログレベルは受け取りません。
 4. `AddPlot(root, head)`：2 つのノードを Farm に登録します。名前は一意でなければなりません。
 5. `Connect({root}, {head})`：`root` → `head` の間に 1 本のエッジを確立します。
-6. `Run({"root": {1, 2, 3}}, "INFO")`：3 つの初期 seed を `root` に注入し、グラフ全体の実行を開始します。`Run` は `pkg/assembly` を通じてログ、ライフサイクル、指標のオブザーバーを起動し、Farm Hub を各 Plot に登録したうえで、すべての Plot が完了するまで待機してから戻ります。
+6. `Run({"root": {1, 2, 3}}, "INFO", nil)`：3 つの初期 seed を `root` に注入し、グラフ全体の実行を開始します。`Run` は `pkg/assembly` を通じてログ、ライフサイクル、指標のオブザーバーと節拍クロックを組み立てて起動し、Farm のオブザーバー Hub を各 Plot に登録したうえで、すべての Plot が完了するまで待機してから戻ります。
 
 ## 実行時の生成物
 
@@ -102,7 +102,7 @@ func main() {
 	}
 	if err := farm.Run(map[string][]any{
 		"root": {1, 2, 3},
-	}, "INFO"); err != nil {
+	}, "INFO", nil); err != nil {
 		panic(err)
 	}
 }
@@ -113,10 +113,10 @@ func main() {
 - **インポート**：`pkg/api` のみをインポートし、別名 `grow` で参照することでローカル変数名 `farm` との衝突を避けます。
 - **`double` / `addOne`**：最も単純な `func(S) (F, error)` 形式の cultivator 2 つで、戻り値の error は常に nil のため、サンプル内のすべての seed は正常に fruit を生成し、下流で消費されます。
 - **`NewSinglePlot`**：2 つのノードの seed と fruit 型はいずれも `int` で、ジェネリックパラメータ `S = F = int` は Go コンパイラが自動的に推論します。`WithTenders(2)` は単一 Plot の並行 tender 数を 2 に制限します。
-- **`NewFarm`**：Farm の構築（イベントクライアント、Hub、レジストリ、トポロジグラフ）のみを行い、ログ / ライフサイクルリソースは起動しません。これらのリソースは `Run` 時に `pkg/assembly` が一元的に組み立てます。
+- **`NewFarm`**：Farm の構築（イベントクライアント、オブザーバー Hub、節拍 Hub、レジストリ、トポロジグラフ）のみを行い、ログ / ライフサイクルリソースは起動しません。これらの実行期リソースは `Run` 時に `pkg/assembly` が一元的に組み立てます。
 - **`AddPlot`**：`SinglePlot` を Farm の `plots` マップとトポロジグラフに追加し、Farm のイベントクライアントを共有します。名前が空の場合や重複登録の場合はエラーを返します。
 - **`Connect`**：「グループ間完全接続」のセマンティクスを使用します。本例では両グループともノードが 1 つだけなので、`root → head` の有向エッジが 1 本だけ生成されます。
-- **`Run`**：`inputs` を検証した後、ログ / ライフサイクル / 指標のオブザーバーを起動し、Farm Hub を各 Plot に登録し、すべての Plot を起動して seed を注入し、source ノード（ここでは `root`）に seal を送信し、すべての Plot の完了を待ってからリソースを停止して戻ります。
+- **`Run`**：`inputs` を検証した後、ログ / ライフサイクル / 指標のオブザーバーと節拍クロックを組み立てて起動し、Farm のオブザーバー Hub を各 Plot に登録し、すべての Plot を起動して seed を注入し、source ノード（ここでは `root`）に seal を送信し、すべての Plot の完了を待ってからリソースを停止して戻ります。
 
 ### 実行方法
 
@@ -136,7 +136,7 @@ go run ./demo/demo_farm
 ```go
 if err := farm.Run(map[string][]any{
 	"root": {1, 2, 3},
-}, "DEBUG"); err != nil {
+}, "DEBUG", nil); err != nil {
 	panic(err)
 }
 ```

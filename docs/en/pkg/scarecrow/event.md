@@ -1,6 +1,6 @@
 # pkg/scarecrow/event.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -19,7 +19,7 @@ type Event interface {
 ```
 
 - The method is unexported, so **no event type can be added outside the package**; every `type switch` can therefore be certain it covers all events. The cost is that adding an event requires changing this package and updating every consumer.
-- Events are passed **by value** (`Hub.OnEvent(event Event)`); the dynamic type of the interface is always a struct value from the table below, never a pointer.
+- Events are passed **by value** (`Hub.OnEvent(event Event)`): every producer in this project sends struct values as listed in the table below; although value-receiver methods let pointer types satisfy `Event` too, pointers should not be used (consumers generally type-assert on values).
 
 ### Event Overview
 
@@ -46,6 +46,7 @@ type FarmStartEvent struct {
     Plots       []string            // Plot 名称列表
     Edges       map[string][]string // 出边邻接表
     SourcePlots []string            // 源 Plot 名称列表
+    NodeMeta    map[string]NodeMeta // Plot 名称 -> 构建期元信息
     Structure   []string            // 预先渲染的结构行
     StartTime   time.Time           // 启动时间
 }
@@ -60,8 +61,29 @@ type FarmEndEvent struct {
 | Field | Description |
 |------|------|
 | `Plots` / `Edges` / `SourcePlots` | Snapshot taken from `Farm.Nodes()`, `Farm.OutEdges()`, `SourceNodes(OrderGraph)` |
+| `NodeMeta` | Per-Plot `GetMeta()` results aggregated by `Farm.getNodeMeta()`, keyed by Plot name |
 | `Structure` | Graph structure text lines pre-rendered by `Farm.getStructureList()`, printed directly by logs/terminal so observers need not reimplement rendering |
 | `IsDAG` | Result of `IsDAG(OrderGraph)`; structure rendering has different semantics under a non-DAG topology |
+
+### `NodeMeta`
+
+`NodeMeta` describes metadata of a single Plot that is fixed at **build time** and never changes at runtime. It is reported once with `FarmStartEvent` and does not appear in the per-tick state snapshot.
+
+```go
+type NodeMeta struct {
+    ClassName     string `json:"class_name"`     // Plot 类型名
+    ExecutionMode string `json:"execution_mode"` // 执行模式
+    MaxWorkers    int    `json:"max_workers"`    // 最大并发数
+}
+```
+
+| Field | Source | Description |
+|------|------|------|
+| `ClassName` | `GetMeta()` of each Plot | `SinglePlot` / `SplitPlot` / `RoutePlot` |
+| `ExecutionMode` | `basePlot.meta()` | Currently hard-coded to `"thread"` |
+| `MaxWorkers` | `basePlot.meta()` | Equal to `numTenders` (the number of concurrent tenders configured with `WithTenders`) |
+
+After receiving `FarmStartEvent`, `PushWatcher` in `pkg/reporter` puts `NodeMeta` as-is into the `node_meta` field of the graph metadata record (the JSON keys are the tags above); the per-tick state snapshot instead comes from `PlotMetrics` of [`MetricsWatcher`](./metrics.md). The two serve different purposes, see "Contract with `pkg/reporter`" in [`metrics.md`](./metrics.md).
 
 ### Plot Events
 
@@ -156,6 +178,8 @@ type SeedReplantEvent struct {
 | `Attempt` | Number of failures that triggered a retry, **starting at 1**; at most `maxRetries` entries |
 | `Err` | The final error that caused withering, or the error that caused this retry; in `SeedWitherEvent` it may be a wrapped error from a `cultivator panic` |
 | `Elapsed` | Cultivation/decision duration, measured from `startTime` taken inside `tend`; **includes** the `retryDelay` waits in the retry loop, but **excludes** time spent queued in `seedChan` and waiting for a concurrency token |
+
+> `PushWatcher` in `pkg/reporter` reports only `SeedWitherEvent` as a task failure: `WeedID` becomes `event_id`, `Plot` becomes `node`, `Seed` becomes `task_json`, and `%T` / `%v` of `Err` become `error_type` / `error_message`. `SeedRepr` / `FruitRepr` are for human reading only and never enter the reported payload.
 
 ### Seal Events
 

@@ -1,6 +1,6 @@
 # pkg/plot/plot.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot.go` is the **shared runtime skeleton** of `pkg/plot`, and also carries the package documentation. It defines two things:
 
@@ -24,11 +24,14 @@
 type PlotNode interface {
 	GetName() string
 	GetState() int32
+	GetMeta() scarecrow.NodeMeta
 	GetSeedChanAny() any
 
 	ConnectTo(next PlotNode) error
 	AddUpstream(name string)
 	AddWatcher(listener scarecrow.Watcher) error
+	AddTicker(ticker metronome.Ticker) error
+	GetTickerHub() *metronome.Hub
 	SetEventClient(eventClient runtime.EventClient)
 
 	StartAsync()
@@ -42,10 +45,13 @@ type PlotNode interface {
 |------|------|
 | `GetName()` | Returns the plot name (must be unique within a `Farm`) |
 | `GetState()` | Returns the state: `0=idle`, `1=running`, `2=done` |
+| `GetMeta()` | Returns the build-time metadata `scarecrow.NodeMeta` (`ClassName`, `ExecutionMode="thread"`, `MaxWorkers=numTenders`), aggregated by `Farm` into `FarmStartEvent` |
 | `GetSeedChanAny()` | Exposes `seedChan` as `any` so that the upstream's `ConnectTo` can perform a type assertion |
 | `ConnectTo(next)` | Establishes the "this node's yield → downstream seed" connection and validates the types |
 | `AddUpstream(name)` | Called by the **upstream** during `ConnectTo` to register the name of this node's upstream, used for seal aggregation |
 | `AddWatcher(listener)` | Registers a watcher with the node's internal `Hub`; registering twice results in receiving events twice |
+| `AddTicker(ticker)` | Registers a plot-level ticker with the `metronome.Hub` held by this node |
+| `GetTickerHub()` | Returns the `*metronome.Hub` held by the plot, collected by `Farm` into the Farm-level ticker tree |
 | `SetEventClient(eventClient)` | Injects the event ID allocator (`Farm` injects the same client uniformly) |
 | `StartAsync()` / `WaitAsync()` | Starts the scheduler asynchronously / blocks until the background goroutine exits |
 | `SeedAny(seed)` | Sows a single seed as `any`; used by `Farm` to inject initial tasks |
@@ -67,7 +73,8 @@ type basePlot[S any, F any, Y any] struct {
 	upstreams  map[string]struct{}
 
 	eventClient runtime.EventClient
-	hub         *scarecrow.Hub
+	watcherHub  *scarecrow.Hub
+	tickerHub   *metronome.Hub
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -92,7 +99,8 @@ type basePlot[S any, F any, Y any] struct {
 | `yieldChans` | `downstream plot name → that downstream's seed channel`, populated by `ConnectTo` |
 | `upstreams` | set of registered upstream plot names, used to decide whether seals have all arrived |
 | `eventClient` | in-process event ID allocator, defaults to `runtime.NewLocalEventClient()` |
-| `hub` | this node's event dispatch center, defaults to `scarecrow.NewHub()`; watchers are registered by `AddWatcher` |
+| `watcherHub` | this node's event dispatch center, defaults to `scarecrow.NewHub()`; watchers are registered by `AddWatcher` |
+| `tickerHub` | this node's tick container, defaults to `metronome.NewHub()`; `Farm` collects it into the Farm-level ticker hub at startup |
 | `ctx` / `cancel` | derived from `context.WithCancel(context.Background())`, used for internal forced wrap-up |
 | `wg` | joins the background goroutines started by `StartAsync` |
 | `state` | state atomic variable (0/1/2) |
@@ -121,17 +129,18 @@ func newBasePlot[S any, F any, Y any](
 Called only by `NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` in the same package. Steps:
 
 1. Take `defaultOptions()` and apply `opts` in order;
-2. Derive `ctx` / `cancel` from `context.WithCancel(context.Background())`;
-3. Allocate `seedChan` (capacity `chanSize`) and empty `yieldChans` / `upstreams`;
-4. Initialize `eventClient = runtime.NewLocalEventClient()` and `hub = scarecrow.NewHub()`.
+2. `metronome.NewHub()` creates `tickerHub`; it `panic`s directly on failure;
+3. Derive `ctx` / `cancel` from `context.WithCancel(context.Background())`;
+4. Allocate `seedChan` (capacity `chanSize`) and empty `yieldChans` / `upstreams`;
+5. Initialize `eventClient = runtime.NewLocalEventClient()` and `watcherHub = scarecrow.NewHub()`.
 
 ## Metrics Reading
 
-`basePlot` no longer carries counters of its own; metrics are rebuilt from the event stream: `pkg/assembly` registers `*scarecrow.MetricsWatcher` with the plot's `hub` during the run, and `basePlot` locates it via `scarecrow.Find` in the hub (including nested hubs) when reading.
+`basePlot` no longer carries counters of its own; metrics are rebuilt from the event stream: `pkg/assembly` registers `*scarecrow.MetricsWatcher` with the plot's `watcherHub` during the run, and `basePlot` locates it via `scarecrow.Find` in the hub (including nested hubs) when reading.
 
 ```go
 func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
-	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.hub)
+	metrics, ok := scarecrow.Find[*scarecrow.MetricsWatcher](p.watcherHub)
 	if !ok {
 		return scarecrow.PlotMetrics{}, false
 	}
@@ -152,12 +161,10 @@ func (p *basePlot[S, F, Y]) currentMetrics() (scarecrow.PlotMetrics, bool) {
 
 ## Event Emission
 
-`basePlot` synchronously dispatches events to all watchers on the `hub` through `emit`; errors or panics returned by watchers are consumed by the `Hub`'s error handler and do not affect the execution path:
+Every flow in `basePlot` directly calls `p.watcherHub.OnEvent(...)`, synchronously dispatching the event to all watchers on the hub; errors returned by watchers are consumed by the `Hub`'s error handler and do not affect the execution path:
 
 ```go
-func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
-	_ = p.hub.OnEvent(event)
-}
+p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* ... */ })
 ```
 
 | Event | Trigger Point | Key Fields |
@@ -172,7 +179,7 @@ func (p *basePlot[S, F, Y]) emit(event scarecrow.Event) {
 | `SealInputEvent` | `Seal` | `SealID` |
 | `SealMergeEvent` | `sprout` wrap-up | `ParentIDs`, `SealID` |
 
-> Lifecycle and logs are no longer written to the database directly by `basePlot`: `LifecycleWatcher` / `LogWatcher` in `pkg/persist` subscribe to these events as ordinary `Watcher`s, and `pkg/assembly.StartPlotResources` creates and registers them. Event IDs are still allocated by `eventClient.Emit(...)`: `seed` / `fruit` / `weed` / `prune` / `seal`.
+> Lifecycle and logs are no longer written to storage directly by `basePlot`: `LifecycleWatcher` / `LogWatcher` in `pkg/persist` subscribe to these events as ordinary `Watcher`s, and `pkg/assembly.StartLocalResources` creates and registers them. Event IDs are still allocated by `eventClient.Emit(...)`: `seed` / `fruit` / `weed` / `prune` / `seal`.
 
 ## Key Flows
 
@@ -322,7 +329,7 @@ for attempt := 1; attempt <= p.maxRetries+1; attempt++ {
 		break
 	}
 	if attempt <= p.maxRetries {
-		p.emit(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
+		p.watcherHub.OnEvent(scarecrow.SeedReplantEvent{ /* Attempt: attempt, Err: err, SeedID: seedID */ })
 	}
 	time.Sleep(p.retryDelay(attempt))
 }
@@ -359,8 +366,8 @@ func (p *basePlot[S, F, Y]) Run(seeds []S, logLevel string)
 
 The one-stop entry point for standalone mode (blocking):
 
-1. `assembly.StartPlotResources(p.hub, logLevel)` assembles the metrics, lifecycle, and log watchers; on failure it **returns immediately** (no error returned, no output);
-2. `defer resources.Stop()` guarantees a flush and resource reclamation on exit;
+1. `assembly.StartLocalResources(p.watcherHub, p.tickerHub, logLevel, metronome.DefaultInterval)` assembles the metrics, lifecycle, and log watchers and starts the tick clock; it returns `(stop assembly.StopFunc, err error)`, and on `err != nil` it **returns immediately** (`Run` has no error return value and produces no output);
+2. `defer func() { _ = stop() }()` guarantees a flush and resource reclamation on exit;
 3. `StartAsync()`;
 4. Injects `seeds` one by one via `Seed(seed)`;
 5. `Seal()` declares that there is no more external input;
@@ -474,7 +481,7 @@ func main() {
 	if err := f.Connect([]plot.PlotNode{double}, []plot.PlotNode{addOne}); err != nil {
 		panic(err)
 	}
-	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO"); err != nil {
+	if err := f.Run(map[string][]any{"double": {1, 2, 3}}, "INFO", nil); err != nil {
 		panic(err)
 	}
 

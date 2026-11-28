@@ -1,6 +1,6 @@
 # pkg/plot/option.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 `option.go` はすべてのノードの「関数オプション」設定層を定義します。すべての `Option` は `*plotOptions` を一度変更する小さなクロージャです。`newBasePlot` はまず `defaultOptions()` を取得し、その後ユーザーが渡した `Option` を順に適用するため、`NewSinglePlot` / `NewSplitPlot` / `NewRoutePlot` は同じ設定を共有します。
 
@@ -27,7 +27,7 @@ type plotOptions struct {
 
 `Option` は「`*plotOptions` を受け取り、その場で変更し、何も返さない」関数であり、Go でよく見られる省略可能引数のパターンです。
 
-> ログレベルは `plotOptions` に **含まれません**。`Run(seeds, logLevel)` が実行時に `assembly.StartPlotResources` へ渡すため、同じ plot でも実行ごとに異なるログレベルを使用できます。
+> ログレベルは `plotOptions` に **含まれません**。`Run(seeds, logLevel)` が実行時に `assembly.StartLocalResources` へ渡します（plot の watcher hub、ticker hub、`metronome.DefaultInterval` も同時に渡す）。そのため同じ plot でも実行ごとに異なるログレベルを使用できます。
 
 ## 既定値
 
@@ -98,7 +98,7 @@ p := plot.NewSinglePlot("dedup",
 ## 注意事項
 
 - `WithMaxRetries(n)` の `n` は初回実行を **含みません**。`n=0` は「再試行しない」を意味します。
-- `WithRetryDelay` の `attempt` は 1 始まりです。ソースは失敗のたびに `Sleep(retryDelay(attempt))` を実行し、**最後の失敗時も含みます**（このときはもう再試行しません）。そのためバックオフ関数は「空待ちになる可能性のある」位置で余分に 1 回呼ばれます。
+- `WithRetryDelay` の `attempt` は 1 始まりです。エラーが `retryIf` でフィルタされた後、ソースは失敗のたびに `Sleep(retryDelay(attempt))` を実行し、**最後の失敗時も含みます**（このときはもう次の実行はありません）。`retryIf` が `false` を返した場合は `Sleep` の前に直接 `break` します。
 - `WithPruneIf` の述語は `cultivator` の前に判定され、しかも **再試行より優先** されます。述語が `true` を返すと、その seed は `cultivator` を呼ばれず再試行ループにも入らず、直接 `pruneSeed` へ進みます。述語の既定値は `nil`（剪定しない）です。
 - `WithPruneIf` は内部で型アサーションを使って `any` を `S` に戻します。アサーションに失敗した場合は「剪定しない」として扱われます。ジェネリックパラメータ `S` は渡した述語の引数型から推論されるため、明示する必要はありません。
 - ログレベルは `Run` の `logLevel` 引数で制御され、`WithLogLevel` という Option はもう存在しません。

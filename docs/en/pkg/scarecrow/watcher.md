@@ -1,10 +1,10 @@
 # pkg/scarecrow/watcher.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
-`pkg/scarecrow/watcher.go` is the file entry point of the `scarecrow` package (the file holding the package comment), and it also defines the **receiver contract** for runtime events, `Watcher`, plus the lightweight adapter `WatcherFunc`. `Hub` recognizes only this single interface, so metric collection, log persistence, lifecycle recording, and terminal printing can all be registered and dispatched uniformly.
+`pkg/scarecrow/watcher.go` is the file entry point of the `scarecrow` package (the file holding the package comment), and it also defines the **receiver contract** for runtime events, `Watcher`, the resource contract `Lifecycle` that `Hub` can start and stop uniformly, and the lightweight adapter `WatcherFunc`. `Hub` dispatches events with `Watcher` and manages observers that need background loops with `Lifecycle`, so metric collection, log persistence, lifecycle recording, terminal printing, and remote reporting can all be registered and started/stopped uniformly.
 
 ## Core Objects
 
@@ -26,6 +26,24 @@ Conventions implementers must follow (explicitly required by the source comment)
 2. **Return quickly**: `Hub` calls `OnEvent` synchronously, so Watcher time is serialized directly onto the execution path. Implementations that need slow I/O (such as `persist.LogWatcher`, `persist.LifecycleWatcher`) should post records onto a `funnel` queue consumed by a background Spout.
 3. **Treat events as read-only**: `Event` is passed by value, but the inner slices/maps are shared with the producer and must not be modified.
 
+### The `Lifecycle` Interface
+
+```go
+type Lifecycle interface {
+    Start() error
+    Stop() error
+}
+```
+
+A resource capability that can be started and stopped uniformly. `Hub` looks for it among **registered `Watcher`s**: `Start` starts them in registration order and `Stop` stops them in reverse order; a `Watcher` that does not implement the interface only takes part in event dispatch. The interface itself **does not require an implementation to be a `Watcher`**, but to be managed by `Hub` it must still implement `Watcher` (or be wrapped into one).
+
+| Method | Contract |
+|------|------|
+| `Start() error` | Acquires resources and starts the background loop. On error `Hub` rolls back the children started in this call and puts itself into `hubStopped` |
+| `Stop() error` | Releases resources and waits for the background loop to exit. Even when it returns an error it should finish cleanup as far as possible; `Hub` aggregates all child errors with `errors.Join` |
+
+Typical implementations: `persist.LogWatcher` / `persist.LifecycleWatcher` / `reporter.PushWatcher` all start a `funnel.Spout` consuming loop in `Start` and close the channel in `Stop`; `Hub` implements `Lifecycle` itself as well, so nested Hubs are started and stopped recursively.
+
 ### `WatcherFunc` Adapter
 
 ```go
@@ -40,13 +58,14 @@ Adapts an ordinary function into a `Watcher`, the same idiom as `http.HandlerFun
 
 ### Implementations in This Package and the Project
 
-| Implementation | Location | Description |
-|------|------|------|
-| `Hub` | [`hub.md`](./hub.md) | Implements `Watcher` itself, so it can be nested into another Hub |
-| `MetricsWatcher` | [`metrics.md`](./metrics.md) | Rebuilds each Plot's metrics from the event stream |
-| `PrintWatcher` | [`print.md`](./print.md) | Prints accumulated progress to `os.Stdout` |
-| `persist.LogWatcher` | `pkg/persist/log.go` | Persists run logs asynchronously and reads `MetricsWatcher` to complete counts |
-| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | Writes seed lineage into SQLite |
+| Implementation | Location | Implements `Lifecycle` | Description |
+|------|------|:----------------:|------|
+| `Hub` | [`hub.md`](./hub.md) | ✅ | Implements `Watcher` itself and can be nested into another Hub; also starts/stops children recursively |
+| `MetricsWatcher` | [`metrics.md`](./metrics.md) | ❌ | Rebuilds each Plot's metrics from the event stream, a pure in-memory accumulator |
+| `PrintWatcher` | [`print.md`](./print.md) | ❌ | Prints accumulated progress to `os.Stdout` |
+| `persist.LogWatcher` | `pkg/persist/log.go` | ✅ | Persists run logs asynchronously and reads `MetricsWatcher` to complete counts |
+| `persist.LifecycleWatcher` | `pkg/persist/lifecycle.go` | ✅ | Writes seed lineage into SQLite |
+| `reporter.PushWatcher` | `pkg/reporter/push.go` | ✅ | Pushes Farm events and periodic snapshots to a remote service asynchronously |
 
 ## Key Flows
 
@@ -78,6 +97,9 @@ sequenceDiagram
 - **Error semantics**: a `Watcher`'s `error` is for **reporting** only, not for control flow. Seeing `OnEvent` return `nil` does not mean every Watcher succeeded, only that the dispatch flow itself was not interrupted.
 - **When `WatcherFunc` is nil**: `var f WatcherFunc; f.OnEvent(...)` panics because it calls a nil function. When dispatched through `Hub`, the panic is caught by `Hub.deliver` and turned into a `scarecrow: ... panicked on ...` report; a direct call has no protection.
 - **Interface values whose type is nil**: `hub.AddWatcher(nil)` is rejected, but `var p *PrintWatcher; hub.AddWatcher(p)` passes a **non-nil interface** (non-empty dynamic type, nil value), so registration succeeds and the call operates on a nil receiver and panics, which the `Hub` catches and reports as well. If you need "optional registration", check the pointer for nil explicitly.
+- **`Lifecycle` and `Watcher` are two independent interfaces**: `Lifecycle` does not require implementing `Watcher`, but `Hub.Start` only walks the registered `Watcher`s, so a resource wired into `Hub` must also implement `OnEvent` (or be provided by a wrapper type).
+- **Start/stop errors bypass the `ErrorHandler`**: errors from `Lifecycle.Start` / `Stop` are returned directly as the result of `Hub.Start` / `Hub.Stop` (`Stop` aggregates them with `errors.Join`), and the caller (such as `pkg/assembly`) decides how to handle them.
+- **Start only covers the registration snapshot**: `Hub.Start` starts only the observers that implement `Lifecycle` in the current snapshot; a `Lifecycle` added with `AddWatcher` after `Start` is not started automatically, so register before starting.
 
 ## Usage Examples
 

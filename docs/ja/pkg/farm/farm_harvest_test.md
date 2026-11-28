@@ -1,15 +1,15 @@
 # pkg/farm/farm_harvest_test.go
 
-> 📅 最終更新日: 2026/11/13
+> 📅 最終更新日: 2026/11/26
 
 ## 役割
 
 `farm_harvest_test.go` は `package farm_test` として「Farm の実行終了後、Plot が自身のライフサイクルスナップショットを読み取れるか」というパッケージ横断の協調経路をカバーする：
 
-- Farm レベルの `assembly` が組み立てた `LifecycleWatcher` は **Farm Hub** に登録される；
-- Farm Hub は `start` の中で各 Plot の Hub へ登録される；
+- Farm レベルの `assembly` が組み立てた `LifecycleWatcher` は **Farm の `watcherHub`** に登録される；
+- `watcherHub` は `start` の中で各 Plot の Hub へ登録される；
 - Plot は実行時に `SeedInputEvent` / `SeedRipenEvent` を発し、ネスト Hub を経て `LifecycleWatcher` へ届き、非同期で sqlite へ書き込まれる；
-- `Run` が返った後に `resources.Stop()` がフラッシュし、`root.Harvest()` がネスト Hub をたどってオブザーバーを見つけ、データベースを読み取る。
+- `Run` が返る前に `stop()` がフラッシュし、`root.Harvest()` がネスト Hub をたどってオブザーバーを見つけ、データベースを読み取る。
 
 したがってこのテストが検証するのは単一の getter ではなく、**Hub の階層 + 永続化 + リソース回収** の三者が共同で作用した結果である。
 
@@ -17,7 +17,7 @@
 
 | テスト関数 | 検証点 |
 | --- | --- |
-| `TestFarmRunHarvest` | 単一 Plot の Farm が `Run(..., "INFO")` で 3 つの種子を処理した後、`root.Harvest()` が 3 件の記録を返し、各行の `Status == "ripen"` である |
+| `TestFarmRunHarvest` | 単一 Plot の Farm が `Run(..., "INFO", nil)` で 3 つの種子を処理した後、`root.Harvest()` が 3 件の記録を返し、各行の `Status == "ripen"` である |
 
 ## テストの重点
 
@@ -30,14 +30,14 @@ root := plot.NewSinglePlot("root", func(seed int) (int, error) {
 
 farm := farm.NewFarm("farm_harvest")
 farm.AddPlot(root)
-farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO")
+farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO", nil)
 ```
 
 `root` は唯一のノードであるため `sourceNodes == ["root"]`：`Run` は 3 つの種子を注入し自動的に `Seal()` するため、テストが手動で終了させる必要はない。
 
 ### 2. ネスト Hub の検索
 
-`Harvest` の内部では `scarecrow.Find[*persist.LifecycleWatcher](p.hub)` を用いる。この検索はまず Plot の直属のオブザーバーを調べ、次にネスト Hub へ再帰的に入る——Farm Hub はまさに `plot.AddWatcher(f.hub)` によってここへ掛けられている。階層登録が欠けていれば `Harvest` は `plot %q lifecycle watcher is not registered` を返し、テストは直ちに失敗する。
+`Harvest` の内部では `scarecrow.Find[*persist.LifecycleWatcher](p.watcherHub)` を用いる。この検索はまず Plot の直属のオブザーバーを調べ、次にネスト Hub へ再帰的に入る——Farm のオブザーバー Hub はまさに `plot.AddWatcher(f.watcherHub)` によってここへ掛けられている。階層登録が欠けていれば `Harvest` は `plot %q lifecycle watcher is not registered` を返し、テストは直ちに失敗する。
 
 ### 3. 状態スナップショットであり生イベントではない
 
@@ -49,7 +49,7 @@ farm.Run(map[string][]any{"root": {1, 2, 3}}, "INFO")
 
 ### 4. リソースのフラッシュのタイミング
 
-`Run` 内の `defer resources.Stop()` は spout を停止し sqlite を閉じる。`Harvest` は `Run` が返った後に呼ばれるため、3 件すべての記録を読める。これは `Stop` の flush 意味論を間接的に検証している。
+`Run` の `start` 内の `defer stop()` は「クロック → tickerHub → watcherHub」の逆順でリソースを停止し、spout を閉じて sqlite をフラッシュする。`Harvest` は `Run` が返った後に呼ばれるため、3 件すべての記録を読める。これは `StopFunc` の flush 意味論を間接的に検証している。
 
 ```mermaid
 sequenceDiagram
@@ -57,12 +57,12 @@ sequenceDiagram
     participant T as Test
     participant F as Farm
     participant P as SinglePlot
-    participant H as Farm Hub
+    participant H as Farm watcherHub
     participant LW as LifecycleWatcher
     participant DB as sqlite
 
-    T->>F: Run({"root": [1,2,3]}, "INFO")
-    F->>H: StartFarmResources が LW / Log / Metrics を登録
+    T->>F: Run({"root": [1,2,3]}, "INFO", nil)
+    F->>H: StartLocalResources が LW / Log / Metrics を登録
     F->>P: AddWatcher(Farm Hub)
     F->>P: StartAsync()
     F->>P: InjectTasks → SeedAny × 3
@@ -72,7 +72,7 @@ sequenceDiagram
     F->>P: InjectTerminations(["root"]) → Seal
     F->>P: WaitAsync()
     F->>H: FarmEndEvent
-    F->>LW: resources.Stop() でフラッシュ
+    F->>LW: stop() がフラッシュ
     T->>P: Harvest()
     P->>H: scarecrow.Find(LifecycleWatcher)
     P->>DB: LoadLifecycleStatusesFromPath
@@ -92,8 +92,8 @@ sequenceDiagram
 ## 関連ソース
 
 - `pkg/farm/farm.go`：`Run` / `start` / `InjectTasks` / `InjectTerminations`
-- `pkg/farm/farm.go`：`AddWatcher`（Farm Hub の対外エントリ）
-- `pkg/assembly/assembly.go`：`StartFarmResources` / `Resources.Stop`
+- `pkg/farm/farm.go`：`AddWatcher`（Farm の `watcherHub` の対外エントリ）
+- `pkg/assembly/assembly.go`：`StartLocalResources` / `StopFunc`
 - `pkg/plot/plot.go`：`Harvest` / `AddWatcher` / `emit`
 - `pkg/persist/lifecycle.go`：`LifecycleWatcher`（`seed` → `ripen` の状態昇格）
 - `pkg/persist/sqlite.go`：`LifecycleStatusRecord` / `LoadLifecycleStatusesFromPath`

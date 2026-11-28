@@ -1,12 +1,12 @@
 # pkg/farm/farm_inject_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
 `farm_inject_test.go`, as `package farm_test`, covers the **externally driven mode** of `Farm`:
 
-- `Start(logLevel)` itself injects neither seeds nor termination signals;
+- `Start(logLevel, report)` itself injects neither seeds nor termination signals;
 - while `Start` is blocking, the caller can dynamically control the task flow through `InjectTasks` / `InjectTerminations`;
 - the Farm-level watcher (`Farm.AddWatcher`) receives both Farm events and Plot events.
 
@@ -40,7 +40,7 @@ sequenceDiagram
 
     T->>F: NewFarm("start_injection") / AddPlot(root)
     T->>F: AddWatcher(WatcherFunc)
-    T-)F: go Start("INFO")
+    T-)F: go Start("INFO", nil)
     Note over F: inject no data, blocks in WaitAsync
     T->>F: InjectTasks({"root": [1,2,3]})
     F->>P: SeedAny(1) / SeedAny(2) / SeedAny(3)
@@ -54,7 +54,7 @@ sequenceDiagram
 
 ### 1. `Start` does not inject
 
-`Start` only computes `sourceNodes` and calls `start(logLevel, nil)`; when `prepare` is `nil`, neither `InjectTasks` nor `InjectTerminations` is triggered. The test must inject first, otherwise `Start` never returns.
+`Start` only computes `sourceNodes` and calls `start(logLevel, report, nil)`; the test passes `report = nil`, and when `prepare` is `nil` neither `InjectTasks` nor `InjectTerminations` is triggered. The test must inject first, otherwise `Start` never returns.
 
 ### 2. Timing of runtime injection
 
@@ -68,7 +68,7 @@ sequenceDiagram
 
 ### 3. Hierarchical dispatch of Farm-level watchers
 
-`AddWatcher` registers into the Farm Hub; inside `start` the Farm Hub is in turn registered into the Hub of `root`. Therefore the same watcher receives:
+`AddWatcher` registers into the Farm's `watcherHub`; inside `start` that Hub is in turn registered into the Hub of `root`. Therefore the same watcher receives:
 
 | Event | Source | Assertion |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ The cultivator of `root` appends received seeds to `seeds`, and the test asserts
 ## Related Source
 
 - `pkg/farm/farm.go`: `Start` / `start` / `InjectTasks` / `InjectTerminations` / `AddWatcher`
-- `pkg/assembly/assembly.go`: `StartFarmResources` (`Start` assembles resources as well)
+- `pkg/assembly/assembly.go`: `StartLocalResources` (`Start` assembles local resources as well)
 - `pkg/plot/plot.go`: `StartAsync` / `SeedAny` / `Seal` / `AddWatcher` / `notifyStart`
 - `pkg/scarecrow/watcher.go`: `Watcher` / `WatcherFunc`
 - `pkg/scarecrow/event.go`: `FarmStartEvent` / `PlotStartEvent`

@@ -1,6 +1,6 @@
 # pkg/persist/lifecycle.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 ## Purpose
 
@@ -16,35 +16,38 @@ Every seed is expressed in the database by two kinds of data: `events` (the even
 
 ## Core Objects
 
-### `LifecycleRecord` — queue payload
+### `LifecycleRecord` — closed union of record types
 
 ```go
-type LifecycleRecord struct {
-    Kind           string
-    InputEventID   int
-    CurrentEventID int
-    ParentIDs      []int
-    PlotName       string
-    SeedJSON       string
-    FruitJSON      string
-    WitherType     string
-    WitherMessage  string
-    TS             float64
+type LifecycleRecord interface {
+    lifecycleRecord()
 }
 ```
 
+The interface is implemented only by the four record types in this package, and the concrete type directly determines `events.event_type` instead of relying on a runtime `Kind` field:
+
+| Record type | Fields | Purpose |
+|----------|------|------|
+| `SeedRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `SeedJSON` / `TS` | Seed input |
+| `RipenRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `FruitJSON` / `TS` | Seed ripening |
+| `WitherRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `WitherType` / `WitherMessage` / `TS` | Seed withering |
+| `PruneRecord` | `InputEventID` / `CurrentEventID` / `ParentIDs` / `PlotName` / `TS` | Seed pruning |
+
+Meaning of the fields shared by the four record types:
+
 | Field | Meaning |
 |------|------|
-| `Kind` | Operation type, one of the package-private constants `lifecycleSeed` / `lifecycleRipen` / `lifecycleWither` / `lifecyclePrune` (i.e. `seed` / `ripen` / `wither` / `prune`); it is also persisted as `events.event_type` |
 | `InputEventID` | Event ID of this seed (the input), corresponding to `status.input_event_id` |
-| `CurrentEventID` | Event ID produced this time, corresponding to `events.event_id` and `status.current_event_id`; for `seed` it equals `InputEventID` |
+| `CurrentEventID` | Event ID produced this time, corresponding to `events.event_id` and `status.current_event_id`; for `SeedRecord` it equals `InputEventID` |
 | `ParentIDs` | List of parent event IDs, written as `event_parents` edges; it is `nil` for an externally injected seed |
 | `PlotName` | Name of the Plot the event belongs to, written to `events.plot` and `status.plot` |
-| `SeedJSON` | Seed payload JSON, filled only for `seed` records |
-| `FruitJSON` | Fruit JSON, filled only for `ripen` records |
-| `WitherType` | Wither error type, filled only for `wither` records (`fmt.Sprintf("%T", err)`) |
-| `WitherMessage` | Wither error text, filled only for `wither` records (`fmt.Sprintf("%v", err)`) |
+| `SeedJSON` | Seed payload JSON, carried only by `SeedRecord` |
+| `FruitJSON` | Fruit JSON, carried only by `RipenRecord` |
+| `WitherType` | Wither error type, carried only by `WitherRecord` (`fmt.Sprintf("%T", err)`) |
+| `WitherMessage` | Wither error text, carried only by `WitherRecord` (`fmt.Sprintf("%v", err)`) |
 | `TS` | Event time (Unix seconds, floating point, millisecond precision), converted from the event's `Time` field |
+
+> `lifecycleRecord()` is a private method, so no implementation can be added outside the package; adding a new event type requires extending both the record types in this file and the handler's switch.
 
 ### `LifecycleRecordHandler` — consumer side
 
@@ -60,7 +63,7 @@ It implements `funnel.RecordHandler[LifecycleRecord]`:
 | Method | Trigger | Behavior |
 |------|----------|------|
 | `BeforeStart() error` | Inside `Spout.Start()`, before the consume loop starts | Creates `lifecycles/<YYYY-MM-DD>/` (permission `0755`), builds the `grow_lifecycle(<HH-MM-SS.mmm>).sqlite3` path, calls `OpenLifecycleSQLite` to open the database and create the tables; the path is stored in `SQLitePath` and the handle in `sqliteDB` |
-| `HandleRecord(record LifecycleRecord) error` | Each record dequeued | First validates `sqliteDB != nil`, then writes the event first by `Kind` and afterwards writes or promotes the status snapshot |
+| `HandleRecord(record LifecycleRecord) error` | Each record dequeued | First validates `sqliteDB != nil`, then, by the concrete type of the record, writes the event first and afterwards writes or promotes the status snapshot |
 | `AfterStop() error` | `Spout.Stop()` teardown | Closes `sqliteDB` and sets it to nil; returns `nil` directly when the handle was already nil |
 
 > `SQLitePath` is a public field and still keeps the last opened path after `AfterStop`; offline reads are done through `LoadLifecycleStatusesFromPath` (see [`sqlite.md`](./sqlite.md)), and `LifecycleRecordHandler` itself no longer provides query methods.
@@ -80,7 +83,7 @@ type LifecycleWatcher struct {
 | `Start() error` | Delegates to `spout.Start()`: triggers `BeforeStart` to create the directory and open the database, and starts the background consume goroutine |
 | `Stop() error` | Delegates to `spout.Stop()`: closes the channel, waits for the queue to drain (at most 1s), and finally `AfterStop` closes the database; returns `shutdown timeout` on timeout |
 | `DBPath() string` | Returns the underlying handler's `SQLitePath`; an empty string while the consume loop has not been `Start`ed |
-| `OnEvent(event scarecrow.Event) error` | Builds a `LifecycleRecord` by event type and `inlet.Send`s it; events it does not care about return `nil` directly |
+| `OnEvent(event scarecrow.Event) error` | Builds a `SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord` by event type and `inlet.Send`s it; events it does not care about return `nil` directly |
 
 > `newLifecycleWatcher(handler funnel.RecordHandler[LifecycleRecord])` is a package-private constructor; tests use it to inject a capturing handler. In that case `DBPath()` returns an empty string because the handler is not a `*LifecycleRecordHandler`.
 
@@ -88,12 +91,12 @@ type LifecycleWatcher struct {
 
 `OnEvent` handles only the 4 seed result event types and ignores all others:
 
-| `scarecrow` event | `Kind` | `InputEventID` | `CurrentEventID` | `ParentIDs` | Payload |
-|------------------|--------|----------------|------------------|-------------|------|
-| `SeedInputEvent` | `seed` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
-| `SeedRipenEvent` | `ripen` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
-| `SeedWitherEvent` | `wither` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`, `WitherMessage = %v(ev.Err)` |
-| `SeedPruneEvent` | `prune` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | none |
+| `scarecrow` event | Record type | `InputEventID` | `CurrentEventID` | `ParentIDs` | Payload |
+|------------------|----------|----------------|------------------|-------------|------|
+| `SeedInputEvent` | `SeedRecord` | `SeedID` | `SeedID` | `ev.Parents` | `SeedJSON = toLifecycleJSON(ev.Seed)` |
+| `SeedRipenEvent` | `RipenRecord` | `SeedID` | `FruitID` | `[]int{ev.SeedID}` | `FruitJSON = toLifecycleJSON(ev.Fruit)` |
+| `SeedWitherEvent` | `WitherRecord` | `SeedID` | `WeedID` | `[]int{ev.SeedID}` | `WitherType = %T(ev.Err)`, `WitherMessage = %v(ev.Err)` |
+| `SeedPruneEvent` | `PruneRecord` | `SeedID` | `PruneID` | `[]int{ev.SeedID}` | none |
 
 Events explicitly ignored (`return nil`, not persisted): `FarmStartEvent`, `FarmEndEvent`, `PlotStartEvent`, `PlotEndEvent`, `SeedReplantEvent`, `SealInputEvent`, `SealMergeEvent`. Event types cannot be added outside the package (`scarecrow.Event`'s `isEvent()` is a private method), so the fallback branch outside the switch is never actually reached.
 
@@ -126,7 +129,7 @@ sequenceDiagram
     Note over Sp: background goroutine starts consuming
 
     Hub->>W: OnEvent(SeedInputEvent)
-    W->>W: build LifecycleRecord{Kind: seed, ...}
+    W->>W: build SeedRecord{SeedJSON: ..., Parents: ...}
     W->>In: Send(record)
     In->>Q: enqueue (error after 1s when full)
     Q->>Sp: dequeue
@@ -134,7 +137,7 @@ sequenceDiagram
     H->>DB: InsertLifecycleEvent + UpsertLifecycleStatusSeed
 
     Hub->>W: OnEvent(SeedRipenEvent)
-    W->>In: Send({Kind: ripen, FruitJSON: ...})
+    W->>In: Send(RipenRecord{FruitJSON: ...})
     In->>Q: enqueue
     Q->>Sp: dequeue
     Sp->>H: HandleRecord(record)
@@ -146,7 +149,7 @@ sequenceDiagram
     H->>DB: sqliteDB.Close()
 ```
 
-### `HandleRecord`'s Kind routing
+### Type routing of `HandleRecord`
 
 ```go
 func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
@@ -154,24 +157,25 @@ func (l *LifecycleRecordHandler) HandleRecord(record LifecycleRecord) error {
         return fmt.Errorf("生命周期 sqlite 未初始化")
     }
 
-    switch record.Kind {
-    case lifecycleSeed:
-        if err := InsertLifecycleEvent(l.sqliteDB, record.CurrentEventID, record.Kind, record.PlotName, record.TS, record.ParentIDs); err != nil {
+    switch rec := record.(type) {
+    case SeedRecord:
+        if err := InsertLifecycleEvent(l.sqliteDB, rec.CurrentEventID, "seed", rec.PlotName, rec.TS, rec.ParentIDs); err != nil {
             return err
         }
-        return UpsertLifecycleStatusSeed(l.sqliteDB, record.InputEventID, record.SeedJSON, record.PlotName, record.TS)
-    // ripen / wither / prune are analogous: InsertLifecycleEvent first, then PromoteLifecycleStatusXxx
+        return UpsertLifecycleStatusSeed(l.sqliteDB, rec.InputEventID, rec.SeedJSON, rec.PlotName, rec.TS)
+    // RipenRecord / WitherRecord / PruneRecord 同理：先 InsertLifecycleEvent，再 PromoteLifecycleStatusXxx
     default:
-        return fmt.Errorf("unsupported lifecycle operation: %s", record.Kind)
+        return fmt.Errorf("unsupported lifecycle record: %T", record)
     }
 }
 ```
 
 Key points:
 
-- All four `Kind` values write `events` first (including the `event_parents` parent edges) and write `status` only after success; when the event write fails the status is not changed, keeping the two consistent.
-- `ripen` / `wither` / `prune` are promoted through `UPDATE status ... WHERE input_event_id = ?`, so the corresponding `seed` record must already be persisted (`UPDATE` matching no row does not report an error, see [`sqlite.md`](./sqlite.md)).
-- When `kind` is invalid it returns `unsupported lifecycle operation: <kind>`; when `sqliteDB == nil` it returns `生命周期 sqlite 未初始化`.
+- All four record types write `events` first (including the `event_parents` parent edges) and write `status` only after that succeeds; when the event write fails the status is not changed, keeping the two consistent.
+- `event_type` is fixed by the concrete record type to `seed` / `ripen` / `wither` / `prune` and is no longer read from a record field.
+- `ripen` / `wither` / `prune` are promoted through `UPDATE status ... WHERE input_event_id = ?`, so the corresponding `SeedRecord` must already be persisted (`UPDATE` matching no row does not report an error, see [`sqlite.md`](./sqlite.md)).
+- When the record type is not one of the four it returns `unsupported lifecycle record: <type>`; when `sqliteDB == nil` it returns `生命周期 sqlite 未初始化`. Since the marker method of `LifecycleRecord` is private, a fifth record type cannot be constructed outside the package.
 - All errors are returned upward as-is and discarded by the `Spout` consume loop (`Spout` does not check the return value of `HandleRecord`); to observe write failures you can only rely on the SQLite file itself or on logs.
 
 ### DB path and directories
@@ -183,7 +187,7 @@ lifecycles/<YYYY-MM-DD>/grow_lifecycle(<HH-MM-SS.mmm>).sqlite3
 - The date `2006-01-02` and the time `15-04-05.000` each take `time.Now()` once in `BeforeStart`; multiple starts on the same day produce multiple files.
 - The directory permission is `0755`; the file is created automatically by `sql.Open("sqlite", "file:...")`, and `BeforeStart` does not create it explicitly.
 - `os.MkdirAll` failure → `创建生命周期目录失败: %w`; open failure → `打开生命周期 sqlite 失败: %w`.
-- A failed `Start` leaves no running consume loop behind; `assembly` registers the watcher with the Hub only after `Start` succeeds.
+- When `Start` fails, `Spout` does not start the consume loop; `assembly` registers the watchers first and then starts them all through `watcherHub.Start()`, and a start failure is rolled back by the Hub in reverse order for the items already started.
 
 ### `toLifecycleJSON` fallback
 
@@ -207,10 +211,14 @@ It prefers `json.Marshal`; on failure it degrades to the JSON string of `fmt.Spr
 
 | Symbol | Kind | Purpose |
 |------|------|------|
-| `LifecycleRecord` | Type | Queue payload (`Kind` + event fields + status fields) |
+| `LifecycleRecord` | Interface | Closed record union, implemented only by the four records |
+| `SeedRecord` | Type | Seed input record |
+| `RipenRecord` | Type | Seed ripening record |
+| `WitherRecord` | Type | Seed withering record |
+| `PruneRecord` | Type | Seed pruning record |
 | `LifecycleRecordHandler` | Type | `funnel.RecordHandler[LifecycleRecord]` implementation responsible for persistence |
 | `(*LifecycleRecordHandler).BeforeStart` | Method | Creates the directory, opens the database, creates the tables |
-| `(*LifecycleRecordHandler).HandleRecord` | Method | Writes the event by `Kind` and advances the status |
+| `(*LifecycleRecordHandler).HandleRecord` | Method | Writes the event by record type and advances the status |
 | `(*LifecycleRecordHandler).AfterStop` | Method | Closes the database handle |
 | `LifecycleWatcher` | Type | `scarecrow.Watcher` implementation, event → record |
 | `NewLifecycleWatcher` | Function | Creates the watcher (default handler, buffer 100, timeout 1s) |
@@ -264,7 +272,7 @@ func main() {
         panic(err)
     }
 
-    // After Stop, SQLitePath is retained and can be queried offline
+    // Stop 后 SQLitePath 仍保留，可离线查询
     dbPath := watcher.DBPath()
     statuses, err := persist.LoadLifecycleStatusesFromPath(dbPath, "stage_a")
     if err != nil {

@@ -1,6 +1,6 @@
 # pkg/funnel/spout.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `pkg/funnel/spout.go` defines the `Spout[T]` generic abstraction - the **consumer side** (reader) in CelestialGrow's asynchronous consumption infrastructure. It holds a buffered Go channel, continuously reads records in a background goroutine and hands them to a `RecordHandler[T]` for processing; at the same time it makes the resource lifecycle explicit through the three-stage `BeforeStart` / `HandleRecord` / `AfterStop` interface.
 
@@ -192,10 +192,10 @@ funnel.Spout[T]（单后台 goroutine）──HandleRecord(T)──▶ persist.L
 
 - `persist.LogRecordHandler` / `persist.LifecycleRecordHandler` both implement `RecordHandler[T]`:
   - `BeforeStart`: creates the `logs/` directory and opens a date-named log file / creates the `lifecycles/<date>/` directory and opens SQLite.
-  - `HandleRecord`: formats into a single line of text and appends it to the file / writes the event by `Kind` (`seed` / `ripen` / `wither` / `prune`) and updates the state.
+  - `HandleRecord`: formats into a single line of text and appends it to the file / writes the event by record type (`SeedRecord` / `RipenRecord` / `WitherRecord` / `PruneRecord`) and updates the state.
   - `AfterStop`: closes the log file / closes the SQLite connection.
 - `persist.LogWatcher` / `LifecycleWatcher` build the `Spout` with `funnel.NewSpout(handler, 100, time.Second)` in the unexported `newLogWatcher` / `newLifecycleWatcher`, then build the matching `Inlet` with `funnel.NewInlet(spout.GetQueue(), time.Second)`.
-- `pkg/assembly` manages the lifecycle uniformly: `StartPlotResources` / `StartFarmResources` create the two watchers, calling **`lifecycle.Start()` first and then `log.Start()`**, and then register them on `*scarecrow.Hub`; `Resources.Stop` (guarded by `sync.Once`) stops in reverse order, `log.Stop()` first and then `lifecycle.Stop()`.
+- `pkg/assembly` manages the lifecycle uniformly: `StartLocalResources` / `StartReportResources` create the watchers and **register them on `*scarecrow.Hub` first**, after which `watcherHub.Start()` starts them in registration order (`lifecycle.Start()` → `log.Start()`); `StopFunc` reclaims them in the reverse order of startup (`log.Stop()` first, then `lifecycle.Stop()`).
 - `Plot` / `Farm` only hold `Hub`, do not hold `Spout` directly, and have no interfaces such as `BindInlet` / `StartSpouts` / `StopSpouts` - channel creation and binding are encapsulated in the watcher constructors of `persist`.
 
 ## Collaboration with Inlet (inlet ← spout)
@@ -275,6 +275,6 @@ func main() {
   - The larger `timeout` is, the more "gentle" the shutdown, but process exit is forced to wait longer.
 - Errors from `RecordHandler.HandleRecord` and `AfterStop` are both ignored; **do not** put critical error state only into return values. If failures must be observable, record them inside the handler (the handlers in `persist` currently pass them through return values, but callers cannot see them).
 - **`Start` is not repeatable**: calling it twice runs `BeforeStart` twice (possibly opening files twice) and starts two consumer goroutines that race on the same channel, with `HandleRecord` possibly executing concurrently.
-- **`Stop` is not idempotent**: `ch` is already closed, so calling `Stop` again panics (`close of closed channel`). `pkg/assembly` wraps it in `sync.Once` to guarantee a single stop.
+- **`Stop` is not idempotent**: `ch` is already closed, so calling `Stop` again panics (`close of closed channel`). `pkg/assembly` wraps it with a `stopped` boolean inside `StopFunc` to guarantee a single stop (that guard is not concurrency-safe).
 - `Stop` can be called before `Start`: it closes the channel, passes `wg.Wait()` immediately, and then calls `AfterStop`, so a handler's `AfterStop` must tolerate the state where `BeforeStart` never ran.
 - The reference returned by `Handler()` is read-only; externally modifying its internal state is allowed (for example, querying the number of written records), but replacing the whole handler has no effect.

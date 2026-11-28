@@ -1,6 +1,6 @@
 # pkg/plot/plot_retry_test.go
 
-> 📅 Last Updated: 2026/11/13
+> 📅 Last Updated: 2026/11/26
 
 `plot_retry_test.go` focuses on the **retry semantics** of `SinglePlot`: it verifies how the three options `WithMaxRetries` / `WithRetryDelay` / `WithRetryIf` affect the retry loop in `basePlot.tend`, and finally solidifies the results into lifecycle snapshots through `Harvest`.
 
@@ -82,7 +82,7 @@ Verifies:
 
 - Test package: `package plot_test` (black-box); it does not access the unexported fields of `SinglePlot` directly;
 - `attempts` uses `sync/atomic.Int32` for goroutine-safe accumulation, ensuring that the retry-count assertions are not affected by concurrency;
-- It reuses `mustHarvest(t, plot harvestable)` defined in `plot_harvest_test.go` (`harvestable` being the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`) to fetch snapshots, thereby implicitly verifying the wiring between the `LifecycleWatcher` assembled by `assembly.StartPlotResources` in `Run` and `Harvest`;
+- It reuses `mustHarvest(t, plot harvestable)` defined in `plot_harvest_test.go` (`harvestable` being the local test interface `interface{ Harvest() ([]persist.LifecycleStatusRecord, error) }`) to fetch snapshots, thereby implicitly verifying the wiring between the `LifecycleWatcher` assembled by `assembly.StartLocalResources` in `Run` and `Harvest`;
 - All four cases use `WithTenders(1)`: concurrent tenders would not change the total number of calls, but they would make the timing of `attempts.Add(1)` hard to assert; only after serialization is the retry count deterministic.
 
 ## How to run
